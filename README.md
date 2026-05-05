@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>gemini-cli-telegram</h1>
+<h1>Telegram for Gemini CLI</h1>
 
 <p><strong>Your AI coding assistant, now on Telegram.</strong></p>
 
