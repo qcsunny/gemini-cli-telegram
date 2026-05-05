@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gemini-cli-telegram — AI on Telegram</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+    header {
+      text-align: center;
+      padding: 80px 0 60px;
+      border-bottom: 1px solid #21262d;
+    }
+    header h1 {
+      font-size: 3rem;
+      font-weight: 800;
+      background: linear-gradient(90deg, #58a6ff, #a371f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 16px;
+    }
+    header p {
+      font-size: 1.25rem;
+      color: #8b949e;
+      margin-bottom: 32px;
+    }
+    .badges {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .badges img {
+      height: 20px;
+    }
+    .cta {
+      margin-top: 32px;
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: #238636;
+      color: #fff;
+      border: 1px solid #238636;
+    }
+    .btn-primary:hover {
+      background: #2ea043;
+    }
+    .btn-secondary {
+      background: transparent;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+    }
+    .btn-secondary:hover {
+      border-color: #8b949e;
+    }
+    section {
+      padding: 60px 0;
+      border-bottom: 1px solid #21262d;
+    }
+    h2 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: #f0f6fc;
+      margin-bottom: 24px;
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+    }
+    .feature {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 24px;
+      transition: border-color 0.2s;
+    }
+    .feature:hover {
+      border-color: #58a6ff;
+    }
+    .feature-icon {
+      font-size: 2rem;
+      margin-bottom: 12px;
+    }
+    .feature h3 {
+      font-size: 1.1rem;
+      color: #f0f6fc;
+      margin-bottom: 8px;
+    }
+    .feature p {
+      font-size: 0.95rem;
+      color: #8b949e;
+    }
+    .commands {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .command-row {
+      display: flex;
+      padding: 12px 20px;
+      border-bottom: 1px solid #21262d;
+    }
+    .command-row:last-child {
+      border-bottom: none;
+    }
+    .command-name {
+      font-family: 'SF Mono', Monaco, monospace;
+      color: #7ee787;
+      min-width: 200px;
+    }
+    .command-desc {
+      color: #8b949e;
+    }
+    code {
+      font-family: 'SF Mono', Monaco, monospace;
+      background: #161b22;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.9em;
+      color: #d2a8ff;
+    }
+    .install {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 16px;
+    }
+    .install pre {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.95rem;
+      color: #e6edf3;
+      overflow-x: auto;
+    }
+    .install pre .comment {
+      color: #8b949e;
+    }
+    .install pre .cmd {
+      color: #7ee787;
+    }
+    footer {
+      text-align: center;
+      padding: 40px 0;
+      color: #8b949e;
+      font-size: 0.9rem;
+    }
+    footer a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <h1>gemini-cli-telegram</h1>
+    <p>Your AI coding assistant, now on Telegram.</p>
+    <div class="badges">
+      <img src="https://img.shields.io/npm/v/gemini-cli-telegram?style=flat-square&color=blue" alt="npm">
+      <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?style=flat-square" alt="node">
+      <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="license">
+    </div>
+    <div class="cta">
+      <a href="https://www.npmjs.com/package/gemini-cli-telegram" class="btn btn-primary">Install from npm</a>
+      <a href="https://github.com/ibidathoillah/gemini-cli-telegram" class="btn btn-secondary">View on GitHub</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>Features</h2>
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">🤖</div>
+        <h3>AI Chat</h3>
+        <p>Full Gemini CLI experience with streaming responses directly in Telegram.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📁</div>
+        <h3>Project Switching</h3>
+        <p>Auto-scan and switch between projects with inline keyboard navigation.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🕐</div>
+        <h3>Scheduled Messages</h3>
+        <p>Schedule one-time or recurring tasks that run automatically.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🚀</div>
+        <h3>Autopilot Mode</h3>
+        <p>AI works autonomously toward a goal with self-reply iterations.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🖼️</div>
+        <h3>Multimodal Input</h3>
+        <p>Send text, photos, voice, audio, video, and documents.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔧</div>
+        <h3>Tool Execution</h3>
+        <p>Auto-run tools — edit files, run shell commands, browse the web.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>Quick Start</h2>
+    <div class="install">
+      <pre><span class="comment"># Quick start with npx</span>
+<span class="cmd">npx gemini-cli-telegram start</span>
+
+<span class="comment"># Or install globally</span>
+<span class="cmd">npm install -g gemini-cli-telegram</span>
+<span class="cmd">gemini-cli-telegram start</span></pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>Commands</h2>
+    <div class="commands">
+      <div class="command-row">
+        <span class="command-name">/start</span>
+        <span class="command-desc">Welcome menu with inline keyboard</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/new</span>
+        <span class="command-desc">Start a fresh session</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/projects</span>
+        <span class="command-desc">Browse and select projects</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/schedule</span>
+        <span class="command-desc">Manage scheduled messages</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/autopilot &lt;goal&gt;</span>
+        <span class="command-desc">AI auto-works on a goal</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/resume</span>
+        <span class="command-desc">Resume previous session</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/model &lt;name&gt;</span>
+        <span class="command-desc">Switch AI model</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/stats</span>
+        <span class="command-desc">Show session statistics</span>
+      </div>
+      <div class="command-row">
+        <span class="command-name">/help</span>
+        <span class="command-desc">Show help message</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>Schedule & Autopilot</h2>
+    <p style="margin-bottom: 16px; color: #8b949e;">Schedule recurring tasks or let the AI work autonomously.</p>
+    <div class="install">
+      <pre><span class="comment"># Schedule a one-time message</span>
+<span class="cmd">/schedule add in 1h Check server logs</span>
+
+<span class="comment"># Schedule a recurring task</span>
+<span class="cmd">/schedule recurring 60 Backup database</span>
+
+<span class="comment"># Start autopilot mode</span>
+<span class="cmd">/autopilot Refactor auth to use JWT</span>
+
+<span class="comment"># Stop autopilot</span>
+<span class="cmd">/autopilot stop</span></pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>Built on <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> by Google.</p>
+    <p>Licensed under <a href="https://github.com/ibidathoillah/gemini-cli-telegram/blob/main/LICENSE">Apache 2.0</a>.</p>
+  </div>
+</footer>
+
+</body>
+</html>
