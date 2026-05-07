@@ -75,7 +75,7 @@ if (args.includes('--version') || args.includes('-v')) {
 // --- Subcommands ---
 
 if (command === 'setup') {
-  const VALID_STEPS: SetupStep[] = ['token', 'users', 'model', 'auth', 'accounts'];
+  const VALID_STEPS: SetupStep[] = ['token', 'users', 'model', 'auth'];
   const step = args[1] as SetupStep | undefined;
   if (step && !VALID_STEPS.includes(step)) {
     console.error(`Unknown setup step: ${step}`);
