@@ -37,11 +37,16 @@ export const ICONS = {
   directory: '📂',
   code: '💻',
   send: '📤',
+  account: '🔐',
+  switch: '🔄',
+  add: '➕',
+  remove: '🗑️',
+  check: '✓',
 };
 
 // ── Inline Keyboards ──
 
-export function buildMainKeyboard(): InlineKeyboard {
+export function buildMainKeyboard(currentAccount?: string): InlineKeyboard {
   return new InlineKeyboard()
     .text(`${ICONS.new} New Session`, '/new')
     .text(`${ICONS.project} Projects`, '/projects')
@@ -52,7 +57,9 @@ export function buildMainKeyboard(): InlineKeyboard {
     .text(`${ICONS.model} Model`, '/model')
     .text(`${ICONS.resume} Resume`, '/resume')
     .row()
+    .text(`${ICONS.account} Account${currentAccount ? ` (${currentAccount})` : ''}`, '/account')
     .text(`${ICONS.stats} Stats`, '/stats')
+    .row()
     .text(`${ICONS.help} Help`, '/help');
 }
 
@@ -119,6 +126,36 @@ export function buildConfirmationKeyboard(action: string, data: string): InlineK
     .text(`${ICONS.cancel} Cancel`, '/start');
 }
 
+export function buildAccountKeyboard(
+  accounts: Array<{ name: string; username: string }>,
+  currentAccount?: string
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  if (accounts.length === 0) {
+    keyboard.text(`${ICONS.add} Create Account`, '/account_create').row();
+  } else {
+    for (const account of accounts) {
+      const isActive = account.name === currentAccount ? `${ICONS.check} ` : '';
+      keyboard.text(`${isActive}${ICONS.account} ${account.name}`, `/account_switch ${account.name}`).row();
+    }
+    keyboard.text(`${ICONS.add} Add Account`, '/account_create').row();
+  }
+
+  if (currentAccount) {
+    keyboard.text(`${ICONS.remove} Delete Account`, `/account_delete ${currentAccount}`).row();
+  }
+
+  keyboard.text('« Back', '/start');
+  return keyboard;
+}
+
+export function buildAccountConfirmKeyboard(accountName: string, action: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(`${ICONS.done} Yes, ${action}`, `/account_${action}_confirm ${accountName}`)
+    .text(`${ICONS.cancel} Cancel`, '/account');
+}
+
 // ── Message Formatting ──
 
 export function formatWelcome(userName?: string): string {
@@ -183,6 +220,7 @@ export function formatHelp(): string {
     `  ${ICONS.bot} /autopilot — AI auto-works on a goal (max 10 iterations)`,
     `  ${ICONS.resume} /resume — List or resume a previous session`,
     `  ${ICONS.model} /model — Switch AI model`,
+    `  ${ICONS.account} /account — Manage USwitch accounts`,
     `  ${ICONS.compact} /compact — Compress chat history`,
     `  ${ICONS.folder} /addfolder — Add folder for read+write access`,
     `  ${ICONS.stats} /stats — Show session statistics`,
@@ -195,8 +233,109 @@ export function formatHelp(): string {
     `  ${ICONS.tool} Auto tool execution`,
     `  ${ICONS.clock} Schedule recurring tasks`,
     `  ${ICONS.bot} Autopilot / self-reply mode`,
+    `  ${ICONS.account} Multi-account via USwitch`,
     '',
     `${ICONS.arrow} Send any message to start chatting!`,
+  ].join('\n');
+}
+
+export function formatAccountMenu(
+  accounts: Array<{ name: string; username: string }>,
+  currentAccount?: string
+): string {
+  const lines = [
+    `${ICONS.account} <b>USwitch Accounts</b>`,
+    '',
+  ];
+
+  if (accounts.length === 0) {
+    lines.push('No accounts yet.');
+    lines.push(`${ICONS.add} Create an account to isolate your AI runtime.`);
+  } else {
+    lines.push('<b>Your Accounts:</b>');
+    for (const account of accounts) {
+      const marker = account.name === currentAccount ? ` ${ICONS.check}(active)` : '';
+      lines.push(`  ${ICONS.account} ${account.name}${marker}`);
+    }
+    lines.push('');
+    lines.push(`${ICONS.switch} Select an account to switch runtime.`);
+    lines.push(`${ICONS.add} Add a new account for another AI identity.`);
+  }
+
+  lines.push('');
+  lines.push('<i>Each account = isolated Linux user + OAuth credentials</i>');
+
+  return lines.join('\n');
+}
+
+export function formatAccountSwitch(accountName: string): string {
+  return [
+    `${ICONS.switch} <b>Switching Account</b>`,
+    '',
+    `Switching to <b>${accountName}</b>...`,
+    '',
+    'This will switch to a new Linux user environment.',
+    'Please log out and log back in to complete the switch.',
+  ].join('\n');
+}
+
+export function formatAccountCreate(): string {
+  return [
+    `${ICONS.add} <b>Create New Account</b>`,
+    '',
+    'This will create a new isolated USwitch runtime:',
+    `  ${ICONS.user} New Linux user`,
+    `  ${ICONS.directory} Separate home directory`,
+    `  ${ICONS.code} Isolated OAuth credentials`,
+    '',
+    'Enter a name for the new account:',
+    '',
+    '<i>Example: personal, work, testing...</i>',
+  ].join('\n');
+}
+
+export function formatAccountDeleteConfirm(accountName: string): string {
+  return [
+    `${ICONS.warning} <b>Delete Account?</b>`,
+    '',
+    `Are you sure you want to delete <b>${accountName}</b>?`,
+    '',
+    'This will:',
+    `  ${ICONS.remove} Remove the Linux user`,
+    `  ${ICONS.warning} Delete all OAuth credentials`,
+    `  ${ICONS.warning} Remove all runtime data`,
+    '',
+    '<b>This action cannot be undone!</b>',
+  ].join('\n');
+}
+
+export function formatAccountCreated(accountName: string): string {
+  return [
+    `${ICONS.done} <b>Account Created</b>`,
+    '',
+    `Account <b>${accountName}</b> has been created.`,
+    '',
+    'Next steps:',
+    `  ${ICONS.switch} Run /account to switch to this account`,
+    `  ${ICONS.bot} The bot will use this account's OAuth credentials`,
+  ].join('\n');
+}
+
+export function formatAccountDeleted(accountName: string): string {
+  return [
+    `${ICONS.done} <b>Account Deleted</b>`,
+    '',
+    `Account <b>${accountName}</b> has been deleted.`,
+  ].join('\n');
+}
+
+export function formatCurrentAccount(accountName: string): string {
+  return [
+    `${ICONS.account} <b>Current Account</b>`,
+    '',
+    `Active: <b>${accountName}</b>`,
+    '',
+    `${ICONS.switch} Use /account to switch or manage accounts.`,
   ].join('\n');
 }
 

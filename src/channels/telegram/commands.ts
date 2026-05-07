@@ -27,11 +27,27 @@ import {
   buildModelKeyboard,
   buildProjectKeyboard,
   buildResumeKeyboard,
+  buildAccountKeyboard,
+  buildAccountConfirmKeyboard,
   formatProjectInfo,
   formatSessionStats,
   formatHelp,
   formatWelcome,
+  formatAccountMenu,
+  formatAccountSwitch,
+  formatAccountCreate,
+  formatAccountDeleteConfirm,
+  formatAccountCreated,
+  formatAccountDeleted,
 } from './ui.js';
+import {
+  listAccounts,
+  getCurrentAccount,
+  createAccount,
+  switchAccount,
+  deleteAccount,
+  uswAvailable,
+} from '../../config/uswitch.js';
 
 const AVAILABLE_MODELS = [
   DEFAULT_GEMINI_MODEL_AUTO,
@@ -219,6 +235,49 @@ export function registerCommands(
     } catch (e) {
       logger.error(`Error switching model for chat ${chatId}: ${e}`);
       await ctx.reply(`${ICONS.error} Failed to switch model: ${e}`);
+    }
+  });
+
+  // ── Account Management ──
+  bot.command('account', async (ctx: Context) => {
+    if (!uswAvailable()) {
+      await ctx.reply(
+        `${ICONS.warning} <b>USwitch not installed</b>\n\nUSwitch is required for account management.\n\nInstall: <code>sudo make install</code> in the usw project.`,
+        { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
+      );
+      return;
+    }
+
+    const accounts = listAccounts();
+    const currentAccount = getCurrentAccount() || undefined;
+
+    await ctx.reply(formatAccountMenu(accounts, currentAccount || undefined), {
+      parse_mode: 'HTML',
+      reply_markup: buildAccountKeyboard(accounts, currentAccount || undefined),
+    });
+  });
+
+  // ── Account Create (text input) ──
+  bot.hears(/^account\s+create\s+(.+)$/i, async (ctx) => {
+    if (!uswAvailable()) {
+      await ctx.reply(`${ICONS.error} USwitch not installed.`);
+      return;
+    }
+
+    const name = ctx.match?.[1]?.trim();
+    if (!name) {
+      await ctx.reply(`${ICONS.error} Please specify account name.\nUsage: account create <name>`);
+      return;
+    }
+
+    try {
+      await createAccount(name);
+      await ctx.reply(formatAccountCreated(name), {
+        parse_mode: 'HTML',
+        reply_markup: buildMainKeyboard(name),
+      });
+    } catch (e) {
+      await ctx.reply(`${ICONS.error} Failed to create account: ${e}`);
     }
   });
 
@@ -751,6 +810,74 @@ export function registerCommands(
           reply_markup: buildModelKeyboard(modelItems),
         },
       );
+      return;
+    }
+
+    // ── Account Callbacks ──
+    if (data === '/account') {
+      await ctx.answerCallbackQuery('Loading accounts...');
+      if (!uswAvailable()) {
+        await ctx.editMessageText(
+          `${ICONS.error} USwitch not installed.`,
+          { reply_markup: buildMainKeyboard() },
+        );
+        return;
+      }
+      const accounts = listAccounts();
+      const currentAccount = getCurrentAccount() || undefined;
+      await ctx.editMessageText(formatAccountMenu(accounts, currentAccount || undefined), {
+        parse_mode: 'HTML',
+        reply_markup: buildAccountKeyboard(accounts, currentAccount || undefined),
+      });
+      return;
+    }
+
+    if (data.startsWith('/account_switch ')) {
+      const accountName = data.replace('/account_switch ', '').trim();
+      await ctx.answerCallbackQuery(`Switching to ${accountName}...`);
+      await ctx.editMessageText(formatAccountSwitch(accountName), {
+        parse_mode: 'HTML',
+      });
+      try {
+        await switchAccount(accountName);
+      } catch (e) {
+        await ctx.reply(`${ICONS.error} Failed to switch: ${e}`);
+      }
+      return;
+    }
+
+    if (data === '/account_create') {
+      await ctx.answerCallbackQuery('Creating account...');
+      await ctx.editMessageText(formatAccountCreate(), {
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    if (data.startsWith('/account_delete ')) {
+      const accountName = data.replace('/account_delete ', '').trim();
+      await ctx.answerCallbackQuery('Confirm delete...');
+      await ctx.editMessageText(formatAccountDeleteConfirm(accountName), {
+        parse_mode: 'HTML',
+        reply_markup: buildAccountConfirmKeyboard(accountName, 'delete'),
+      });
+      return;
+    }
+
+    if (data.startsWith('/account_delete_confirm ')) {
+      const accountName = data.replace('/account_delete_confirm ', '').trim();
+      await ctx.answerCallbackQuery(`Deleting ${accountName}...`);
+      try {
+        await deleteAccount(accountName);
+        await ctx.editMessageText(formatAccountDeleted(accountName), {
+          parse_mode: 'HTML',
+          reply_markup: buildMainKeyboard(),
+        });
+      } catch (e) {
+        await ctx.editMessageText(`${ICONS.error} Failed to delete: ${e}`, {
+          reply_markup: buildMainKeyboard(),
+        });
+      }
       return;
     }
 
