@@ -21,6 +21,14 @@ import {
   LOG_PATH,
 } from './config/userConfig.js';
 import { startTelegramDaemon, runAuthProbe } from './index.js';
+import {
+  createAccount,
+  switchAccount,
+  listAccounts,
+  deleteAccount,
+  getCurrentAccount,
+  uswAvailable,
+} from './config/uswitch.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -38,6 +46,14 @@ Commands:
   status               Check if the daemon is running
   logs                 Show recent daemon logs
   setup [step]         Run setup wizard (steps: token, users, model, auth)
+  account              Manage USwitch accounts (create, switch, list, delete)
+
+Account Commands:
+  account create <name>   Create new isolated account via USwitch
+  account switch <name>   Switch to account (switch Linux user)
+  account list            List all USwitch accounts
+  account delete <name>  Delete account and USwitch runtime
+  account current        Show current account
 
 Options:
   --live, -l           Run in foreground instead of backgrounding (with start)
@@ -59,7 +75,7 @@ if (args.includes('--version') || args.includes('-v')) {
 // --- Subcommands ---
 
 if (command === 'setup') {
-  const VALID_STEPS: SetupStep[] = ['token', 'users', 'model', 'auth'];
+  const VALID_STEPS: SetupStep[] = ['token', 'users', 'model', 'auth', 'accounts'];
   const step = args[1] as SetupStep | undefined;
   if (step && !VALID_STEPS.includes(step)) {
     console.error(`Unknown setup step: ${step}`);
@@ -67,6 +83,80 @@ if (command === 'setup') {
     process.exit(1);
   }
   await runSetup(step);
+  process.exit(0);
+}
+
+if (command === 'account') {
+  const accountCmd = args[1];
+  const accountName = args[2];
+
+  if (!uswAvailable()) {
+    console.error('USwitch not found. Install with: sudo make install');
+    console.error('Then run: gemini-cli-telegram setup');
+    process.exit(1);
+  }
+
+  if (accountCmd === 'create' || accountCmd === 'add' || accountCmd === 'new') {
+    if (!accountName) {
+      console.error('Account name required: gemini-cli-telegram account create <name>');
+      process.exit(1);
+    }
+    await createAccount(accountName);
+    process.exit(0);
+  }
+
+  if (accountCmd === 'switch' || accountCmd === 'use' || accountCmd === 'sw') {
+    if (!accountName) {
+      console.error('Account name required: gemini-cli-telegram account switch <name>');
+      process.exit(1);
+    }
+    await switchAccount(accountName);
+    process.exit(0);
+  }
+
+  if (accountCmd === 'list' || accountCmd === 'ls' || accountCmd === 'ls') {
+    const accounts = listAccounts();
+    const current = getCurrentAccount();
+    if (accounts.length === 0) {
+      console.log('No USwitch accounts found.');
+      console.log('Create one: gemini-cli-telegram account create <name>');
+    } else {
+      console.log('USwitch Accounts:');
+      accounts.forEach(a => {
+        const marker = a.name === current ? ' ●' : ' ○';
+        console.log(`  ${a.name}${marker} (user: ${a.username})`);
+      });
+    }
+    process.exit(0);
+  }
+
+  if (accountCmd === 'delete' || accountCmd === 'rm' || accountCmd === 'remove') {
+    if (!accountName) {
+      console.error('Account name required: gemini-cli-telegram account delete <name>');
+      process.exit(1);
+    }
+    await deleteAccount(accountName);
+    process.exit(0);
+  }
+
+  if (accountCmd === 'current' || accountCmd === 'whoami') {
+    const current = getCurrentAccount();
+    if (current) {
+      console.log(`Current account: ${current}`);
+    } else {
+      console.log('Not in a USwitch account.');
+      console.log('Switch to an account: gemini-cli-telegram account switch <name>');
+    }
+    process.exit(0);
+  }
+
+  console.log(`USwitch Account Commands:
+  gemini-cli-telegram account create <name>  Create new account (USwitch runtime)
+  gemini-cli-telegram account switch <name>  Switch to account (login as user)
+  gemini-cli-telegram account list          List all accounts
+  gemini-cli-telegram account delete <name> Delete account and USwitch runtime
+  gemini-cli-telegram account current       Show current account
+  `);
   process.exit(0);
 }
 
