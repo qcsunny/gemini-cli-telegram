@@ -66,83 +66,120 @@ export class ProjectManager {
 
   async scanDirectory(dirPath: string, depth = 1, maxResults = 50): Promise<ProjectInfo[]> {
     const projects: ProjectInfo[] = [];
-    
+
+    const checkProject = async (fullPath: string, name: string): Promise<ProjectInfo | null> => {
+      const indicators = [
+        'package.json',
+        'Cargo.toml',
+        'pyproject.toml',
+        'setup.py',
+        'go.mod',
+        'pom.xml',
+        'build.gradle',
+        'CMakeLists.txt',
+        'Makefile',
+        'Dockerfile',
+        'docker-compose.yml',
+        '.git',
+        'README.md',
+        'requirements.txt',
+        'Gemfile',
+      ];
+
+      let isProject = false;
+      let description = '';
+
+      for (const indicator of indicators) {
+        try {
+          await fs.access(path.join(fullPath, indicator));
+          isProject = true;
+
+          // Try to get description from package.json or README
+          if (indicator === 'package.json') {
+            try {
+              const pkgData = await fs.readFile(path.join(fullPath, 'package.json'), 'utf-8');
+              const pkg = JSON.parse(pkgData);
+              description = pkg.description || '';
+            } catch {
+              /* ignore */
+            }
+          }
+          break;
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if (isProject) {
+        const existing = Array.from(this.projects.values()).find((p) => p.path === fullPath);
+        const id = existing?.id || crypto.randomUUID();
+
+        const project = {
+          id,
+          name: name || path.basename(fullPath) || fullPath,
+          path: fullPath,
+          description,
+          lastUsed: existing?.lastUsed,
+        };
+
+        if (!existing) {
+          this.projects.set(id, project);
+        }
+        return project;
+      }
+      return null;
+    };
+
+    // Check if dirPath itself is a project (only on top-level call)
+    // We can detect top-level call by checking if depth is at its initial value, 
+    // but better to just check it. To avoid double-counting in recursion,
+    // we only do this once.
+    try {
+      const selfProject = await checkProject(dirPath, path.basename(dirPath));
+      if (selfProject) {
+        projects.push(selfProject);
+        // If it's a project, we might still want to scan its subdirectories?
+        // Usually projects don't contain other projects directly in a way we want to browse them,
+        // but some monorepos might. For now, let's continue scanning.
+      }
+    } catch (e) {
+      /* ignore */
+    }
+
     try {
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
-      
+
       // Limit entries to prevent blocking on huge directories
       const maxEntries = 200;
       const limitedEntries = entries.slice(0, maxEntries);
-      
+
       for (const entry of limitedEntries) {
         if (!entry.isDirectory()) continue;
         if (entry.name.startsWith('.')) continue;
         if (projects.length >= maxResults) break;
-        
+
         const fullPath = path.join(dirPath, entry.name);
-        
-        // Check for project indicators
-        const indicators = [
-          'package.json',
-          'Cargo.toml',
-          'pyproject.toml',
-          'setup.py',
-          'go.mod',
-          'pom.xml',
-          'build.gradle',
-          'CMakeLists.txt',
-          'Makefile',
-          'Dockerfile',
-          'docker-compose.yml',
-          '.git',
-          'README.md',
-          'requirements.txt',
-          'Gemfile',
-        ];
-        
-        let isProject = false;
-        let description = '';
-        
-        for (const indicator of indicators) {
-          try {
-            await fs.access(path.join(fullPath, indicator));
-            isProject = true;
-            
-            // Try to get description from package.json or README
-            if (indicator === 'package.json') {
-              try {
-                const pkgData = await fs.readFile(path.join(fullPath, 'package.json'), 'utf-8');
-                const pkg = JSON.parse(pkgData);
-                description = pkg.description || '';
-              } catch { /* ignore */ }
-            }
-            break;
-          } catch { /* ignore */ }
-        }
-        
-        if (isProject || depth === 0) {
-          const existing = Array.from(this.projects.values()).find(p => p.path === fullPath);
-          const id = existing?.id || crypto.randomUUID();
-          
-          projects.push({
-            id,
-            name: entry.name,
-            path: fullPath,
-            description,
-            lastUsed: existing?.lastUsed,
-          });
-          
-          if (!existing) {
-            this.projects.set(id, projects[projects.length - 1]);
+        const project = await checkProject(fullPath, entry.name);
+
+        if (project) {
+          // Avoid duplicates if dirPath itself was added and it's same as fullPath (unlikely)
+          if (!projects.find((p) => p.path === project.path)) {
+            projects.push(project);
           }
         }
-        
+
         // Scan one level deeper if not a project
-        if (!isProject && depth > 0 && projects.length < maxResults) {
+        if (!project && depth > 0 && projects.length < maxResults) {
           try {
             const subProjects = await this.scanDirectory(fullPath, depth - 1, maxResults - projects.length);
-            projects.push(...subProjects);
-          } catch { /* ignore permission errors */ }
+            for (const sp of subProjects) {
+                if (!projects.find(p => p.path === sp.path)) {
+                    projects.push(sp);
+                }
+            }
+          } catch {
+            /* ignore permission errors */
+          }
         }
       }
     } catch (e) {
@@ -209,6 +246,10 @@ export class SessionManager {
   ): Promise<DaemonSession> {
     const existing = this.sessions.get(chatId);
     if (existing) {
+      if (existing.abortController.signal.aborted) {
+        logger.debug(`Reusing session ${existing.sessionId} but signal was aborted. Resetting.`);
+        existing.abortController = new AbortController();
+      }
       logger.debug(`Reusing existing session ${existing.sessionId} for chat ${chatId}`);
       return existing;
     }
@@ -227,7 +268,7 @@ export class SessionManager {
   async destroy(chatId: number): Promise<void> {
     const session = this.sessions.get(chatId);
     if (session) {
-      session.abortController.abort();
+      session.abortController.abort('Session destroyed');
       try {
         await session.config.dispose();
       } catch (e) {
@@ -271,6 +312,17 @@ export class SessionManager {
     logger.debug(`Loading daemon config for session ${sessionId}...`);
     const config = await loadDaemonConfig(sessionId, configOptions);
     logger.debug(`Config loaded. Model: ${config.getModel()}`);
+
+    // Check for write access to the workspace directory
+    try {
+      const testFile = path.join(cwd, `.write_test_${sessionId}`);
+      await fs.writeFile(testFile, 'test');
+      await fs.unlink(testFile);
+      logger.debug(`Write access verified for ${cwd}`);
+    } catch (e) {
+      logger.warn(`Potential write access issue in ${cwd}: ${e}`);
+      // Don't throw here, just log it. Some features might still work.
+    }
 
     // Allow read access to the user's home directory so the daemon can
     // browse and reference files (write access stays scoped to cwd).
