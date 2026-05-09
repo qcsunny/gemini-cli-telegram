@@ -1,10 +1,10 @@
 # TODO
 
 ## Immediate Fixes (Project Browsing)
-- [ ] **Fix `ProjectManager.scanDirectory` depth limit**: Currently defaults to 1, which fails to find projects in common locations like `~/Documents/Coding/Project`. Increase default to 2 or 3.
-- [ ] **Fix `ProjectManager.scanDirectory` entry limit**: Currently capped at 200 entries per directory. Large home directories often exceed this, causing project discovery to fail for directories later in the list. Increase to 1000.
-- [ ] **Expand `~` in `/project_browse`**: The command currently doesn't handle paths starting with `~`. Add home directory expansion.
-- [ ] **Standardize Scan Depth**: Ensure all paths (slash command, callback, auto-scan) use a consistent, sufficiently deep scan (e.g., depth 2).
+- [x] **Fix `ProjectManager.scanDirectory` depth limit**: Currently defaults to 1, which fails to find projects in common locations like `~/Documents/Coding/Project`. Increase default to 2 or 3.
+- [x] **Fix `ProjectManager.scanDirectory` entry limit**: Currently capped at 200 entries per directory. Large home directories often exceed this, causing project discovery to fail for directories later in the list. Increase to 1000.
+- [x] **Expand `~` in `/project_browse`**: The command currently doesn't handle paths starting with `~`. Add home directory expansion.
+- [x] **Standardize Scan Depth**: Ensure all paths (slash command, callback, auto-scan) use a consistent, sufficiently deep scan (e.g., depth 2).
 
 ## Project Discovery Improvements
 - [ ] **Fallback Project Description**: If `package.json` is missing or lacks a description, attempt to extract the first non-header line from `README.md`.
