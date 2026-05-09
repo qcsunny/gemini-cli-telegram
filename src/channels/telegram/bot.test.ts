@@ -70,7 +70,10 @@ describe('TelegramBot', () => {
       reply: vi.fn().mockResolvedValue({ message_id: 456 }),
       replyWithChatAction: vi.fn().mockResolvedValue(true),
       api: mockBot.api,
-      session: { busy: false },
+      session: { 
+        busy: false,
+        abortController: new AbortController(),
+      },
     };
 
     global.fetch = vi.fn().mockResolvedValue({
@@ -109,7 +112,10 @@ describe('TelegramBot', () => {
       reply: vi.fn().mockResolvedValue({ message_id: 456 }),
       replyWithChatAction: vi.fn().mockResolvedValue(true),
       api: mockBot.api,
-      session: { busy: false },
+      session: { 
+        busy: false,
+        abortController: new AbortController(),
+      },
     };
 
     global.fetch = vi.fn().mockResolvedValue({
@@ -125,7 +131,7 @@ describe('TelegramBot', () => {
     expect(processMessage).toHaveBeenCalledWith(
       mockCtx.session,
       expect.objectContaining({
-        media: [expect.objectContaining({ type: 'audio', mimeType: 'audio/ogg' })]
+        media: [expect.objectContaining({ type: 'voice', mimeType: 'audio/ogg' })]
       }),
       expect.any(Object),
       expect.any(Object)
