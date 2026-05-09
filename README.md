@@ -54,6 +54,24 @@ The script will guide you through:
 2. **Telegram Token** — Input your bot token from [@BotFather](https://t.me/BotFather).
 3. **Interactive Whitelist** — Simply send a message to your bot to automatically whitelist your User ID.
 
+### Docker (Recommended for Servers)
+
+Run the bot as a container without installing Node.js:
+
+```bash
+docker run -d \
+  --name gemini-bot \
+  -v ~/.gemini-cli-telegram:/root/.gemini-cli-telegram \
+  -v ~/.config/google-gemini-cli:/root/.config/google-gemini-cli \
+  ghcr.io/ibidathoillah/gemini-cli-telegram:latest
+```
+
+### JSR (Modern Registry)
+
+```bash
+npx jsr add @ibidathoillah/gemini-cli-telegram
+```
+
 ### Manual Installation
 
 #### Quick Start (via npx)
