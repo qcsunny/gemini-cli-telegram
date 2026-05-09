@@ -16,6 +16,7 @@
 - [ ] **Better Error Handling**: Provide clearer feedback when directory access is denied due to permissions.
 - [ ] **Configurable Limits**: Allow users to adjust scan depth and entry limits in `config.json`.
 
-## Maintenance
+## Tooling & Infrastructure
+- [x] **Auto Approve Workflow**: Add `hmarr/auto-approve-action` to automatically approve PRs.
 - [ ] **Unit Testing**: Add dedicated tests for `ProjectManager` to verify depth and entry limit logic.
 - [ ] **Cleanup**: Remove or archive reproduction scripts (`reproduce_browse.ts`, `test_depth.ts`, `test_entries.ts`) after fixes are verified.
