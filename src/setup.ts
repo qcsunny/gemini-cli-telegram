@@ -5,6 +5,7 @@
  */
 
 import * as readline from 'node:readline';
+import { Bot } from 'grammy';
 import { runAuthProbe } from './index.js';
 import {
   saveApiKey,
@@ -25,6 +26,7 @@ import {
   CONFIG_PATH,
   type UserConfig,
 } from './config/userConfig.js';
+import { ICONS } from './channels/telegram/ui.js';
 
 const AVAILABLE_MODELS = [
   DEFAULT_GEMINI_MODEL_AUTO,
@@ -57,10 +59,10 @@ async function validateBotToken(token: string): Promise<string | null> {
 }
 
 async function setupToken(rl: readline.Interface): Promise<string> {
-  console.log('Telegram Bot Token');
+  console.log(`${ICONS.bot} <b>Telegram Bot Token</b>`);
   console.log('  1. Open Telegram and search for @BotFather');
-  console.log('  2. Send /newbot and follow the prompts to create a bot');
-  console.log('  3. Copy the token BotFather gives you\n');
+  console.log('  2. Send /newbot and follow the prompts');
+  console.log('  3. Copy the token and paste it here\n');
 
   while (true) {
     const token = await ask(rl, 'Bot token: ');
@@ -68,34 +70,52 @@ async function setupToken(rl: readline.Interface): Promise<string> {
       console.log('Token is required.\n');
       continue;
     }
-    console.log('Validating...');
+    console.log(`${ICONS.loading} Validating...`);
     const username = await validateBotToken(token);
     if (username) {
-      console.log(`Verified: @${username}\n`);
+      console.log(`${ICONS.success} Verified: @${username}\n`);
       return token;
     }
-    console.log('Invalid token or network error. Try again.\n');
+    console.log(`${ICONS.error} Invalid token. Try again.\n`);
   }
 }
 
-async function setupUsers(rl: readline.Interface): Promise<number[]> {
-  console.log('Allowed Users');
-  console.log('  1. Open Telegram and search for @userinfobot');
-  console.log('  2. Send /start — it will reply with your user ID');
-  console.log('  3. Repeat for any other users you want to allow\n');
+async function setupUsers(rl: readline.Interface, token: string): Promise<number[]> {
+  console.log(`${ICONS.user} <b>Allowed Users</b>`);
+  console.log('  You can enter IDs manually or let the bot detect you.');
+  console.log('  (Comma-separated IDs, or press Enter to use interactive detection)\n');
 
-  while (true) {
-    const input = await ask(rl, 'User IDs (comma-separated): ');
+  const input = await ask(rl, 'User IDs (manual): ');
+  if (input) {
     const users = input
       .split(',')
       .map((s) => Number(s.trim()))
       .filter((n) => !isNaN(n) && n > 0);
     if (users.length > 0) {
-      console.log(`Allowed users: ${users.join(', ')}\n`);
+      console.log(`${ICONS.success} Allowed users: ${users.join(', ')}\n`);
       return users;
     }
-    console.log('At least one valid user ID is required.\n');
   }
+
+  // Interactive detection
+  console.log(`\n${ICONS.bot} <b>Interactive Detection Started</b>`);
+  console.log(`  1. Open your bot in Telegram`);
+  console.log(`  2. Send any message to it`);
+  console.log(`  ${ICONS.loading} Waiting for message...\n`);
+
+  const bot = new Bot(token);
+  return new Promise((resolve) => {
+    bot.on('message', async (ctx) => {
+      const userId = ctx.from?.id;
+      if (userId) {
+        console.log(`${ICONS.success} Detected User ID: <code>${userId}</code> (${ctx.from.first_name})`);
+        await ctx.reply(`${ICONS.sparkles} <b>Setup: Authentication Successful</b>\n\nYour User ID <code>${userId}</code> has been whitelisted.\n\nYou can now finish the setup in your terminal.`);
+        bot.stop();
+        resolve([userId]);
+      }
+    });
+    bot.start();
+  });
 }
 
 function radioSelect(
@@ -297,7 +317,7 @@ export async function runSetup(only?: SetupStep): Promise<void> {
     : existing!.telegramBotToken;
 
   const allowedUsers = only === 'users' || !only
-    ? await setupUsers(currentRl)
+    ? await setupUsers(currentRl, token)
     : existing!.allowedUsers;
 
   let model: string | undefined;

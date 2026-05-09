@@ -28,6 +28,8 @@ const TYPING_KEEPALIVE_MS = 3000;
 const TYPING_TTL_MS = 3_600_000; // Safety: auto-stop typing after 1 hour
 const DOWNLOAD_MAX_RETRIES = 3;
 const DOWNLOAD_RETRY_BASE_MS = 1000;
+const MAX_MESSAGE_PROCESSING_MS = 300_000; // 5 minute timeout for message processing
+const HEALTH_CHECK_INTERVAL_MS = 60_000; // Check every minute
 
 export interface TelegramBotOptions {
   allowedUsers?: number[];
@@ -129,14 +131,36 @@ async function withSession(
     return;
   }
 
+  // Check if session appears stuck (busy for too long)
   if (session.busy) {
+    const now = Date.now();
+    const busySince = (session as { _busySince?: number })._busySince;
+    if (busySince && now - busySince > MAX_MESSAGE_PROCESSING_MS) {
+      logger.warn(`Session for chat ${chatId} appears stuck (busy for ${now - busySince}ms). Resetting.`);
+      session.abortController.abort('Session timeout (stuck)');
+      session.abortController = new AbortController();
+      session.busy = false;
+      (session as { _busySince?: number })._busySince = undefined;
+      try {
+        await ctx.reply(`${ICONS.warning} Previous operation timed out and was cancelled. Please try again.`);
+      } catch { /* ignore */ }
+      return;
+    }
+    
     await ctx.reply(
       `${ICONS.warning} Still processing your previous message. Use /cancel to abort it.`,
     );
     return;
   }
 
+  // Ensure we have a fresh abort controller if the previous one was aborted
+  if (session.abortController.signal.aborted) {
+    logger.debug(`Session for chat ${chatId} had an aborted signal. Resetting abort controller.`);
+    session.abortController = new AbortController();
+  }
+
   session.busy = true;
+  (session as { _busySince?: number })._busySince = Date.now();
 
   session.typingInterval = setInterval(() => {
     ctx.replyWithChatAction('typing').catch(() => {});
@@ -159,7 +183,8 @@ async function withSession(
     logger.error(`Error in handler for chat ${chatId}: ${e}`);
     try {
       await ctx.reply(
-        `${ICONS.error} Error: ${e instanceof Error ? e.message : String(e)}`,
+        `${ICONS.error} <b>Operation failed:</b>\n<i>${e instanceof Error ? e.message : String(e)}</i>`,
+        { parse_mode: 'HTML' }
       );
     } catch {
       // ignore reply failures
@@ -171,6 +196,7 @@ async function withSession(
       session.typingInterval = undefined;
     }
     session.busy = false;
+    (session as { _busySince?: number })._busySince = undefined;
   }
 }
 
@@ -284,6 +310,7 @@ export class TelegramBot {
   private runner: ReturnType<typeof run> | undefined;
   private sessionManager: SessionManager;
   private defaultOptions: SessionOptions;
+  private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(token: string, options: TelegramBotOptions = {}) {
     this.bot = new Bot(token);
@@ -379,6 +406,8 @@ export class TelegramBot {
 
     logger.info('Telegram bot started. Listening for messages...');
 
+    this.startHealthCheck();
+
     // Use @grammyjs/runner for concurrent update processing.
     // This allows /cancel to run even while a message handler is busy.
     this.runner = run(this.bot, {
@@ -394,11 +423,64 @@ export class TelegramBot {
 
   async stop(): Promise<void> {
     logger.info('Stopping Telegram bot...');
+    this.stopHealthCheck();
     await this.sessionManager.destroyAll();
     if (this.runner?.isRunning()) {
       this.runner.stop();
     }
     logger.info('Telegram bot stopped.');
+  }
+
+  private startHealthCheck(): void {
+    this.healthCheckInterval = setInterval(() => {
+      void this.performHealthCheck();
+    }, HEALTH_CHECK_INTERVAL_MS);
+    logger.debug('Health check started');
+  }
+
+  private stopHealthCheck(): void {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+      logger.debug('Health check stopped');
+    }
+  }
+
+  private async performHealthCheck(): Promise<void> {
+    try {
+      if (!this.runner?.isRunning()) {
+        logger.warn('Runner appears to have stopped. Attempting restart...');
+        try {
+          this.runner = run(this.bot, {
+            runner: {
+              fetch: { timeout: 30 },
+              silent: true,
+            },
+          });
+          logger.info('Runner restarted successfully');
+        } catch (e) {
+          logger.error(`Failed to restart runner: ${e}`);
+        }
+      }
+
+      const sessions = (this.sessionManager as unknown as { sessions?: Map<number, DaemonSession> }).sessions;
+      if (sessions) {
+        for (const [chatId, session] of sessions) {
+          if (session.busy) {
+            const busySince = (session as { _busySince?: number })._busySince;
+            if (busySince && Date.now() - busySince > MAX_MESSAGE_PROCESSING_MS) {
+              logger.warn(`Health check: resetting stuck session for chat ${chatId}`);
+              session.abortController.abort('Health check: session stuck');
+              session.abortController = new AbortController();
+              session.busy = false;
+              (session as { _busySince?: number })._busySince = undefined;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      logger.error(`Health check failed: ${e}`);
+    }
   }
 
   private setupMiddleware(allowedUsers?: number[]): void {
@@ -514,7 +596,7 @@ export class TelegramBot {
 
     // Check stop conditions
     if (autopilot.currentIteration >= autopilot.maxIterations) {
-      await channelReply.send(`${ICONS.info} <b>Autopilot stopped</b> — reached max iterations (${autopilot.maxIterations})`);
+      await channelReply.send(`${ICONS.info} <b>Autopilot Paused</b>\nReached maximum iterations (${autopilot.maxIterations}).`);
       autopilot.active = false;
       return;
     }

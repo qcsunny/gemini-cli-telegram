@@ -41,25 +41,35 @@
 
 ## Installation
 
-### Quick Start
+### One-Click Setup (Recommended for new VMs)
+
+Run this command to install Node.js, clone the repository, and start the interactive setup wizard:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ibidathoillah/gemini-cli-telegram/main/setup.sh | bash
+```
+
+The script will guide you through:
+1. **Google Login** — Authenticate with your Google account.
+2. **Telegram Token** — Input your bot token from [@BotFather](https://t.me/BotFather).
+3. **Interactive Whitelist** — Simply send a message to your bot to automatically whitelist your User ID.
+
+### Manual Installation
+
+#### Quick Start (via npx)
 
 ```bash
 npx gemini-cli-telegram start
 ```
 
-### Global Install
+#### Global Install
 
 ```bash
 npm install -g gemini-cli-telegram
 gemini-cli-telegram start
 ```
 
-On first run, an interactive wizard guides you through:
-
-1. Create a Telegram bot via [@BotFather](https://t.me/BotFather)
-2. Set allowed Telegram user IDs
-3. Choose a default model (optional)
-4. Authenticate with Google (OAuth) or a [Gemini API key](https://aistudio.google.com/apikey)
+On first run, an interactive wizard guides you through the setup.
 
 ---
 
@@ -76,6 +86,28 @@ gemini-cli-telegram <command> [options]
 | `status` | Check daemon status |
 | `logs` | Show recent logs |
 | `setup [step]` | Run setup wizard |
+
+---
+
+## Running as a Service (Auto-Restart)
+
+To ensure the bot stays running and automatically restarts on failure, you can install it as a **systemd service**:
+
+```bash
+sudo ./scripts/install-service.sh
+```
+
+This will create a service named `gemini-telegram` that starts on boot and restarts every 10 seconds if it crashes.
+
+### Management Commands
+
+| Action | Command |
+|--------|---------|
+| Start | `sudo systemctl start gemini-telegram` |
+| Stop | `sudo systemctl stop gemini-telegram` |
+| Restart | `sudo systemctl restart gemini-telegram` |
+| Status | `sudo systemctl status gemini-telegram` |
+| Live Logs | `sudo journalctl -u gemini-telegram -f` |
 
 ---
 

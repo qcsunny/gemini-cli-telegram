@@ -6,6 +6,7 @@
 
 import type { Bot, Context } from 'grammy';
 import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_GEMINI_FLASH_MODEL,
@@ -72,12 +73,12 @@ export function registerCommands(
     try {
       await sessionManager.reset(chatId, defaultOptions);
       await ctx.reply(
-        `${ICONS.new} <b>New session started!</b>\n\n${ICONS.arrow} Send me a message to get started.`,
+        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
       );
     } catch (e) {
       logger.error(`Error resetting session for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} Failed to start new session.`);
+      await ctx.reply(`${ICONS.error} <b>Failed to reset session.</b>`);
     }
   });
 
@@ -88,7 +89,7 @@ export function registerCommands(
 
     const session = sessionManager.getSession(chatId);
     if (!session) {
-      await ctx.reply(`${ICONS.warning} No active session.`);
+      await ctx.reply(`${ICONS.warning} <b>No active session.</b>`);
       return;
     }
 
@@ -98,15 +99,15 @@ export function registerCommands(
         clearInterval(session.typingInterval);
         session.typingInterval = undefined;
       }
-      session.abortController.abort();
+      session.abortController.abort('User cancelled');
       session.abortController = new AbortController();
       session.busy = false;
       session.thinkingSteps = [];
-      await ctx.reply(`${ICONS.cancel} Current operation cancelled.`, {
+      await ctx.reply(`${ICONS.cancel} <b>Operation aborted.</b>`, {
         reply_markup: buildMainKeyboard(),
       });
     } else {
-      await ctx.reply(`${ICONS.info} Nothing to cancel.`);
+      await ctx.reply(`${ICONS.info} <b>Nothing to cancel.</b>`);
     }
   });
 
@@ -123,13 +124,13 @@ export function registerCommands(
       session = await sessionManager.getOrCreate(chatId, defaultOptions);
     } catch (e) {
       logger.error(`Failed to create session for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} Failed to initialize session: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Initialization failed:</b> ${e}`);
       return;
     }
 
     if (session.busy) {
       await ctx.reply(
-        `${ICONS.warning} Session is busy. Use /cancel first, then /resume.`,
+        `${ICONS.warning} <b>Session is busy.</b>\nPlease /cancel the current operation first.`,
       );
       return;
     }
@@ -139,7 +140,7 @@ export function registerCommands(
       try {
         const sessions = await listAvailableSessions(session.config);
         if (sessions.length === 0) {
-          await ctx.reply(`${ICONS.info} No sessions found.`, {
+          await ctx.reply(`${ICONS.info} <b>No saved sessions found.</b>`, {
             reply_markup: buildMainKeyboard(),
           });
           return;
@@ -151,13 +152,13 @@ export function registerCommands(
           index: s.index,
         }));
 
-        await ctx.reply(`${ICONS.resume} <b>Available Sessions</b>\n\nSelect a session to resume:`, {
+        await ctx.reply(`${ICONS.resume} <b>Restore Session</b>\n\nChoose a previous session to resume:`, {
           parse_mode: 'HTML',
           reply_markup: buildResumeKeyboard(sessionItems),
         });
       } catch (e) {
         logger.error(`Error listing sessions for chat ${chatId}: ${e}`);
-        await ctx.reply(`${ICONS.error} Failed to list sessions: ${e}`);
+        await ctx.reply(`${ICONS.error} <b>Failed to list sessions.</b>`);
       }
       return;
     }
@@ -165,13 +166,13 @@ export function registerCommands(
     // Resume the specified session
     try {
       const message = await resumeSession(session, arg);
-      await ctx.reply(`${ICONS.done} ${message}`, {
+      await ctx.reply(`${ICONS.success} <b>Session Restored</b>\n\n${message}`, {
         reply_markup: buildMainKeyboard(),
       });
     } catch (e) {
       logger.error(`Error resuming session for chat ${chatId}: ${e}`);
       await ctx.reply(
-        `${ICONS.error} Failed to resume: ${e instanceof Error ? e.message : String(e)}`,
+        `${ICONS.error} <b>Resume failed:</b> ${e instanceof Error ? e.message : String(e)}`,
       );
     }
   });
@@ -193,7 +194,7 @@ export function registerCommands(
       }));
 
       await ctx.reply(
-        `${ICONS.model} <b>Select Model</b>\n\nCurrent: <code>${currentModel}</code>`,
+        `${ICONS.model} <b>Model Selection</b>\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
           reply_markup: buildModelKeyboard(modelItems),
@@ -212,13 +213,13 @@ export function registerCommands(
     try {
       const session = await sessionManager.getOrCreate(chatId, defaultOptions);
       session.config.setModel(modelName, false);
-      await ctx.reply(`${ICONS.model} <b>Switched to model:</b>\n<code>${modelName}</code>`, {
+      await ctx.reply(`${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${modelName}</code>`, {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
     } catch (e) {
       logger.error(`Error switching model for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} Failed to switch model: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Switch failed:</b> ${e}`);
     }
   });
 
@@ -229,7 +230,7 @@ export function registerCommands(
 
     const session = sessionManager.getSession(chatId);
     if (!session) {
-      await ctx.reply(`${ICONS.warning} No active session.`);
+      await ctx.reply(`${ICONS.warning} <b>No active session.</b>`);
       return;
     }
 
@@ -238,12 +239,12 @@ export function registerCommands(
         `daemon-${session.sessionId}`,
         true,
       );
-      await ctx.reply(`${ICONS.compact} Chat history compacted.`, {
+      await ctx.reply(`${ICONS.compact} <b>Context Optimized</b>\n\nI've summarized the conversation to save tokens and maintain focus.`, {
         reply_markup: buildMainKeyboard(),
       });
     } catch (e) {
       logger.error(`Error compacting chat for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} Failed to compact: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Optimization failed.</b>`);
     }
   });
 
@@ -254,7 +255,7 @@ export function registerCommands(
 
     const session = sessionManager.getSession(chatId);
     if (!session) {
-      await ctx.reply(`${ICONS.warning} No active session.`, {
+      await ctx.reply(`${ICONS.warning} <b>No active session.</b>`, {
         reply_markup: buildMainKeyboard(),
       });
       return;
@@ -282,24 +283,24 @@ export function registerCommands(
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
     if (!arg) {
-      await ctx.reply(`${ICONS.folder} Usage: /addfolder <path>`);
+      await ctx.reply(`${ICONS.folder} <b>Usage:</b>\n<code>/addfolder &lt;path&gt;</code>`, { parse_mode: 'HTML' });
       return;
     }
 
     const session = sessionManager.getSession(chatId);
     if (!session) {
-      await ctx.reply(`${ICONS.warning} No active session. Send a message first.`);
+      await ctx.reply(`${ICONS.warning} <b>No active session.</b>\nSend a message first.`);
       return;
     }
 
     try {
       session.config.getWorkspaceContext().addDirectory(arg);
-      await ctx.reply(`${ICONS.done} Added <code>${arg}</code> (read+write) to this session.`, {
+      await ctx.reply(`${ICONS.success} <b>Folder Added</b>\n\nPath: <code>${arg}</code>\nPermissions: <b>Read + Write</b>`, {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
     } catch (e) {
-      await ctx.reply(`${ICONS.error} Failed to add folder: ${e instanceof Error ? e.message : String(e)}`);
+      await ctx.reply(`${ICONS.error} <b>Failed to add folder:</b>\n${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
     }
   });
 
@@ -310,11 +311,11 @@ export function registerCommands(
 
     const session = sessionManager.getSession(chatId);
     if (!session) {
-      await ctx.reply(`${ICONS.warning} No active session.`);
+      await ctx.reply(`${ICONS.warning} <b>No active session.</b>`);
       return;
     }
 
-    await ctx.reply(`${ICONS.session} Session ID: <code>${session.sessionId}</code>`, {
+    await ctx.reply(`${ICONS.session} <b>Session ID:</b>\n<code>${session.sessionId}</code>`, {
       parse_mode: 'HTML',
     });
   });
@@ -342,7 +343,7 @@ export function registerCommands(
     if (!subcommand || subcommand === 'list') {
       const tasks = scheduler.getTasksForChat(chatId);
       if (tasks.length === 0) {
-        await ctx.reply(`${ICONS.clock} <b>Schedule Manager</b>\n\nSchedule messages to be sent automatically at a specific time or repeating interval.\n\n<b>Commands:</b>\n<code>/schedule add &lt;time&gt; &lt;message&gt;</code> — One-time schedule\n<code>/schedule recurring &lt;minutes&gt; &lt;message&gt;</code> — Repeating schedule\n<code>/schedule list</code> — View all scheduled tasks\n<code>/schedule remove &lt;id&gt;</code> — Delete a task\n<code>/schedule toggle &lt;id&gt;</code> — Pause or resume a task\n\n<b>Time Examples:</b>\n• <code>now</code> — Send in 5 seconds\n• <code>in 5m</code>, <code>in 1h</code>, <code>in 2h</code>\n• <code>tomorrow</code>, <code>tomorrow at 14:00</code>\n• <code>tonight</code>, <code>morning</code>, <code>evening</code>\n• <code>14:30</code> — Today or tomorrow at 2:30 PM\n\n<b>Usage Examples:</b>\n<code>/schedule add in 1h Check server logs</code>\n<code>/schedule recurring 60 Backup database</code>\n<code>/schedule add tomorrow at 09:00 Daily standup reminder</code>`, {
+        await ctx.reply(`${ICONS.clock} <b>Schedule Manager</b>\n\nAutomate tasks by scheduling messages to be sent at specific times or intervals.\n\n<b>Commands:</b>\n• <code>/schedule add &lt;time&gt; &lt;msg&gt;</code>\n• <code>/schedule recurring &lt;min&gt; &lt;msg&gt;</code>\n• <code>/schedule list</code>\n• <code>/schedule remove &lt;id&gt;</code>\n• <code>/schedule toggle &lt;id&gt;</code>\n\n<b>Time Formats:</b>\n• <code>in 5m</code>, <code>in 1h</code>, <code>tomorrow</code>\n• <code>14:30</code>, <code>tonight</code>, <code>morning</code>\n\n<b>Example:</b>\n<code>/schedule add in 1h Check build status</code>`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -350,7 +351,7 @@ export function registerCommands(
       }
 
       const lines = [
-        `${ICONS.clock} <b>Scheduled Tasks</b>`,
+        `${ICONS.clock} <b>Active Schedules</b>`,
         '',
         ...tasks.map((t) => {
           const status = t.active ? '🟢' : '🔴';
@@ -361,10 +362,10 @@ export function registerCommands(
             hour: '2-digit',
             minute: '2-digit',
           });
-          return `${status} <code>${t.id.slice(0, 8)}</code> — ${t.type}\n  ${ICONS.clock} ${timeStr}\n  ${t.message.substring(0, 50)}${t.message.length > 50 ? '...' : ''}`;
+          return `${status} <code>${t.id.slice(0, 8)}</code> — ${t.type}\n  ${ICONS.clock} ${timeStr}\n  <i>${truncate(t.message, 40)}</i>`;
         }),
         '',
-        'Use <code>/schedule remove &lt;id&gt;</code> to remove a task.',
+        `Use <code>/schedule remove &lt;id&gt;</code> to delete.`,
       ];
 
       await ctx.reply(lines.join('\n'), {
@@ -381,7 +382,7 @@ export function registerCommands(
       const message = scheduleParts.slice(1).join(' ');
 
       if (!timeExpr || !message) {
-        await ctx.reply(`${ICONS.warning} Usage: <code>/schedule add &lt;time&gt; &lt;message&gt;</code>\n\nExample: <code>/schedule add in 1h Check server logs</code>`, {
+        await ctx.reply(`${ICONS.warning} <b>Usage:</b>\n<code>/schedule add &lt;time&gt; &lt;message&gt;</code>`, {
           parse_mode: 'HTML',
         });
         return;
@@ -391,14 +392,14 @@ export function registerCommands(
         const task = await scheduler.addTask(chatId, message, 'once', timeExpr);
         const nextRun = new Date(task.nextRun);
         await ctx.reply(
-          `${ICONS.done} <b>Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nTime: ${nextRun.toLocaleString()}\nMessage: <i>${message}</i>`,
+          `${ICONS.success} <b>Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nNext run: <b>${nextRun.toLocaleString()}</b>\nMessage: <i>${message}</i>`,
           {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           },
         );
       } catch (e) {
-        await ctx.reply(`${ICONS.error} Failed to schedule: ${e instanceof Error ? e.message : String(e)}`);
+        await ctx.reply(`${ICONS.error} <b>Scheduling failed:</b>\n${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
       }
       return;
     }
@@ -411,7 +412,7 @@ export function registerCommands(
       const minutes = parseInt(minutesStr, 10);
 
       if (isNaN(minutes) || minutes < 1 || !message) {
-        await ctx.reply(`${ICONS.warning} Usage: <code>/schedule recurring &lt;minutes&gt; &lt;message&gt;</code>\n\nExample: <code>/schedule recurring 60 Check disk space</code>`, {
+        await ctx.reply(`${ICONS.warning} <b>Usage:</b>\n<code>/schedule recurring &lt;minutes&gt; &lt;message&gt;</code>`, {
           parse_mode: 'HTML',
         });
         return;
@@ -420,14 +421,14 @@ export function registerCommands(
       try {
         const task = await scheduler.addTask(chatId, message, 'recurring', `every ${minutes}m`, minutes);
         await ctx.reply(
-          `${ICONS.done} <b>Recurring Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nInterval: Every ${minutes} minutes\nMessage: <i>${message}</i>`,
+          `${ICONS.success} <b>Recurring Task Set</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nInterval: <b>Every ${minutes}m</b>\nMessage: <i>${message}</i>`,
           {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           },
         );
       } catch (e) {
-        await ctx.reply(`${ICONS.error} Failed to schedule: ${e instanceof Error ? e.message : String(e)}`);
+        await ctx.reply(`${ICONS.error} <b>Scheduling failed:</b>\n${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
       }
       return;
     }
@@ -450,7 +451,7 @@ export function registerCommands(
 
       const removed = await scheduler.removeTask(task.id);
       if (removed) {
-        await ctx.reply(`${ICONS.done} Task <code>${idPrefix}</code> removed.`, {
+        await ctx.reply(`${ICONS.success} Task <code>${idPrefix}</code> removed.`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -464,26 +465,26 @@ export function registerCommands(
     if (subcommand === 'toggle') {
       const idPrefix = parts[1];
       if (!idPrefix) {
-        await ctx.reply(`${ICONS.warning} Usage: <code>/schedule toggle &lt;id&gt;</code>`);
+        await ctx.reply(`${ICONS.warning} <b>Usage:</b>\n<code>/schedule toggle &lt;id&gt;</code>`, { parse_mode: 'HTML' });
         return;
       }
 
       const tasks = scheduler.getTasksForChat(chatId);
       const task = tasks.find((t) => t.id.startsWith(idPrefix));
       if (!task) {
-        await ctx.reply(`${ICONS.error} Task not found.`);
+        await ctx.reply(`${ICONS.error} <b>Task not found.</b>`);
         return;
       }
 
       const newState = await scheduler.toggleTask(task.id);
-      await ctx.reply(`${ICONS.done} Task <code>${idPrefix}</code> is now ${newState ? 'active 🟢' : 'paused 🔴'}.`, {
+      await ctx.reply(`${ICONS.success} <b>Task ${newState ? 'Activated' : 'Paused'}</b>\n\nID: <code>${idPrefix}</code> ${newState ? '🟢' : '🔴'}`, {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
       return;
     }
 
-    await ctx.reply(`${ICONS.warning} Unknown subcommand: <code>${subcommand}</code>\n\nAvailable: <code>list</code>, <code>add</code>, <code>recurring</code>, <code>remove</code>, <code>toggle</code>`, {
+    await ctx.reply(`${ICONS.warning} <b>Unknown subcommand:</b> <code>${subcommand}</code>\n\nAvailable: <code>list</code>, <code>add</code>, <code>recurring</code>, <code>remove</code>, <code>toggle</code>`, {
       parse_mode: 'HTML',
       reply_markup: buildMainKeyboard(),
     });
@@ -501,11 +502,11 @@ export function registerCommands(
       const session = sessionManager.getSession(chatId);
       if (session?.autopilot?.active) {
         session.autopilot.active = false;
-        await ctx.reply(`${ICONS.cancel} <b>Autopilot stopped.</b>`, {
+        await ctx.reply(`${ICONS.cancel} <b>Autopilot Deactivated</b>\n\nI've stopped the autonomous loop.`, {
           reply_markup: buildMainKeyboard(),
         });
       } else {
-        await ctx.reply(`${ICONS.info} Autopilot is not active.`);
+        await ctx.reply(`${ICONS.info} <b>Autopilot is not running.</b>`);
       }
       return;
     }
@@ -513,7 +514,7 @@ export function registerCommands(
     // Start autopilot
     if (!arg) {
       await ctx.reply(
-        `${ICONS.bot} <b>Autopilot Mode</b>\n\nEnable the bot to work autonomously by auto-replying to itself. The AI will iteratively think, act, and improve until the goal is achieved or max iterations reached.\n\n<b>How it works:</b>\n1️⃣ You set a clear goal\n2️⃣ AI processes and responds\n3️⃣ AI feeds its own response back as input\n4️⃣ Steps 2-3 repeat until done (max 10 iterations)\n5️⃣ Final summary is delivered to you\n\n<b>Commands:</b>\n<code>/autopilot &lt;goal&gt;</code> — Start working on a goal\n<code>/autopilot stop</code> — Stop autopilot immediately\n\n<b>Best for:</b>\n• Refactoring code across multiple files\n• Writing documentation or tests\n• Fixing bugs requiring multiple steps\n• Researching and summarizing topics\n\n<b>Examples:</b>\n<code>/autopilot Refactor auth module to use JWT tokens</code>\n<code>/autopilot Write unit tests for all API endpoints</code>\n<code>/autopilot Fix all ESLint warnings in the project</code>\n<code>/autopilot Create a migration script for the database</code>`,
+        `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until done (max 10 iterations)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately\n\n<b>Best for:</b> Refactoring, writing tests, fixing bugs, and research.`,
         {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
@@ -534,7 +535,7 @@ export function registerCommands(
     };
 
     await ctx.reply(
-      `${ICONS.bot} <b>Autopilot Started</b>\n\n${ICONS.thinking} Goal: <i>${arg}</i>\n${ICONS.arrow} Max iterations: 10\n\n${ICONS.loading} Processing...`,
+      `${ICONS.bot} <b>Autopilot Initialized</b>\n\n${ICONS.thinking} <b>Goal:</b> <i>${arg}</i>\n${ICONS.arrow} <b>Limit:</b> 10 iterations\n\n${ICONS.loading} <i>Working on the first step...</i>`,
       {
         parse_mode: 'HTML',
       },
@@ -555,7 +556,7 @@ export function registerCommands(
 
     // If no projects saved, scan home directory
     if (projects.length === 0) {
-      await ctx.reply(`${ICONS.loading} Scanning for projects...`);
+      await ctx.reply(`${ICONS.loading} <b>Scanning for projects...</b>`, { parse_mode: 'HTML' });
       try {
         projects = await projectManager.scanDirectory(os.homedir(), 1);
         await projectManager.saveProjects();
@@ -565,7 +566,8 @@ export function registerCommands(
     }
 
     if (projects.length === 0) {
-      await ctx.reply(`${ICONS.info} No projects found. Use /addfolder to add a project directory.`, {
+      await ctx.reply(`${ICONS.info} <b>No projects found.</b>\n\nUse <code>/project_browse &lt;path&gt;</code> to find and add project directories.`, {
+        parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
       return;
@@ -575,7 +577,7 @@ export function registerCommands(
     const currentProjectId = session?.currentProject?.id;
 
     await ctx.reply(
-      `${ICONS.project} <b>Select Project</b>\n\nChoose a project to work with:`,
+      `${ICONS.project} <b>Workspace Manager</b>\n\nSelect a project to work with:`,
       {
         parse_mode: 'HTML',
         reply_markup: buildProjectKeyboard(
@@ -595,7 +597,7 @@ export function registerCommands(
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
     if (!arg) {
-      await ctx.reply(`${ICONS.warning} No project ID provided.`);
+      await ctx.reply(`${ICONS.warning} <b>No project ID provided.</b>`);
       return;
     }
 
@@ -603,7 +605,7 @@ export function registerCommands(
     const project = projectManager.getProject(arg);
 
     if (!project) {
-      await ctx.reply(`${ICONS.error} Project not found.`);
+      await ctx.reply(`${ICONS.error} <b>Project not found.</b>`);
       return;
     }
 
@@ -615,7 +617,7 @@ export function registerCommands(
       });
 
       await ctx.reply(
-        `${ICONS.done} <b>Project Selected</b>\n\n${formatProjectInfo(project)}`,
+        `${ICONS.success} <b>Workspace Switched</b>\n\n${formatProjectInfo(project)}`,
         {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
@@ -623,7 +625,7 @@ export function registerCommands(
       );
     } catch (e) {
       logger.error(`Error switching project for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} Failed to switch project: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Failed to switch project:</b> ${e}`);
     }
   });
 
@@ -633,9 +635,17 @@ export function registerCommands(
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
-    const browsePath = arg || os.homedir();
+    const session = sessionManager.getSession(chatId);
+    const baseDir = session?.config.getTargetDir() || process.cwd();
+    
+    let browsePath: string;
+    if (!arg) {
+      browsePath = os.homedir();
+    } else {
+      browsePath = path.resolve(baseDir, arg);
+    }
 
-    await ctx.reply(`${ICONS.loading} Scanning ${browsePath}...`);
+    await ctx.reply(`${ICONS.loading} <b>Scanning:</b> <code>${browsePath}</code>`, { parse_mode: 'HTML' });
 
     try {
       const projectManager = sessionManager.getProjectManager();
@@ -643,7 +653,7 @@ export function registerCommands(
       await projectManager.saveProjects();
 
       if (projects.length === 0) {
-        await ctx.reply(`${ICONS.info} No projects found in <code>${browsePath}</code>.`, {
+        await ctx.reply(`${ICONS.info} <b>No projects found</b> in <code>${browsePath}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> to grant manual access.`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -654,7 +664,7 @@ export function registerCommands(
       const currentProjectId = session?.currentProject?.id;
 
       await ctx.reply(
-        `${ICONS.project} <b>Found ${projects.length} Projects</b>\n\nSelect a project:`,
+        `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects. Select one to activate:`,
         {
           parse_mode: 'HTML',
           reply_markup: buildProjectKeyboard(projects.slice(0, PROJECTS_PER_PAGE), projects.length > PROJECTS_PER_PAGE, 0, currentProjectId),
@@ -662,7 +672,7 @@ export function registerCommands(
       );
     } catch (e) {
       logger.error(`Error browsing directory: ${e}`);
-      await ctx.reply(`${ICONS.error} Failed to browse: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Failed to browse directory.</b>`);
     }
   });
 
@@ -675,7 +685,7 @@ export function registerCommands(
 
     // Handle navigation callbacks
     if (data === '/start') {
-      await ctx.answerCallbackQuery('Main menu');
+      await ctx.answerCallbackQuery('Main Menu');
       await ctx.editMessageText(formatWelcome(ctx.from?.first_name), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
@@ -684,21 +694,21 @@ export function registerCommands(
     }
 
     if (data === '/new') {
-      await ctx.answerCallbackQuery('Starting new session...');
+      await ctx.answerCallbackQuery('Resetting session...');
       try {
         await sessionManager.reset(chatId, defaultOptions);
         await ctx.editMessageText(
-          `${ICONS.new} <b>New session started!</b>\n\n${ICONS.arrow} Send me a message to get started.`,
+          `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
           { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
         );
       } catch (e) {
-        await ctx.answerCallbackQuery('Failed to start new session');
+        await ctx.answerCallbackQuery('Failed to reset session');
       }
       return;
     }
 
     if (data === '/projects') {
-      await ctx.answerCallbackQuery('Loading projects...');
+      await ctx.answerCallbackQuery('Loading workspaces...');
       // Reuse the projects command logic
       const projectManager = sessionManager.getProjectManager();
       let projects = projectManager.getProjects();
@@ -709,7 +719,8 @@ export function registerCommands(
       }
 
       if (projects.length === 0) {
-        await ctx.editMessageText(`${ICONS.info} No projects found.`, {
+        await ctx.editMessageText(`${ICONS.info} <b>No projects found.</b>`, {
+          parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
         return;
@@ -719,7 +730,7 @@ export function registerCommands(
       const currentProjectId = session?.currentProject?.id;
 
       await ctx.editMessageText(
-        `${ICONS.project} <b>Select Project</b>\n\nChoose a project to work with:`,
+        `${ICONS.project} <b>Workspace Manager</b>\n\nSelect a project to work with:`,
         {
           parse_mode: 'HTML',
           reply_markup: buildProjectKeyboard(
@@ -745,7 +756,7 @@ export function registerCommands(
       }));
 
       await ctx.editMessageText(
-        `${ICONS.model} <b>Select Model</b>\n\nCurrent: <code>${currentModel}</code>`,
+        `${ICONS.model} <b>Model Selection</b>\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
           reply_markup: buildModelKeyboard(modelItems),
@@ -768,7 +779,8 @@ export function registerCommands(
       try {
         const sessions = await listAvailableSessions(session.config);
         if (sessions.length === 0) {
-          await ctx.editMessageText(`${ICONS.info} No sessions found.`, {
+          await ctx.editMessageText(`${ICONS.info} <b>No saved sessions found.</b>`, {
+            parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           });
           return;
@@ -781,7 +793,7 @@ export function registerCommands(
         }));
 
         await ctx.editMessageText(
-          `${ICONS.resume} <b>Available Sessions</b>\n\nSelect a session to resume:`,
+          `${ICONS.resume} <b>Restore Session</b>\n\nChoose a previous session to resume:`,
           {
             parse_mode: 'HTML',
             reply_markup: buildResumeKeyboard(sessionItems),
@@ -797,7 +809,8 @@ export function registerCommands(
       await ctx.answerCallbackQuery('Loading stats...');
       const session = sessionManager.getSession(chatId);
       if (!session) {
-        await ctx.editMessageText(`${ICONS.warning} No active session.`, {
+        await ctx.editMessageText(`${ICONS.warning} <b>No active session.</b>`, {
+          parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
         return;
@@ -820,7 +833,7 @@ export function registerCommands(
     }
 
     if (data === '/help') {
-      await ctx.answerCallbackQuery('Loading help...');
+      await ctx.answerCallbackQuery('Loading Help...');
       await ctx.editMessageText(formatHelp(), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
@@ -828,13 +841,52 @@ export function registerCommands(
       return;
     }
 
+    if (data === '/project_browse') {
+      await ctx.answerCallbackQuery('Browsing...');
+      const browsePath = os.homedir();
+      
+      try {
+        const projectManager = sessionManager.getProjectManager();
+        const projects = await projectManager.scanDirectory(browsePath, 1);
+        await projectManager.saveProjects();
+
+        if (projects.length === 0) {
+          await ctx.editMessageText(`${ICONS.info} <b>No projects found</b> in <code>${browsePath}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
+            parse_mode: 'HTML',
+            reply_markup: buildMainKeyboard(),
+          });
+          return;
+        }
+
+        const session = sessionManager.getSession(chatId);
+        const currentProjectId = session?.currentProject?.id;
+
+        await ctx.editMessageText(
+          `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects. Select one to activate:`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: buildProjectKeyboard(
+              projects.slice(0, PROJECTS_PER_PAGE),
+              projects.length > PROJECTS_PER_PAGE,
+              0,
+              currentProjectId,
+            ),
+          },
+        );
+      } catch (e) {
+        logger.error(`Error browsing directory: ${e}`);
+        await ctx.answerCallbackQuery('Browse failed');
+      }
+      return;
+    }
+
     if (data === '/schedule') {
-      await ctx.answerCallbackQuery('Loading schedule...');
+      await ctx.answerCallbackQuery('Loading Scheduler...');
       const scheduler = sessionManager.getChatScheduler();
       const tasks = scheduler.getTasksForChat(chatId);
 
       if (tasks.length === 0) {
-        await ctx.editMessageText(`${ICONS.clock} <b>Schedule Manager</b>\n\nSchedule messages to be sent automatically at a specific time or repeating interval.\n\n<b>Commands:</b>\n<code>/schedule add &lt;time&gt; &lt;message&gt;</code> — One-time\n<code>/schedule recurring &lt;minutes&gt; &lt;message&gt;</code> — Repeating\n<code>/schedule list</code> — View all tasks\n<code>/schedule remove &lt;id&gt;</code> — Delete\n<code>/schedule toggle &lt;id&gt;</code> — Pause/resume\n\n<b>Time Examples:</b>\n<code>now</code>, <code>in 5m</code>, <code>in 1h</code>, <code>tomorrow at 09:00</code>, <code>14:30</code>`, {
+        await ctx.editMessageText(`${ICONS.clock} <b>Schedule Manager</b>\n\nAutomate tasks by scheduling messages to be sent at specific times or intervals.\n\n<b>Commands:</b>\n• <code>/schedule add &lt;time&gt; &lt;msg&gt;</code>\n• <code>/schedule recurring &lt;min&gt; &lt;msg&gt;</code>\n• <code>/schedule list</code>\n• <code>/schedule remove &lt;id&gt;</code>\n• <code>/schedule toggle &lt;id&gt;</code>`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -842,7 +894,7 @@ export function registerCommands(
       }
 
       const lines = [
-        `${ICONS.clock} <b>Scheduled Tasks</b>`,
+        `${ICONS.clock} <b>Active Schedules</b>`,
         '',
         ...tasks.map((t) => {
           const status = t.active ? '🟢' : '🔴';
@@ -865,9 +917,9 @@ export function registerCommands(
     }
 
     if (data === '/autopilot') {
-      await ctx.answerCallbackQuery('Autopilot info');
+      await ctx.answerCallbackQuery('Autopilot Mode');
       await ctx.editMessageText(
-        `${ICONS.bot} <b>Autopilot Mode</b>\n\nThe AI works autonomously by auto-replying to itself until the goal is achieved.\n\n<b>How it works:</b>\n1️⃣ Set a clear goal\n2️⃣ AI thinks → acts → improves\n3️⃣ Repeats until done (max 10x)\n4️⃣ Delivers final result\n\n<b>Commands:</b>\n<code>/autopilot &lt;goal&gt;</code> — Start working\n<code>/autopilot stop</code> — Stop immediately\n\n<b>Good for:</b> Refactoring, writing tests, fixing bugs, research`,
+        `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until done (max 10 iterations)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately`,
         {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
@@ -888,16 +940,16 @@ export function registerCommands(
       try {
         const session = await sessionManager.getOrCreate(chatId, defaultOptions);
         session.config.setModel(modelName, false);
-        await ctx.answerCallbackQuery(`Switched to ${modelName}`);
+        await ctx.answerCallbackQuery(`Brain: ${modelName}`);
         await ctx.editMessageText(
-          `${ICONS.model} <b>Switched to model:</b>\n<code>${modelName}</code>`,
+          `${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${modelName}</code>`,
           {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           },
         );
       } catch {
-        await ctx.answerCallbackQuery('Failed to switch model');
+        await ctx.answerCallbackQuery('Switch failed');
       }
       return;
     }
@@ -919,16 +971,16 @@ export function registerCommands(
           project,
         });
 
-        await ctx.answerCallbackQuery(`Switched to ${project.name}`);
+        await ctx.answerCallbackQuery(`Workspace: ${project.name}`);
         await ctx.editMessageText(
-          `${ICONS.done} <b>Project Selected</b>\n\n${formatProjectInfo(project)}`,
+          `${ICONS.success} <b>Workspace Switched</b>\n\n${formatProjectInfo(project)}`,
           {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           },
         );
       } catch {
-        await ctx.answerCallbackQuery('Failed to switch project');
+        await ctx.answerCallbackQuery('Switch failed');
       }
       return;
     }
@@ -945,7 +997,7 @@ export function registerCommands(
 
       await ctx.answerCallbackQuery(`Page ${page + 1}`);
       await ctx.editMessageText(
-        `${ICONS.project} <b>Select Project</b> (Page ${page + 1})\n\nChoose a project:`,
+        `${ICONS.project} <b>Workspace Manager</b> (Page ${page + 1})\n\nSelect a project:`,
         {
           parse_mode: 'HTML',
           reply_markup: buildProjectKeyboard(
