@@ -153,7 +153,7 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('Failed to process media file'));
+    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('Failed to process file'));
     // It should still continue with the parts it has (which might be empty if only one part failed)
     expect(mockGeminiClient.sendMessageStream).toHaveBeenCalled();
   });

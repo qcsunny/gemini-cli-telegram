@@ -19,7 +19,7 @@ import stripAnsi from 'strip-ansi';
 import * as fs from 'fs/promises';
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
-import { ICONS } from '../channels/telegram/ui.js';
+import { ICONS, formatToolExecution, type ToolStatus } from '../channels/telegram/ui.js';
 
 const DEBOUNCE_INTERVAL_MS = 500;
 
@@ -102,18 +102,6 @@ export async function processMessage(
   // Simple thinking indicator
   let thinkingMessageId: number | null = null;
 
-  const showThinking = async (text: string) => {
-    try {
-      if (!thinkingMessageId) {
-        thinkingMessageId = await reply.send(`${ICONS.loading} ${text}`);
-      } else {
-        await reply.edit(thinkingMessageId, `${ICONS.loading} ${text}`);
-      }
-    } catch (e) {
-      logger.warn(`Failed to update thinking: ${e}`);
-    }
-  };
-
   const clearThinking = async () => {
     if (thinkingMessageId) {
       try {
@@ -126,19 +114,71 @@ export async function processMessage(
   };
 
   let turnCount = 0;
+  let toolExecutionStatusMsgId: number | null = null;
+
+  const showToolExecution = async (tools: ToolStatus[]) => {
+    try {
+      const statusText = formatToolExecution(tools);
+      if (!toolExecutionStatusMsgId) {
+        toolExecutionStatusMsgId = await reply.send(statusText);
+      } else {
+        await reply.edit(toolExecutionStatusMsgId, statusText);
+      }
+    } catch (e) {
+      logger.warn(`Failed to update tool execution status: ${e}`);
+    }
+  };
+
+  const clearToolExecution = async () => {
+    if (toolExecutionStatusMsgId) {
+      try {
+        await reply.delete(toolExecutionStatusMsgId);
+        toolExecutionStatusMsgId = null;
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   while (true) {
     turnCount++;
     session.turnCount++;
     logger.debug(`Turn ${turnCount} (session total: ${session.turnCount})`);
 
     if (signal.aborted) {
-      logger.debug('Signal aborted before sending message');
+      const reason = (signal as any).reason;
+      logger.debug(`Signal aborted before sending message. Reason: ${reason}`);
       await clearThinking();
-      await reply.send(`${ICONS.cancel} Operation cancelled.`);
+      await reply.send(`${ICONS.cancel} Operation cancelled.${reason ? ` (Reason: ${reason})` : ''}`);
       return;
     }
 
     const toolCallRequests: ToolCallRequestInfo[] = [];
+
+    let statusMessageId: number | null = null;
+    const updateStatus = async (status: string, details?: string) => {
+      try {
+        const text = `${ICONS.processing} ${status}${details ? `\n${ICONS.step} ${details}` : ''}`;
+        if (!statusMessageId) {
+          statusMessageId = await reply.send(text);
+        } else {
+          await reply.edit(statusMessageId, text);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    const clearStatus = async () => {
+      if (statusMessageId) {
+        try {
+          await reply.delete(statusMessageId);
+          statusMessageId = null;
+        } catch {
+          // ignore
+        }
+      }
+    };
 
     logger.debug('Sending message stream to Gemini...');
     const responseStream = geminiClient.sendMessageStream(
@@ -156,8 +196,11 @@ export async function processMessage(
 
     for await (const event of responseStream) {
       if (signal.aborted) {
+        const reason = (signal as any).reason;
+        logger.debug(`Signal aborted during response stream. Reason: ${reason}`);
         await clearThinking();
-        await reply.send(`${ICONS.cancel} Operation cancelled.`);
+        await clearStatus();
+        await reply.send(`${ICONS.cancel} Operation cancelled.${reason ? ` (Reason: ${reason})` : ''}`);
         return;
       }
 
@@ -188,16 +231,19 @@ export async function processMessage(
       } else if (event.type === GeminiEventType.ToolCallRequest) {
         logger.debug(`Tool call request: ${event.value.name}`);
         toolCallRequests.push(event.value);
+        await updateStatus('Analyzing request...', `Tool #${toolCallRequests.length}: ${event.value.name}`);
       } else if (event.type === GeminiEventType.Error) {
         logger.debug(`Error event: ${event.value.error}`);
         const err = event.value.error;
         const errorMsg =
           err instanceof Error ? err.message : String(err || 'Unknown error');
+        await clearStatus();
         await clearThinking();
         await reply.send(`${ICONS.error} Error: ${errorMsg}`);
         return;
       } else if (event.type === GeminiEventType.UserCancelled) {
         logger.debug('User cancelled');
+        await clearStatus();
         await clearThinking();
         return;
       } else if (event.type === GeminiEventType.AgentExecutionStopped) {
@@ -205,6 +251,7 @@ export async function processMessage(
         const stopMessage =
           event.value.systemMessage?.trim() || event.value.reason;
         if (stopMessage) {
+          await clearStatus();
           await clearThinking();
           await reply.send(`${ICONS.warning} Stopped: ${stopMessage}`);
         }
@@ -220,8 +267,18 @@ export async function processMessage(
     if (toolCallRequests.length > 0) {
       logger.debug(`Executing ${toolCallRequests.length} tool(s): ${toolCallRequests.map((t) => t.name).join(', ')}`);
 
-      // Show tool execution status
-      await showThinking(`Running ${toolCallRequests.length} tool(s)...`);
+      // Show tool execution status with tool names
+      const toolStatuses: ToolStatus[] = toolCallRequests.map((t) => ({
+        name: t.name,
+        status: 'pending' as const,
+      }));
+      await showToolExecution(toolStatuses);
+
+      // Update status to running
+      for (const tool of toolStatuses) {
+        tool.status = 'running';
+      }
+      await showToolExecution(toolStatuses);
 
       // Send final accumulated text before tool execution (still streaming, use plain)
       if (responseText.trim() && currentMessageId) {
@@ -252,6 +309,21 @@ export async function processMessage(
       }
 
       logger.debug(`Tool execution complete. ${completedToolCalls.length} result(s)`);
+
+      // Update tool statuses to show results
+      for (const completedToolCall of completedToolCalls) {
+        const toolName = completedToolCall.request.name;
+        const toolStatus = toolStatuses.find(t => t.name === toolName);
+        if (toolStatus) {
+          if (completedToolCall.status === 'error' || completedToolCall.response.error) {
+            toolStatus.status = 'error';
+            toolStatus.error = completedToolCall.response.error?.message || 'Unknown error';
+          } else {
+            toolStatus.status = 'success';
+          }
+        }
+      }
+      await showToolExecution(toolStatuses);
 
       const toolResponseParts: Part[] = [];
 
@@ -284,10 +356,16 @@ export async function processMessage(
 
       if (stopExecutionTool && stopExecutionTool.response.error) {
         const stopMessage = `Agent execution stopped: ${stopExecutionTool.response.error.message}`;
+        await clearToolExecution();
         await clearThinking();
         await reply.send(`${ICONS.error} ${stopMessage}`);
         return;
       }
+
+      // Small delay to show success status before continuing
+      await new Promise((r) => setTimeout(r, 500));
+      await clearToolExecution();
+      await clearStatus();
 
       currentMessages = [{ role: 'user', parts: toolResponseParts }];
       logger.debug('Looping back with tool responses...');
