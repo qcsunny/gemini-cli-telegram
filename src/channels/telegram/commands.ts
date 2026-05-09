@@ -32,6 +32,7 @@ import {
   formatSessionStats,
   formatHelp,
   formatWelcome,
+  truncate,
 } from './ui.js';
 
 const AVAILABLE_MODELS = [

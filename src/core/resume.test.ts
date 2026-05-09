@@ -6,7 +6,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import { listAvailableSessions, resumeSession } from './resume.js';
 import { SESSION_FILE_PREFIX } from '@google/gemini-cli-core';
 
@@ -30,7 +29,6 @@ vi.mock('@google/gemini-cli-core', async () => {
 
 describe('resume', () => {
   const mockTempDir = '/mock/temp';
-  const mockChatsDir = path.join(mockTempDir, 'chats');
   const mockConfig = {
     storage: {
       getProjectTempDir: () => mockTempDir,
@@ -69,7 +67,7 @@ describe('resume', () => {
         `${SESSION_FILE_PREFIX}1.json`,
         `${SESSION_FILE_PREFIX}2.json`,
         'other-file.txt',
-      ]);
+      ] as any);
 
       vi.mocked(fs.readFile).mockImplementation((p: any) => {
         if (p.includes('1.json')) return Promise.resolve(JSON.stringify(session1));
@@ -104,7 +102,7 @@ describe('resume', () => {
       vi.mocked(fs.readdir).mockResolvedValue([
         `${SESSION_FILE_PREFIX}1.json`,
         `${SESSION_FILE_PREFIX}2.json`,
-      ]);
+      ] as any);
 
       vi.mocked(fs.readFile).mockImplementation((p: any) => {
         if (p.includes('1.json')) return Promise.resolve(JSON.stringify(session1Old));
@@ -128,7 +126,7 @@ describe('resume', () => {
         lastUpdated: '2026-05-10T12:05:00Z',
       };
 
-      vi.mocked(fs.readdir).mockResolvedValue([`${SESSION_FILE_PREFIX}latest.json`]);
+      vi.mocked(fs.readdir).mockResolvedValue([`${SESSION_FILE_PREFIX}latest.json`] as any);
       vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(sessionData));
 
       const mockSession = {
@@ -147,7 +145,7 @@ describe('resume', () => {
     });
 
     it('should throw error if session not found', async () => {
-      vi.mocked(fs.readdir).mockResolvedValue([]);
+      vi.mocked(fs.readdir).mockResolvedValue([] as any);
       
       const mockSession = { config: mockConfig } as any;
 
