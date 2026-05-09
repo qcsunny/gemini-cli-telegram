@@ -64,7 +64,7 @@ export class ProjectManager {
     }
   }
 
-  async scanDirectory(dirPath: string, depth = 1, maxResults = 50): Promise<ProjectInfo[]> {
+  async scanDirectory(dirPath: string, depth = 2, maxResults = 50): Promise<ProjectInfo[]> {
     const projects: ProjectInfo[] = [];
 
     const checkProject = async (fullPath: string, name: string): Promise<ProjectInfo | null> => {
@@ -150,7 +150,7 @@ export class ProjectManager {
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
       // Limit entries to prevent blocking on huge directories
-      const maxEntries = 200;
+      const maxEntries = 1000;
       const limitedEntries = entries.slice(0, maxEntries);
 
       for (const entry of limitedEntries) {
