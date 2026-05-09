@@ -54,6 +54,13 @@ The script will guide you through:
 2. **Telegram Token** — Input your bot token from [@BotFather](https://t.me/BotFather).
 3. **Interactive Whitelist** — Simply send a message to your bot to automatically whitelist your User ID.
 
+### Homebrew (macOS & Linux)
+
+```bash
+brew tap ibidathoillah/tap
+brew install gemini-cli-telegram
+```
+
 ### Docker (Recommended for Servers)
 
 Run the bot as a container without installing Node.js:
