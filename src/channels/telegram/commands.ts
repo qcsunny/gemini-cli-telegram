@@ -558,7 +558,7 @@ export function registerCommands(
     if (projects.length === 0) {
       await ctx.reply(`${ICONS.loading} <b>Scanning for projects...</b>`, { parse_mode: 'HTML' });
       try {
-        projects = await projectManager.scanDirectory(os.homedir(), 1);
+        projects = await projectManager.scanDirectory(os.homedir(), 2);
         await projectManager.saveProjects();
       } catch (e) {
         logger.error(`Failed to scan projects: ${e}`);
@@ -641,6 +641,8 @@ export function registerCommands(
     let browsePath: string;
     if (!arg) {
       browsePath = os.homedir();
+    } else if (arg.startsWith('~')) {
+      browsePath = arg.replace(/^~(?=$|\/|\\)/, os.homedir());
     } else {
       browsePath = path.resolve(baseDir, arg);
     }
@@ -649,7 +651,7 @@ export function registerCommands(
 
     try {
       const projectManager = sessionManager.getProjectManager();
-      const projects = await projectManager.scanDirectory(browsePath, 1);
+      const projects = await projectManager.scanDirectory(browsePath, 2);
       await projectManager.saveProjects();
 
       if (projects.length === 0) {
@@ -847,7 +849,7 @@ export function registerCommands(
       
       try {
         const projectManager = sessionManager.getProjectManager();
-        const projects = await projectManager.scanDirectory(browsePath, 1);
+        const projects = await projectManager.scanDirectory(browsePath, 2);
         await projectManager.saveProjects();
 
         if (projects.length === 0) {
