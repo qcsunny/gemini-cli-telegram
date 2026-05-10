@@ -40,7 +40,7 @@ fi
 
 # 2. Install Gemini CLI Telegram globally
 echo -e "${YELLOW}[2/3] Installing gemini-cli-telegram globally...${NC}"
-sudo npm install -g gemini-cli-telegram --legacy-peer-deps || npm install -g gemini-cli-telegram --legacy-peer-deps
+npm install -g gemini-cli-telegram --legacy-peer-deps --loglevel=error
 
 # 3. Run Interactive Setup (Gemini Auth + Telegram Token)
 echo -e "${YELLOW}[3/3] Starting Configuration & Authentication...${NC}"
