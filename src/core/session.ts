@@ -85,6 +85,15 @@ export class ProjectManager {
         'README.md',
         'requirements.txt',
         'Gemfile',
+        'composer.json',
+        'package.yaml',
+        'mix.exs',
+        'rebar.config',
+        'Project.toml',
+        'shard.yml',
+        'pubspec.yaml',
+        'environment.yml',
+        '.venv',
       ];
 
       let isProject = false;

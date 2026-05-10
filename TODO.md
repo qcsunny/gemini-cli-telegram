@@ -9,7 +9,7 @@
 ## Project Discovery Improvements
 - [x] **Fallback Project Description**: If `package.json` is missing or lacks a description, attempt to extract the first non-header line from `README.md`.
 - [x] **Comprehensive Metadata Scan**: Continue scanning for description-rich files even after a project indicator (like `.git`) is found.
-- [ ] **Expand Indicators**: Add more project markers (e.g., `.venv`, `environment.yml`).
+- [x] **Expand Indicators**: Add more project markers (e.g., `.venv`, `environment.yml`).
 
 ## User Experience
 - [x] **Progress Indicators**: Show a "Scanning..." status or progress bar for deep directory scans in Telegram.
