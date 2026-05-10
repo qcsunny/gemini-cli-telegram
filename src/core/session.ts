@@ -64,8 +64,9 @@ export class ProjectManager {
     }
   }
 
-  async scanDirectory(dirPath: string, depth = 2, maxResults = 50): Promise<ProjectInfo[]> {
+  async scanDirectory(dirPath: string, depth = 3, maxResults = 50): Promise<ProjectInfo[]> {
     const projects: ProjectInfo[] = [];
+    const IGNORED_DIRS = new Set(['node_modules', 'dist', 'build', '.git', '.next', '.cache', 'vendor', 'target', 'bin', 'obj']);
 
     const checkProject = async (fullPath: string, name: string): Promise<ProjectInfo | null> => {
       const indicators = [
@@ -131,16 +132,13 @@ export class ProjectManager {
     };
 
     // Check if dirPath itself is a project (only on top-level call)
-    // We can detect top-level call by checking if depth is at its initial value, 
-    // but better to just check it. To avoid double-counting in recursion,
-    // we only do this once.
+    // We detect top-level call by checking if depth is at its initial value or via a flag,
+    // but here we just check it. Recursion will handle subdirs.
     try {
       const selfProject = await checkProject(dirPath, path.basename(dirPath));
       if (selfProject) {
         projects.push(selfProject);
-        // If it's a project, we might still want to scan its subdirectories?
-        // Usually projects don't contain other projects directly in a way we want to browse them,
-        // but some monorepos might. For now, let's continue scanning.
+        // Even if it's a project, we might want to scan subdirectories (e.g. monorepos)
       }
     } catch (e) {
       /* ignore */
@@ -150,26 +148,31 @@ export class ProjectManager {
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
       // Limit entries to prevent blocking on huge directories
-      const maxEntries = 1000;
+      const maxEntries = 5000;
       const limitedEntries = entries.slice(0, maxEntries);
 
       for (const entry of limitedEntries) {
         if (!entry.isDirectory()) continue;
-        if (entry.name.startsWith('.')) continue;
+        if (entry.name.startsWith('.')) {
+            // Still allow .git as a project indicator but don't recurse into .folders
+            if (entry.name !== '.git') continue;
+        }
+        if (IGNORED_DIRS.has(entry.name)) continue;
         if (projects.length >= maxResults) break;
 
         const fullPath = path.join(dirPath, entry.name);
+        
+        // Optimization: checkProject is only called once per directory
         const project = await checkProject(fullPath, entry.name);
 
         if (project) {
-          // Avoid duplicates if dirPath itself was added and it's same as fullPath (unlikely)
           if (!projects.find((p) => p.path === project.path)) {
             projects.push(project);
           }
         }
 
-        // Scan one level deeper if not a project
-        if (!project && depth > 0 && projects.length < maxResults) {
+        // Recurse if not a project OR if it's a project but we want to find nested ones (depth permitting)
+        if (depth > 0 && projects.length < maxResults) {
           try {
             const subProjects = await this.scanDirectory(fullPath, depth - 1, maxResults - projects.length);
             for (const sp of subProjects) {

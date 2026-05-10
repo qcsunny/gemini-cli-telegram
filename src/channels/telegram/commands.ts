@@ -33,6 +33,7 @@ import {
   formatHelp,
   formatWelcome,
   truncate,
+  escapeHtml,
 } from './ui.js';
 
 const AVAILABLE_MODELS = [
@@ -559,7 +560,7 @@ export function registerCommands(
     if (projects.length === 0) {
       await ctx.reply(`${ICONS.loading} <b>Scanning for projects...</b>`, { parse_mode: 'HTML' });
       try {
-        projects = await projectManager.scanDirectory(os.homedir(), 2);
+        projects = await projectManager.scanDirectory(os.homedir(), 3);
         await projectManager.saveProjects();
       } catch (e) {
         logger.error(`Failed to scan projects: ${e}`);
@@ -648,11 +649,11 @@ export function registerCommands(
       browsePath = path.resolve(baseDir, arg);
     }
 
-    await ctx.reply(`${ICONS.loading} <b>Scanning:</b> <code>${browsePath}</code>`, { parse_mode: 'HTML' });
+    await ctx.reply(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });
 
     try {
       const projectManager = sessionManager.getProjectManager();
-      const projects = await projectManager.scanDirectory(browsePath, 2);
+      const projects = await projectManager.scanDirectory(browsePath, 3);
       await projectManager.saveProjects();
 
       if (projects.length === 0) {
@@ -717,7 +718,7 @@ export function registerCommands(
       let projects = projectManager.getProjects();
 
       if (projects.length === 0) {
-        projects = await projectManager.scanDirectory(os.homedir(), 1);
+        projects = await projectManager.scanDirectory(os.homedir(), 3);
         await projectManager.saveProjects();
       }
 
@@ -848,13 +849,16 @@ export function registerCommands(
       await ctx.answerCallbackQuery('Browsing...');
       const browsePath = os.homedir();
       
+      // Update message to show scanning status
+      await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });
+
       try {
         const projectManager = sessionManager.getProjectManager();
-        const projects = await projectManager.scanDirectory(browsePath, 2);
+        const projects = await projectManager.scanDirectory(browsePath, 3);
         await projectManager.saveProjects();
 
         if (projects.length === 0) {
-          await ctx.editMessageText(`${ICONS.info} <b>No projects found</b> in <code>${browsePath}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
+          await ctx.editMessageText(`${ICONS.info} <b>No projects found</b> in <code>${escapeHtml(browsePath)}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           });
@@ -865,7 +869,7 @@ export function registerCommands(
         const currentProjectId = session?.currentProject?.id;
 
         await ctx.editMessageText(
-          `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects. Select one to activate:`,
+          `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects in <code>${escapeHtml(browsePath)}</code>. Select one to activate:`,
           {
             parse_mode: 'HTML',
             reply_markup: buildProjectKeyboard(
@@ -878,7 +882,10 @@ export function registerCommands(
         );
       } catch (e) {
         logger.error(`Error browsing directory: ${e}`);
-        await ctx.answerCallbackQuery('Browse failed');
+        await ctx.editMessageText(`${ICONS.error} <b>Failed to browse directory.</b>`, {
+          parse_mode: 'HTML',
+          reply_markup: buildMainKeyboard(),
+        });
       }
       return;
     }
