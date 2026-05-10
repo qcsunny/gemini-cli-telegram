@@ -229,6 +229,14 @@ Uses the same auth as Gemini CLI. The setup wizard auto-detects existing credent
 
 ---
 
+## Recent Changes
+
+- **Setup Improvements:** `setup.sh` now automatically clones the repository if it's not present, making it truly "one-click" for fresh environments.
+- **Bug Fixes:** Resolved a build error in the Telegram channel commands related to missing HTML escaping utilities.
+- **Improved Reliability:** Enhanced dependency management and build process.
+
+---
+
 ## Technical Notes
 
 - Runs `@google/gemini-cli-core` as a daemon via per-message loop
