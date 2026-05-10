@@ -41,9 +41,9 @@
 
 ## Installation
 
-### One-Click Setup (Recommended for new VMs)
+### 🚀 One-Command Setup (Recommended)
 
-Run this command to install Node.js, clone the repository, and start the interactive setup wizard:
+Run this single command to install everything (Node.js, the bot, and dependencies) and start the setup wizard:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ibidathoillah/gemini-cli-telegram/main/setup.sh | bash
@@ -52,16 +52,28 @@ curl -sSL https://raw.githubusercontent.com/ibidathoillah/gemini-cli-telegram/ma
 The script will guide you through:
 1. **Google Login** — Authenticate with your Google account.
 2. **Telegram Token** — Input your bot token from [@BotFather](https://t.me/BotFather).
-3. **Interactive Whitelist** — Simply send a message to your bot to automatically whitelist your User ID.
+3. **Whitelist** — Send any message to your bot to automatically whitelist your ID.
 
-### Homebrew (macOS & Linux)
+---
+
+### 📦 Manual Installation (via NPM)
+
+If you already have Node.js 20+, you can install the bot globally:
 
 ```bash
-brew tap ibidathoillah/tap
-brew install gemini-cli-telegram
+# 1. Install globally
+npm install -g gemini-cli-telegram
+
+# 2. Run the setup wizard
+gemini-cli-telegram setup
+
+# 3. Start the bot
+gemini-cli-telegram start
 ```
 
-### Docker (Recommended for Servers)
+---
+
+### 🐳 Docker (Recommended for Servers)
 
 Run the bot as a container without installing Node.js:
 
