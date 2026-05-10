@@ -23,7 +23,16 @@ else
 fi
 
 # 1. Check/Install Dependencies
-echo -e "${YELLOW}[1/4] Checking system dependencies...${NC}"
+echo -e "${YELLOW}[1/5] Checking system dependencies...${NC}"
+
+if ! command -v git &> /dev/null; then
+    echo "Installing Git..."
+    if [ "$OS" == "debian" ]; then
+        sudo apt-get update && sudo apt-get install -y git
+    elif [ "$OS" == "rhel" ]; then
+        sudo dnf install -y git || sudo yum install -y git
+    fi
+fi
 
 if ! command -v node &> /dev/null; then
     echo "Installing Node.js 20..."
@@ -39,16 +48,30 @@ if ! command -v node &> /dev/null; then
     fi
 fi
 
-# 2. Install NPM Packages (In-Place)
-echo -e "${YELLOW}[2/4] Installing project dependencies...${NC}"
+# 2. Clone/Prepare Project
+if [ ! -f "package.json" ]; then
+    if [ -d "gemini-cli-telegram" ]; then
+        echo -e "${YELLOW}[2/5] Directory exists, entering...${NC}"
+        cd gemini-cli-telegram
+    else
+        echo -e "${YELLOW}[2/5] Cloning repository...${NC}"
+        git clone https://github.com/ibidathoillah/gemini-cli-telegram.git
+        cd gemini-cli-telegram
+    fi
+else
+    echo -e "${YELLOW}[2/5] Using current directory...${NC}"
+fi
+
+# 3. Install NPM Packages
+echo -e "${YELLOW}[3/5] Installing project dependencies...${NC}"
 npm install --legacy-peer-deps
 
-# 3. Build Project
-echo -e "${YELLOW}[3/4] Building project...${NC}"
+# 4. Build Project
+echo -e "${YELLOW}[4/5] Building project...${NC}"
 npm run build
 
-# 4. Interactive Setup
-echo -e "${YELLOW}[4/4] Starting Interactive Wizard...${NC}"
+# 5. Interactive Setup
+echo -e "${YELLOW}[5/5] Starting Interactive Wizard...${NC}"
 node dist/cli.js setup
 
 # --- Completion ---

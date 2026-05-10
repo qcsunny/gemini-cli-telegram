@@ -160,9 +160,9 @@ export function formatWelcome(userName?: string): string {
 
 export function formatProjectInfo(project: ProjectInfo): string {
   return [
-    `${ICONS.project} <b>${project.name}</b>`,
-    `  ${ICONS.directory} <code>${project.path}</code>`,
-    project.description ? `  ${ICONS.info} <i>${project.description}</i>` : '',
+    `${ICONS.project} <b>${escapeHtml(project.name)}</b>`,
+    `  ${ICONS.directory} <code>${escapeHtml(project.path)}</code>`,
+    project.description ? `  ${ICONS.info} <i>${escapeHtml(project.description)}</i>` : '',
     project.lastUsed ? `  ${ICONS.clock} Last active: ${formatRelativeTime(project.lastUsed)}` : '',
   ].filter(Boolean).join('\n');
 }
@@ -183,11 +183,11 @@ export function formatSessionStats(session: {
     `${ICONS.stats} <b>Session Overview</b>`,
     '',
     `<b>Configuration</b>`,
-    `  ${ICONS.model} <b>Model:</b> <code>${session.model}</code>`,
-    `  ${ICONS.project} <b>Project:</b> ${session.project ? `<code>${session.project.name}</code>` : 'None'}`,
+    `  ${ICONS.model} <b>Model:</b> <code>${escapeHtml(session.model)}</code>`,
+    `  ${ICONS.project} <b>Project:</b> ${session.project ? `<code>${escapeHtml(session.project.name)}</code>` : 'None'}`,
     '',
     `<b>Activity</b>`,
-    `  ${ICONS.session} <b>Session ID:</b> <code>${session.sessionId.slice(0, 8)}</code>`,
+    `  ${ICONS.session} <b>Session ID:</b> <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`,
     `  ${ICONS.clock} <b>Uptime:</b> ${minutes}m ${seconds}s`,
     `  ${ICONS.arrow} <b>Turns:</b> ${session.turnCount}`,
     `  ${ICONS.bot} <b>Active Sessions:</b> ${session.activeSessions}`,
