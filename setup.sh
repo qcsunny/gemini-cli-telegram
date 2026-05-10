@@ -39,12 +39,15 @@ if ! command -v node &> /dev/null; then
 fi
 
 # 2. Install Gemini CLI Telegram globally
-echo -e "${YELLOW}[2/3] Installing gemini-cli-telegram globally...${NC}"
-npm install -g gemini-cli-telegram --legacy-peer-deps --loglevel=error
+echo -e "${YELLOW}[2/3] Installing gemini-cli-telegram globally (this may take a minute)...${NC}"
+npm install -g gemini-cli-telegram --legacy-peer-deps --silent --no-progress
 
 # 3. Run Interactive Setup (Gemini Auth + Telegram Token)
 echo -e "${YELLOW}[3/3] Starting Configuration & Authentication...${NC}"
 echo -e "${BLUE}This will guide you through Google Login and Telegram Bot setup.${NC}"
+
+# Fix for interactive input when script is piped
+exec < /dev/tty
 gemini-cli-telegram setup
 
 # --- Completion ---
