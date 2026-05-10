@@ -1,6 +1,6 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-# Gemini CLI Telegram — In-Place Setup Script
+# Gemini CLI Telegram — All-in-One Global Setup
 # ------------------------------------------------------------------------------
 set -e
 
@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}=== Gemini CLI Telegram Setup ===${NC}\n"
+echo -e "${BLUE}=== Gemini CLI Telegram All-in-One Setup ===${NC}\n"
 
 # Detect OS
 if [ -f /etc/debian_version ]; then
@@ -22,18 +22,8 @@ else
     OS="unknown"
 fi
 
-# 1. Check/Install Dependencies
-echo -e "${YELLOW}[1/5] Checking system dependencies...${NC}"
-
-if ! command -v git &> /dev/null; then
-    echo "Installing Git..."
-    if [ "$OS" == "debian" ]; then
-        sudo apt-get update && sudo apt-get install -y git
-    elif [ "$OS" == "rhel" ]; then
-        sudo dnf install -y git || sudo yum install -y git
-    fi
-fi
-
+# 1. Install Node.js 20+ if missing
+echo -e "${YELLOW}[1/3] Checking system dependencies...${NC}"
 if ! command -v node &> /dev/null; then
     echo "Installing Node.js 20..."
     if [ "$OS" == "debian" ]; then
@@ -48,35 +38,18 @@ if ! command -v node &> /dev/null; then
     fi
 fi
 
-# 2. Clone/Prepare Project
-if [ ! -f "package.json" ]; then
-    if [ -d "gemini-cli-telegram" ]; then
-        echo -e "${YELLOW}[2/5] Directory exists, entering...${NC}"
-        cd gemini-cli-telegram
-    else
-        echo -e "${YELLOW}[2/5] Cloning repository...${NC}"
-        git clone https://github.com/ibidathoillah/gemini-cli-telegram.git
-        cd gemini-cli-telegram
-    fi
-else
-    echo -e "${YELLOW}[2/5] Using current directory...${NC}"
-fi
+# 2. Install Gemini CLI Telegram globally
+echo -e "${YELLOW}[2/3] Installing gemini-cli-telegram globally...${NC}"
+sudo npm install -g gemini-cli-telegram --legacy-peer-deps || npm install -g gemini-cli-telegram --legacy-peer-deps
 
-# 3. Install NPM Packages
-echo -e "${YELLOW}[3/5] Installing project dependencies...${NC}"
-npm install --legacy-peer-deps
-
-# 4. Build Project
-echo -e "${YELLOW}[4/5] Building project...${NC}"
-npm run build
-
-# 5. Interactive Setup
-echo -e "${YELLOW}[5/5] Starting Interactive Wizard...${NC}"
-node dist/cli.js setup
+# 3. Run Interactive Setup (Gemini Auth + Telegram Token)
+echo -e "${YELLOW}[3/3] Starting Configuration & Authentication...${NC}"
+echo -e "${BLUE}This will guide you through Google Login and Telegram Bot setup.${NC}"
+gemini-cli-telegram setup
 
 # --- Completion ---
 echo -e "\n${GREEN}=== Setup Complete! ===${NC}"
-echo -e "Start the bot:"
-echo -e "${BLUE}  npm start${NC}"
-echo -e "\nInstall as system service:"
-echo -e "${BLUE}  sudo ./scripts/install-service.sh${NC}"
+echo -e "To start the bot anytime, run:"
+echo -e "${BLUE}  gemini-cli-telegram start${NC}"
+echo -e "\nTo see logs:"
+echo -e "${BLUE}  gemini-cli-telegram logs${NC}"
