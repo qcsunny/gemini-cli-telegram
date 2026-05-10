@@ -128,6 +128,22 @@ describe('ProjectManager', () => {
       expect(projects.length).toBe(1);
       expect(projects[0].name).toBe('sub-app');
     });
+
+    it('should identify a directory with .venv as a project', async () => {
+      const mockDirPath = '/projects/python-app';
+      
+      vi.mocked(fs.readdir).mockResolvedValue([]);
+      
+      vi.mocked(fs.access).mockImplementation((p: any) => {
+        if (p === path.join(mockDirPath, '.venv')) return Promise.resolve();
+        return Promise.reject(new Error('File not found'));
+      });
+
+      const projects = await projectManager.scanDirectory(mockDirPath);
+      
+      expect(projects.length).toBe(1);
+      expect(projects[0].name).toBe('python-app');
+    });
   });
 });
 
