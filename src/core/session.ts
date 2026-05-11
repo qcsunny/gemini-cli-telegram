@@ -94,6 +94,7 @@ export class ProjectManager {
         'pubspec.yaml',
         'environment.yml',
         '.venv',
+        'poetry.lock',
       ];
 
       let isProject = false;

@@ -60,6 +60,34 @@ function getSequentialKey(ctx: {
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  */
 function buildChannelReply(ctx: Context, chatId: number): ChannelReply {
+  const safeEdit = async (messageId: number, text: string, html = true) => {
+    try {
+      if (html) {
+        await ctx.api.editMessageText(chatId, messageId, markdownToHtml(text), {
+          parse_mode: 'HTML',
+        });
+      } else {
+        await ctx.api.editMessageText(chatId, messageId, text);
+      }
+    } catch (e: any) {
+      if (e?.description?.includes('message is not modified')) {
+        return;
+      }
+      if (html) {
+        // Fallback to plain text if HTML fails
+        try {
+          await ctx.api.editMessageText(chatId, messageId, text);
+        } catch (e2: any) {
+          if (!e2?.description?.includes('message is not modified')) {
+            logger.warn(`Failed to edit message ${messageId}: ${e2}`);
+          }
+        }
+      } else {
+        logger.warn(`Failed to edit message ${messageId}: ${e}`);
+      }
+    }
+  };
+
   return {
     send: async (replyText: string): Promise<number> => {
       try {
@@ -73,23 +101,14 @@ function buildChannelReply(ctx: Context, chatId: number): ChannelReply {
       }
     },
     edit: async (messageId: number, newText: string): Promise<void> => {
-      try {
-        await ctx.api.editMessageText(
-          chatId,
-          messageId,
-          markdownToHtml(newText),
-          { parse_mode: 'HTML' },
-        );
-      } catch {
-        await ctx.api.editMessageText(chatId, messageId, newText);
-      }
+      await safeEdit(messageId, newText, true);
     },
     sendPlain: async (replyText: string): Promise<number> => {
       const msg = await ctx.reply(replyText);
       return msg.message_id;
     },
     editPlain: async (messageId: number, newText: string): Promise<void> => {
-      await ctx.api.editMessageText(chatId, messageId, newText);
+      await safeEdit(messageId, newText, false);
     },
     sendDocument: async (
       filePath: string,
@@ -335,6 +354,16 @@ export class TelegramBot {
       logger.info(`Executing scheduled task ${task.id} for chat ${chatId}`);
 
       try {
+        const safeEdit = async (messageId: number, text: string, html = true) => {
+          try {
+            await this.bot.api.editMessageText(chatId, messageId, text, html ? { parse_mode: 'HTML' } : {});
+          } catch (e: any) {
+            if (!e?.description?.includes('message is not modified')) {
+              logger.warn(`Scheduler failed to edit message ${messageId}: ${e}`);
+            }
+          }
+        };
+
         // Build a custom ChannelReply for scheduled messages
         const scheduledReply: ChannelReply = {
           send: async (text: string): Promise<number> => {
@@ -342,14 +371,14 @@ export class TelegramBot {
             return msg.message_id;
           },
           edit: async (messageId: number, newText: string): Promise<void> => {
-            await this.bot.api.editMessageText(chatId, messageId, newText, { parse_mode: 'HTML' });
+            await safeEdit(messageId, newText, true);
           },
           sendPlain: async (text: string): Promise<number> => {
-            const msg = await this.bot.api.sendMessage(chatId, text);
+            const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML' });
             return msg.message_id;
           },
           editPlain: async (messageId: number, newText: string): Promise<void> => {
-            await this.bot.api.editMessageText(chatId, messageId, newText);
+            await safeEdit(messageId, newText, false);
           },
           sendDocument: async (filePath: string, caption?: string): Promise<void> => {
             await this.bot.api.sendMessage(chatId, caption || 'Document: ' + filePath);
@@ -361,8 +390,9 @@ export class TelegramBot {
 
         const session = await this.sessionManager.getOrCreate(chatId, this.defaultOptions);
         if (session.busy) {
-          logger.warn(`Session busy for chat ${chatId}, skipping scheduled task ${task.id}`);
-          return;
+          const msg = `Session busy for chat ${chatId}, skipping scheduled task ${task.id}`;
+          logger.warn(msg);
+          throw new Error('Session is currently busy with another operation.');
         }
 
         session.busy = true;

@@ -45,7 +45,10 @@ describe('processMessage', () => {
     mockReply = {
       send: vi.fn().mockResolvedValue(123),
       edit: vi.fn(),
+      sendPlain: vi.fn().mockResolvedValue(456),
+      editPlain: vi.fn(),
       sendDocument: vi.fn(),
+      delete: vi.fn(),
     };
 
     mockFormatter = {
@@ -63,15 +66,8 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    expect(mockGeminiClient.sendMessageStream).toHaveBeenCalledWith(
-      expect.arrayContaining([{ text: 'hello' }]),
-      expect.any(AbortSignal),
-      'daemon-test-session',
-      undefined,
-      false,
-      input
-    );
-    expect(mockReply.send).toHaveBeenCalledWith('Hi there!');
+    expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi there!');
+    expect(mockReply.edit).toHaveBeenCalledWith(expect.any(Number), 'Hi there!');
   });
 
   it('should process multimodal input with images', async () => {
@@ -89,23 +85,8 @@ describe('processMessage', () => {
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
     expect(fs.readFile).toHaveBeenCalledWith('test.jpg');
-    expect(mockGeminiClient.sendMessageStream).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        { text: 'What is this?' },
-        {
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: Buffer.from('fake-image-data').toString('base64'),
-          }
-        }
-      ]),
-      expect.any(AbortSignal),
-      'daemon-test-session',
-      undefined,
-      false,
-      input
-    );
-    expect(mockReply.send).toHaveBeenCalledWith('It is a test image.');
+    expect(mockReply.sendPlain).toHaveBeenCalledWith('It is a test image.');
+    expect(mockReply.edit).toHaveBeenCalledWith(expect.any(Number), 'It is a test image.');
   });
 
   it('should process multimodal input with audio', async () => {
@@ -122,22 +103,8 @@ describe('processMessage', () => {
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
     expect(fs.readFile).toHaveBeenCalledWith('test.ogg');
-    expect(mockGeminiClient.sendMessageStream).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        {
-          inlineData: {
-            mimeType: 'audio/ogg',
-            data: Buffer.from('fake-audio-data').toString('base64'),
-          }
-        }
-      ]),
-      expect.any(AbortSignal),
-      'daemon-test-session',
-      undefined,
-      false,
-      input
-    );
-    expect(mockReply.send).toHaveBeenCalledWith('I heard some audio.');
+    expect(mockReply.sendPlain).toHaveBeenCalledWith('I heard some audio.');
+    expect(mockReply.edit).toHaveBeenCalledWith(expect.any(Number), 'I heard some audio.');
   });
 
   it('should handle file read errors gracefully', async () => {
