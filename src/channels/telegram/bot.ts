@@ -5,6 +5,7 @@
  */
 
 import { Bot, Context, InputFile } from 'grammy';
+import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { run, sequentialize } from '@grammyjs/runner';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -20,7 +21,7 @@ import type {
   MultimodalInput,
 } from '../../core/types.js';
 import { registerCommands } from './commands.js';
-import { telegramFormatter, markdownToHtml } from './formatter.js';
+import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
 
@@ -35,6 +36,7 @@ export interface TelegramBotOptions {
   allowedUsers?: number[];
   model?: string;
   cwd?: string;
+  proxy?: string;
 }
 
 /**
@@ -43,12 +45,14 @@ export interface TelegramBotOptions {
  * Regular messages get keyed by chatId, so they're processed serially per chat.
  * /cancel gets a separate key (`control:${chatId}`) so it runs concurrently
  * with the in-progress message handler — otherwise it would be queued behind it.
+ * Callback queries are bypass-sequentialized (returns undefined) so they respond immediately.
  */
-function getSequentialKey(ctx: {
-  chat?: { id?: number };
-  message?: { text?: string };
-}): string {
-  const chatId = ctx.chat?.id ?? 0;
+export function getSequentialKey(ctx: any): string | undefined {
+  if (ctx.callbackQuery) {
+    return undefined;
+  }
+  const chatId = ctx.chat?.id;
+  if (!chatId) return undefined;
   const text = ctx.message?.text ?? '';
   if (text.startsWith('/cancel')) {
     return `control:${chatId}`;
@@ -56,10 +60,43 @@ function getSequentialKey(ctx: {
   return `chat:${chatId}`;
 }
 
+
+function prepareTelegramMarkdown(markdown: string): string {
+  let text = markdown;
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$');
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
+  const lines = text.split('\n');
+  const fixedLines = lines.map(line => {
+    if (line.includes('|')) {
+      const parts = line.split('|');
+      const fixedParts = parts.map((part, index) => {
+        if (index === 0 || index === parts.length - 1) return part;
+        let fixed = part;
+        const backtickCount = (fixed.match(/`/g) || []).length;
+        if (backtickCount % 2 !== 0) fixed = fixed.replace(/`/g, '');
+        const underscoreCount = (fixed.match(/_/g) || []).length;
+        if (underscoreCount % 2 !== 0) fixed = fixed.replace(/_/g, '');
+        const starCount = (fixed.match(/\*/g) || []).length;
+        if (starCount % 2 !== 0) fixed = fixed.replace(/\*/g, '');
+        return fixed;
+      });
+      return fixedParts.join('|');
+    }
+    return line;
+  });
+  return fixedLines.join('\n');
+}
+
+const draftIds = new Map<number, number>();
+
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  */
-function buildChannelReply(ctx: Context, chatId: number): ChannelReply {
+function buildChannelReply(
+  ctx: Context,
+  chatId: number,
+  parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'HTML',
+): ChannelReply {
   const safeEdit = async (messageId: number, text: string, html = true) => {
     try {
       if (html) {
@@ -88,26 +125,173 @@ function buildChannelReply(ctx: Context, chatId: number): ChannelReply {
     }
   };
 
-  return {
-    send: async (replyText: string): Promise<number> => {
+  const replyObj: ChannelReply = {
+    sendRich: async (originalText: string): Promise<number> => {
+      // Option A: Rich Blocks
       try {
-        const msg = await ctx.reply(markdownToHtml(replyText), {
+        const blocks = markdownToRichBlocks(originalText);
+        const res: any = await (ctx.api.raw as any).sendRichMessage({
+          chat_id: chatId,
+          blocks,
+        });
+        draftIds.delete(chatId);
+        return res.message_id;
+      } catch (err: any) {
+        logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
+      }
+
+      // Option B: Rich Markdown
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        const res: any = await (ctx.api.raw as any).sendRichMessage({
+          chat_id: chatId,
+          markdown: safeMarkdown,
+        });
+        draftIds.delete(chatId);
+        return res.message_id;
+      } catch (err: any) {
+        logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
+      }
+
+      // Option C: HTML Fallback
+      try {
+        const htmlText = markdownToHtml(originalText);
+        const msg = await ctx.reply(htmlText, {
           parse_mode: 'HTML',
         });
+        draftIds.delete(chatId);
         return msg.message_id;
-      } catch {
+      } catch (err: any) {
+        logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
+        const msg = await ctx.reply(originalText);
+        draftIds.delete(chatId);
+        return msg.message_id;
+      }
+    },
+
+    sendRichDraft: async (originalText: string): Promise<number> => {
+      let draftId = draftIds.get(chatId);
+      if (!draftId) {
+        draftId = Math.floor(Math.random() * 2147483647) + 1;
+        draftIds.set(chatId, draftId);
+      }
+
+      // Option A: Rich Blocks
+      try {
+        const blocks = markdownToRichBlocks(originalText);
+        await (ctx.api.raw as any).sendRichMessageDraft({
+          chat_id: chatId,
+          draft_id: draftId,
+          blocks,
+        });
+        return draftId;
+      } catch (err: any) {
+        logger.warn(`sendRichDraft Option A failed: ${err.message || err}. Trying Option B...`);
+      }
+
+      // Option B: Rich Markdown
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        await (ctx.api.raw as any).sendRichMessageDraft({
+          chat_id: chatId,
+          draft_id: draftId,
+          markdown: safeMarkdown,
+        });
+        return draftId;
+      } catch (err: any) {
+        logger.warn(`sendRichDraft Option B failed: ${err.message || err}.`);
+        throw err;
+      }
+    },
+
+    editRich: async (messageId: number, originalText: string): Promise<void> => {
+      // Option A: Rich Blocks
+      try {
+        const blocks = markdownToRichBlocks(originalText);
+        await (ctx.api.raw as any).editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          blocks,
+        });
+        return;
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) {
+          return;
+        }
+        logger.warn(`editRich Option A failed: ${err.message || err}. Trying Option B...`);
+      }
+
+      // Option B: Rich Markdown
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        await (ctx.api.raw as any).editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          markdown: safeMarkdown,
+        });
+        return;
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) {
+          return;
+        }
+        logger.warn(`editRich Option B failed: ${err.message || err}. Trying Option C...`);
+      }
+
+      // Option C: HTML Fallback
+      await safeEdit(messageId, originalText, true);
+    },
+
+    send: async (replyText: string): Promise<number> => {
+      try {
+        if (parseMode === 'RichText') {
+          if (replyText.trim()) {
+            return await replyObj.sendRich!(replyText);
+          }
+        }
+        const msg = await ctx.reply(
+          parseMode === 'MarkdownV2' ? markdownToMarkdownV2(replyText) : markdownToHtml(replyText),
+          { parse_mode: parseMode === 'MarkdownV2' ? 'MarkdownV2' : 'HTML' },
+        );
+        return msg.message_id;
+      } catch (e: any) {
+        logger.warn(`Failed to send message in ${parseMode} mode: ${e}`);
         const msg = await ctx.reply(replyText);
         return msg.message_id;
       }
     },
     edit: async (messageId: number, newText: string): Promise<void> => {
+      if (parseMode === 'RichText') {
+        if (newText.trim()) {
+          await replyObj.editRich!(messageId, newText);
+          return;
+        }
+      }
       await safeEdit(messageId, newText, true);
     },
     sendPlain: async (replyText: string): Promise<number> => {
+      if (parseMode === 'RichText') {
+        if (replyText.trim()) {
+          try {
+            return await replyObj.sendRichDraft!(replyText);
+          } catch (e) {
+            logger.warn(`Failed sendRichDraft inside sendPlain: ${e}`);
+          }
+        }
+      }
       const msg = await ctx.reply(replyText);
       return msg.message_id;
     },
     editPlain: async (messageId: number, newText: string): Promise<void> => {
+      if (parseMode === 'RichText') {
+        if (newText.trim()) {
+          try {
+            await replyObj.sendRichDraft!(newText);
+            return;
+          } catch (e) {
+            logger.warn(`Failed sendRichDraft inside editPlain: ${e}`);
+          }
+        }
+      }
       await safeEdit(messageId, newText, false);
     },
     sendDocument: async (
@@ -127,6 +311,8 @@ function buildChannelReply(ctx: Context, chatId: number): ChannelReply {
       }
     },
   };
+
+  return replyObj;
 }
 
 /**
@@ -196,8 +382,9 @@ async function withSession(
     }
   }, TYPING_TTL_MS);
 
+  const parseMode = session.settings?.telegram?.parseMode || 'HTML';
   try {
-    await handler(session, buildChannelReply(ctx, chatId));
+    await handler(session, buildChannelReply(ctx, chatId, parseMode));
   } catch (e) {
     logger.error(`Error in handler for chat ${chatId}: ${e}`);
     try {
@@ -226,6 +413,7 @@ async function withSession(
 async function downloadTelegramFile(
   ctx: Context,
   fileId: string,
+  proxyAgent?: ProxyAgent,
 ): Promise<string> {
   const file = await ctx.api.getFile(fileId);
   if (!file.file_path) {
@@ -237,7 +425,9 @@ async function downloadTelegramFile(
   let lastError: Error | undefined;
   for (let attempt = 1; attempt <= DOWNLOAD_MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch(fileUrl);
+      const response = await undiciFetch(fileUrl, {
+        dispatcher: proxyAgent,
+      });
       if (!response.ok) {
         throw new Error(
           `HTTP ${response.status}: ${response.statusText}`,
@@ -330,15 +520,30 @@ export class TelegramBot {
   private sessionManager: SessionManager;
   private defaultOptions: SessionOptions;
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private proxyAgent: ProxyAgent | undefined;
 
   constructor(token: string, options: TelegramBotOptions = {}) {
-    this.bot = new Bot(token);
+    const clientConfig: any = {};
+    if (options.proxy) {
+      this.proxyAgent = new ProxyAgent(options.proxy);
+      clientConfig.baseFetchConfig = {
+        dispatcher: this.proxyAgent,
+        compress: true,
+      };
+      clientConfig.fetch = (url: any, init: any) => {
+        const cleanInit = init ? { ...init } : {};
+        delete cleanInit.signal;
+        return undiciFetch(url, cleanInit);
+      };
+    }
+    this.bot = new Bot(token, { client: clientConfig });
     this.sessionManager = new SessionManager(
       (chatId) => createTelegramSendMedia(this.bot.api, chatId),
     );
     this.defaultOptions = {
       cwd: options.cwd || process.cwd(),
       model: options.model,
+      proxy: options.proxy,
     };
 
     this.setupMiddleware(options.allowedUsers);
@@ -386,6 +591,15 @@ export class TelegramBot {
           delete: async (messageId: number): Promise<void> => {
             await this.bot.api.deleteMessage(chatId, messageId);
           },
+          sendRich: async (text: string): Promise<number> => {
+            return await scheduledReply.send(text);
+          },
+          sendRichDraft: async (text: string): Promise<number> => {
+            return await scheduledReply.send(text);
+          },
+          editRich: async (messageId: number, newText: string): Promise<void> => {
+            await scheduledReply.edit(messageId, newText);
+          },
         };
 
         const session = await this.sessionManager.getOrCreate(chatId, this.defaultOptions);
@@ -429,7 +643,7 @@ export class TelegramBot {
       { command: 'model', description: 'Switch model (starts new session)' },
       { command: 'compact', description: 'Compress chat history' },
       { command: 'addfolder', description: 'Add a folder for read+write access' },
-      { command: 'stats', description: 'Show session statistics' },
+      { command: 'status', description: 'Show session statistics' },
       { command: 'id', description: 'Show current session ID' },
       { command: 'help', description: 'Show help message' },
     ]);
@@ -683,7 +897,7 @@ export class TelegramBot {
       ctx,
       this.defaultOptions,
       async (session, channelReply) => {
-        tempFilePath = await downloadTelegramFile(ctx, info.fileId);
+        tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
 
         const multimodalInput: MultimodalInput = {
           text: info.caption,
