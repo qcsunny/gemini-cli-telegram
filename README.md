@@ -160,7 +160,7 @@ This will create a service named `gemini-telegram` that starts on boot and resta
 | `/resume` | Resume previous session |
 | `/model <name>` | Switch AI model |
 | `/compact` | Compress chat history |
-| `/stats` | Show session stats |
+| `/status` | Show session stats |
 | `/help` | Show help |
 
 ---

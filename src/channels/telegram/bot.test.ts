@@ -38,6 +38,13 @@ vi.mock('fs/promises', () => ({
   unlink: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../utils/logger.js');
+vi.mock('undici', () => ({
+  ProxyAgent: vi.fn(),
+  fetch: vi.fn().mockResolvedValue({
+    ok: true,
+    arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(8))
+  }),
+}));
 
 describe('TelegramBot', () => {
   let botInstance: any;
@@ -48,18 +55,18 @@ describe('TelegramBot', () => {
     botInstance = new TelegramBot('fake-token');
   });
 
-  it('should register handlers for photo, voice, and audio', () => {
+  it('should register handlers for message and callback_query:data', () => {
     const registeredEvents = mockBot.on.mock.calls.map((call: any) => call[0]);
     expect(registeredEvents).toContain('message:text');
     expect(registeredEvents).toContain('message:photo');
     expect(registeredEvents).toContain('message:voice');
-    expect(registeredEvents).toContain('message:audio');
+    expect(registeredEvents).toContain('callback_query:data');
   });
 
-  it('should handle photo messages', async () => {
-    const photoHandlerCall = mockBot.on.mock.calls.find((call: any) => call[0] === 'message:photo');
-    expect(photoHandlerCall).toBeDefined();
-    const photoHandler = photoHandlerCall![1];
+  it('should handle photo messages through the main message handler', async () => {
+    const messageHandlerCall = mockBot.on.mock.calls.find((call: any) => call[0] === 'message:photo');
+    expect(messageHandlerCall).toBeDefined();
+    const messageHandler = messageHandlerCall![1];
     
     const mockCtx = {
       chat: { id: 123 },
@@ -83,7 +90,7 @@ describe('TelegramBot', () => {
 
     vi.spyOn(botInstance.sessionManager, 'getOrCreate').mockResolvedValue(mockCtx.session);
 
-    await photoHandler(mockCtx);
+    await messageHandler(mockCtx);
 
     expect(mockBot.api.getFile).toHaveBeenCalledWith('photo-id-2');
     expect(fs.writeFile).toHaveBeenCalled();
@@ -99,10 +106,10 @@ describe('TelegramBot', () => {
     expect(fs.unlink).toHaveBeenCalled();
   });
 
-  it('should handle voice messages', async () => {
-    const voiceHandlerCall = mockBot.on.mock.calls.find((call: any) => call[0] === 'message:voice');
-    expect(voiceHandlerCall).toBeDefined();
-    const voiceHandler = voiceHandlerCall![1];
+  it('should handle voice messages through the main message handler', async () => {
+    const messageHandlerCall = mockBot.on.mock.calls.find((call: any) => call[0] === 'message:voice');
+    expect(messageHandlerCall).toBeDefined();
+    const messageHandler = messageHandlerCall![1];
     
     const mockCtx = {
       chat: { id: 123 },
@@ -125,7 +132,7 @@ describe('TelegramBot', () => {
 
     vi.spyOn(botInstance.sessionManager, 'getOrCreate').mockResolvedValue(mockCtx.session);
 
-    await voiceHandler(mockCtx);
+    await messageHandler(mockCtx);
 
     expect(mockBot.api.getFile).toHaveBeenCalledWith('voice-id');
     expect(processMessage).toHaveBeenCalledWith(

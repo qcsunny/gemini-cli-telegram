@@ -4,32 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-  GeminiEventType,
-  recordToolCallInteractions,
-  debugLogger,
-  ToolErrorType,
-  detectFileType,
-  readFileWithEncoding,
-  type ToolCallRequestInfo,
-} from '@google/gemini-cli-core';
-import type { Content, Part } from '@google/gemini-cli-core';
 import stripAnsi from 'strip-ansi';
-
-import * as fs from 'fs/promises';
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
-import { ICONS, formatToolExecution, type ToolStatus } from '../channels/telegram/ui.js';
+import { ICONS } from '../channels/telegram/ui.js';
+import { runAgyPrint } from '../agy/agyCli.js';
+import { setConversation } from '../agy/conversationStore.js';
 
-const DEBOUNCE_INTERVAL_MS = 500;
+const DEBOUNCE_INTERVAL_MS = 1000;
 
 /**
- * Channel-agnostic message processing loop, adapted from nonInteractiveCli.ts.
- * Sends user input to Gemini, streams responses back via ChannelReply,
- * and auto-executes tools in YOLO mode.
- *
- * The formatter handles channel-specific message size limits (e.g. 4096 for
- * Telegram, 2000 for Discord).
+ * Channel-agnostic message processing loop using local agy CLI wrapper.
+ * Streams output to the channel in real-time, manages session mappings,
+ * and handles autonomous Autopilot loops entirely on the Node side.
  */
 export async function processMessage(
   session: DaemonSession,
@@ -37,372 +24,285 @@ export async function processMessage(
   reply: ChannelReply,
   formatter: MessageFormatter,
 ): Promise<void> {
-  const { geminiClient, scheduler, config } = session;
+  const chatId = session.chatId ?? Number(session.sessionId);
   const signal = session.abortController.signal;
 
-  const parts: Part[] = [];
-
-  if (input.text) {
-    parts.push({ text: input.text });
+  if (signal.aborted) {
+    logger.debug(`[messageLoop] Signal already aborted. Skipping.`);
+    await reply.send(`${ICONS.cancel} 任务已被取消。`);
+    return;
   }
 
+  // 1. Prepare prompt and resolve local multimedia file paths
+  let finalPrompt = input.text || '';
   if (input.media && input.media.length > 0) {
-    for (const mediaItem of input.media) {
-      try {
-        // For documents, detect file type to handle text vs binary properly
-        // (same logic as CLI's processSingleFileContent in fileUtils.ts)
-        if (mediaItem.type === 'document') {
-          const fileType = await detectFileType(mediaItem.path);
-          const label = mediaItem.fileName || mediaItem.path;
-
-          if (fileType === 'text' || fileType === 'svg') {
-            const content = await readFileWithEncoding(mediaItem.path);
-            parts.push({ text: `\n--- ${label} ---\n\n${content}\n` });
-            logger.debug(`Added document as text: ${label} (${fileType})`);
-          } else if (fileType === 'binary') {
-            parts.push({ text: `[Binary file: ${label} — cannot display contents]` });
-            logger.debug(`Skipped binary document: ${label}`);
-          } else {
-            // image, pdf, audio, video — send as inlineData
-            const fileBuffer = await fs.readFile(mediaItem.path);
-            const base64Data = fileBuffer.toString('base64');
-            parts.push({
-              inlineData: {
-                mimeType: mediaItem.mimeType || 'application/octet-stream',
-                data: base64Data,
-              },
-            });
-            logger.debug(`Added document as ${fileType} inlineData: ${label}, mime=${mediaItem.mimeType}`);
-          }
-        } else {
-          // photo, voice, audio, video — always inlineData
-          const fileBuffer = await fs.readFile(mediaItem.path);
-          const base64Data = fileBuffer.toString('base64');
-          parts.push({
-            inlineData: {
-              mimeType: mediaItem.mimeType || 'application/octet-stream',
-              data: base64Data,
-            },
-          });
-          logger.debug(`Added media part: type=${mediaItem.type}, mime=${mediaItem.mimeType}`);
-        }
-      } catch (e) {
-        logger.error(`Failed to process media file ${mediaItem.path}: ${e}`);
-        await reply.send(`${ICONS.error} Failed to process file: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
+    const mediaLines = input.media.map(item => {
+      return `[本地关联文件 - 类型: ${item.type}, 物理路径: "${item.path}", 原始文件名: "${item.fileName || '未知'}"]`;
+    });
+    finalPrompt = `${mediaLines.join('\n')}\n\n${finalPrompt}`;
   }
 
-  let currentMessages: Content[] = [
-    { role: 'user', parts: parts },
-  ];
+  if (!finalPrompt.trim()) {
+    logger.debug('[messageLoop] Empty prompt input, doing nothing.');
+    return;
+  }
 
-  logger.debug(`Processing message: "${input.text ? (input.text.substring(0, 100) + (input.text.length > 100 ? '...' : '')) : (input.media && input.media.length > 0 ? `[${input.media.length} media item(s)]` : 'Empty input')}"`);
+  logger.debug(`[messageLoop] Prompt prepared: "${finalPrompt.slice(0, 100)}..."`);
 
-  // Simple thinking indicator
-  let thinkingMessageId: number | null = null;
+  // 2. Local variables for streaming response
+  let responseText = '';
+  let currentMessageId: number | null = null;
+  let lastEditTime = 0;
+  let isFinished = false;
+  let activeUpdatePromise: Promise<any> = Promise.resolve();
 
-  const clearThinking = async () => {
-    if (thinkingMessageId) {
-      try {
-        await reply.delete(thinkingMessageId);
-        thinkingMessageId = null;
-      } catch {
-        // ignore
-      }
-    }
-  };
-
-  let turnCount = 0;
-  let toolExecutionStatusMsgId: number | null = null;
-
-  const showToolExecution = async (tools: ToolStatus[]) => {
-    try {
-      const statusText = formatToolExecution(tools);
-      if (!toolExecutionStatusMsgId) {
-        toolExecutionStatusMsgId = await reply.send(statusText);
-      } else {
-        await reply.edit(toolExecutionStatusMsgId, statusText);
-      }
-    } catch (e) {
-      logger.warn(`Failed to update tool execution status: ${e}`);
-    }
-  };
-
-  const clearToolExecution = async () => {
-    if (toolExecutionStatusMsgId) {
-      try {
-        await reply.delete(toolExecutionStatusMsgId);
-        toolExecutionStatusMsgId = null;
-      } catch {
-        // ignore
-      }
-    }
-  };
-
-  while (true) {
-    turnCount++;
-    session.turnCount++;
-    logger.debug(`Turn ${turnCount} (session total: ${session.turnCount})`);
-
-    if (signal.aborted) {
-      const reason = (signal as any).reason;
-      logger.debug(`Signal aborted before sending message. Reason: ${reason}`);
-      await clearThinking();
-      await reply.send(`${ICONS.cancel} Operation cancelled.${reason ? ` (Reason: ${reason})` : ''}`);
+  // Stream editing helper
+  const updateMessageStream = async (isFinal = false) => {
+    if (isFinished && !isFinal) return;
+    if (!responseText.trim()) return;
+    const now = Date.now();
+    if (!isFinal && now - lastEditTime < DEBOUNCE_INTERVAL_MS) {
       return;
     }
+    lastEditTime = now;
 
-    const toolCallRequests: ToolCallRequestInfo[] = [];
+    const truncated = formatter.truncateForEdit(responseText);
+    if (!truncated.trim()) return;
 
-    let statusMessageId: number | null = null;
-    const updateStatus = async (status: string, details?: string) => {
+    activeUpdatePromise = activeUpdatePromise.then(async () => {
+      if (isFinished && !isFinal) return;
       try {
-        const text = `${ICONS.processing} ${status}${details ? `\n${ICONS.step} ${details}` : ''}`;
-        if (!statusMessageId) {
-          statusMessageId = await reply.send(text);
+        if (!currentMessageId) {
+          currentMessageId = await reply.sendPlain(truncated);
         } else {
-          await reply.edit(statusMessageId, text);
+          await reply.editPlain(currentMessageId, truncated);
         }
-      } catch {
-        // ignore
+      } catch (e) {
+        logger.warn(`[messageLoop] Failed to update streaming message: ${e}`);
       }
-    };
+    });
 
-    const clearStatus = async () => {
-      if (statusMessageId) {
-        try {
-          await reply.delete(statusMessageId);
-          statusMessageId = null;
-        } catch {
-          // ignore
+    await activeUpdatePromise;
+  };
+
+  const cwd = session.currentProject?.path || process.cwd();
+
+  try {
+    session.busy = true;
+    session.turnCount++;
+
+    let modelToUse = session.model;
+    let attempts = 0;
+    const maxAttempts = 3;
+    let success = false;
+    let lastResult: any = null;
+
+    while (attempts < maxAttempts && !success) {
+      attempts++;
+      responseText = ''; // Reset buffer for this attempt
+
+      try {
+        logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
+        const result = await runAgyPrint({
+          prompt: finalPrompt,
+          cwd,
+          conversationId: session.conversationId,
+          model: modelToUse,
+          proxy: session.proxy,
+          signal,
+          onChunk: (chunk) => {
+            responseText += stripAnsi(chunk);
+            updateMessageStream(false).catch(err => {
+              logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
+            });
+          }
+        });
+
+        lastResult = result;
+
+        if (result.exitCode === 0) {
+          success = true;
+          // If we had to fall back, persist the change to disk and update session
+          if (modelToUse && modelToUse !== session.model) {
+            logger.info(`[messageLoop] Successfully downgraded to model "${modelToUse}". Updating session.`);
+            session.model = modelToUse;
+            await setConversation(chatId, result.conversationId || session.conversationId || '', cwd, modelToUse);
+          }
+          break;
         }
-      }
-    };
 
-    logger.debug('Sending message stream to Gemini...');
-    const responseStream = geminiClient.sendMessageStream(
-      currentMessages[0]?.parts || [],
-      signal,
-      `daemon-${session.sessionId}`,
-      undefined,
-      false,
-      turnCount === 1 ? input : undefined,
-    );
+        const stderr = result.stderr || '';
+        const output = result.output || responseText;
 
-    let responseText = '';
-    let currentMessageId: number | null = null;
-    let lastEditTime = 0;
-
-    for await (const event of responseStream) {
-      if (signal.aborted) {
-        const reason = (signal as any).reason;
-        logger.debug(`Signal aborted during response stream. Reason: ${reason}`);
-        await clearThinking();
-        await clearStatus();
-        await reply.send(`${ICONS.cancel} Operation cancelled.${reason ? ` (Reason: ${reason})` : ''}`);
-        return;
-      }
-
-      if (event.type === GeminiEventType.Content) {
-        const output = stripAnsi(event.value);
-        responseText += output;
-        logger.debug(`Content chunk (+${output.length} chars, total: ${responseText.length})`);
-
-        const now = Date.now();
-        if (now - lastEditTime >= DEBOUNCE_INTERVAL_MS) {
-          try {
-            if (!currentMessageId) {
-              const displayText = formatter.truncateForEdit(responseText);
-              if (displayText.trim()) {
-                currentMessageId = await reply.sendPlain(displayText);
-              }
-            } else {
-              await reply.editPlain(
-                currentMessageId,
-                formatter.truncateForEdit(responseText),
-              );
-            }
-            lastEditTime = now;
-          } catch (e) {
-            logger.warn(`Failed to update message: ${e}`);
+        if (isRateLimitOrUnavailableError(stderr, output)) {
+          const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
+          if (nextModel && attempts < maxAttempts) {
+            logger.warn(`[messageLoop] Model "${modelToUse}" hit rate limit/unavailable. Stderr: "${stderr}". Output: "${output}". Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
+            
+            await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 遭遇频控或不可用，正在自动降级至 \`${nextModel}\` 重试...`);
+            
+            currentMessageId = null; // Fresh message for next model stream
+            modelToUse = nextModel;
+            continue;
           }
         }
-      } else if (event.type === GeminiEventType.ToolCallRequest) {
-        logger.debug(`Tool call request: ${event.value.name}`);
-        toolCallRequests.push(event.value);
-        await updateStatus('Analyzing request...', `Tool #${toolCallRequests.length}: ${event.value.name}`);
-      } else if (event.type === GeminiEventType.Error) {
-        logger.debug(`Error event: ${event.value.error}`);
-        const err = event.value.error;
-        const errorMsg =
-          err instanceof Error ? err.message : String(err || 'Unknown error');
-        await clearStatus();
-        await clearThinking();
-        await reply.send(`${ICONS.error} Error: ${errorMsg}`);
-        return;
-      } else if (event.type === GeminiEventType.UserCancelled) {
-        logger.debug('User cancelled');
-        await clearStatus();
-        await clearThinking();
-        return;
-      } else if (event.type === GeminiEventType.AgentExecutionStopped) {
-        logger.debug(`Agent execution stopped: ${event.value.reason}`);
-        const stopMessage =
-          event.value.systemMessage?.trim() || event.value.reason;
-        if (stopMessage) {
-          await clearStatus();
-          await clearThinking();
-          await reply.send(`${ICONS.warning} Stopped: ${stopMessage}`);
-        }
-        return;
-      }
-    }
 
-    logger.debug(`Stream ended. Text: ${responseText.length} chars, Tool calls: ${toolCallRequests.length}`);
-    if (responseText.trim()) {
-      logger.debug(`Agent response:\n${responseText}`);
-    }
+        break; // Non-fallback error, or max attempts reached
+      } catch (e: any) {
+        logger.error(`[messageLoop] Attempt ${attempts} error: ${e?.message || e}`);
+        if (signal.aborted) throw e;
 
-    if (toolCallRequests.length > 0) {
-      logger.debug(`Executing ${toolCallRequests.length} tool(s): ${toolCallRequests.map((t) => t.name).join(', ')}`);
-
-      // Show tool execution status with tool names
-      const toolStatuses: ToolStatus[] = toolCallRequests.map((t) => ({
-        name: t.name,
-        status: 'pending' as const,
-      }));
-      await showToolExecution(toolStatuses);
-
-      // Update status to running
-      for (const tool of toolStatuses) {
-        tool.status = 'running';
-      }
-      await showToolExecution(toolStatuses);
-
-      // Send final accumulated text before tool execution (still streaming, use plain)
-      if (responseText.trim() && currentMessageId) {
-        try {
-          await reply.editPlain(
-            currentMessageId,
-            formatter.truncateForEdit(responseText),
-          );
-        } catch {
-          // ignore edit failures
-        }
-      }
-
-      logger.debug('Scheduling tool calls...');
-      let completedToolCalls;
-      try {
-        completedToolCalls = await scheduler.schedule(
-          toolCallRequests,
-          signal,
-        );
-      } catch (e) {
-        if (signal.aborted) {
-          logger.debug('Tool execution aborted by cancel');
-          await clearThinking();
-          return;
+        const errMsg = e?.message || String(e);
+        if (isRateLimitOrUnavailableError(errMsg, '')) {
+          const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
+          if (nextModel && attempts < maxAttempts) {
+            logger.warn(`[messageLoop] Model "${modelToUse}" threw rate-limit/unavailable error. Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
+            await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 出现调用异常，正在自动降级至 \`${nextModel}\` 重试...`);
+            currentMessageId = null;
+            modelToUse = nextModel;
+            continue;
+          }
         }
         throw e;
       }
+    }
 
-      logger.debug(`Tool execution complete. ${completedToolCalls.length} result(s)`);
+    const finalResult = lastResult || { conversationId: '', output: responseText, exitCode: 1 };
 
-      // Update tool statuses to show results
-      for (const completedToolCall of completedToolCalls) {
-        const toolName = completedToolCall.request.name;
-        const toolStatus = toolStatuses.find(t => t.name === toolName);
-        if (toolStatus) {
-          if (completedToolCall.status === 'error' || completedToolCall.response.error) {
-            toolStatus.status = 'error';
-            toolStatus.error = completedToolCall.response.error?.message || 'Unknown error';
-          } else {
-            toolStatus.status = 'success';
+    // 4. Save and persist the updated conversation ID
+    if (finalResult.conversationId) {
+      session.conversationId = finalResult.conversationId;
+      await setConversation(chatId, finalResult.conversationId, cwd, session.model);
+    }
+
+    // Wait for any pending stream updates to completely finish before rendering final message
+    isFinished = true;
+    try {
+      await activeUpdatePromise;
+    } catch (e) {
+      logger.warn(`[messageLoop] Error waiting for active update promise: ${e}`);
+    }
+
+    // 5. Final full rendering of response text (supports RichText and multi-chunk partitioning)
+    const finalCleanText = stripAnsi(finalResult.output || responseText);
+    if (finalCleanText.trim()) {
+      const chunks = formatter.chunkText(finalCleanText);
+      if (currentMessageId) {
+        try {
+          const firstChunk = chunks[0];
+          if (firstChunk) {
+            await reply.edit(currentMessageId, firstChunk);
           }
+        } catch {
+          // ignore editing errors
         }
-      }
-      await showToolExecution(toolStatuses);
-
-      const toolResponseParts: Part[] = [];
-
-      for (const completedToolCall of completedToolCalls) {
-        const toolResponse = completedToolCall.response;
-
-        if (toolResponse.responseParts) {
-          toolResponseParts.push(...toolResponse.responseParts);
-        }
-      }
-
-      // Record tool calls
-      try {
-        const currentModel =
-          geminiClient.getCurrentSequenceModel() ?? config.getModel();
-        geminiClient
-          .getChat()
-          .recordCompletedToolCalls(currentModel, completedToolCalls);
-        await recordToolCallInteractions(config, completedToolCalls);
-      } catch (error) {
-        debugLogger.error(
-          `Error recording completed tool call information: ${error}`,
-        );
-      }
-
-      // Check if any tool requested to stop execution
-      const stopExecutionTool = completedToolCalls.find(
-        (tc) => tc.response.errorType === ToolErrorType.STOP_EXECUTION,
-      );
-
-      if (stopExecutionTool && stopExecutionTool.response.error) {
-        const stopMessage = `Agent execution stopped: ${stopExecutionTool.response.error.message}`;
-        await clearToolExecution();
-        await clearThinking();
-        await reply.send(`${ICONS.error} ${stopMessage}`);
-        return;
-      }
-
-      // Small delay to show success status before continuing
-      await new Promise((r) => setTimeout(r, 500));
-      await clearToolExecution();
-      await clearStatus();
-
-      currentMessages = [{ role: 'user', parts: toolResponseParts }];
-      logger.debug('Looping back with tool responses...');
-    } else {
-      // No tool calls — send final response
-      logger.debug('No tool calls — sending final response');
-
-      // Clear thinking indicator before sending final response
-      await clearThinking();
-
-      if (responseText.trim()) {
-        const chunks = formatter.chunkText(responseText);
-        if (currentMessageId) {
-          // Edit the first message with final text
-          try {
-            const firstChunk = chunks[0];
-            if (firstChunk) {
-              await reply.edit(currentMessageId, firstChunk);
-            }
-          } catch {
-            // ignore edit failures
-          }
-          // Send remaining chunks as new messages
-          for (let i = 1; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            if (chunk) {
-              await reply.send(chunk);
-            }
-          }
-        } else {
-          // No message was sent yet, send all chunks
-          for (const chunk of chunks) {
+        // Send subsequent chunks if output exceeds telegram message size limits
+        for (let i = 1; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          if (chunk) {
             await reply.send(chunk);
           }
         }
+      } else {
+        for (const chunk of chunks) {
+          await reply.send(chunk);
+        }
       }
-      return;
+    } else if (finalResult.exitCode !== 0) {
+      await reply.send(`${ICONS.error} 执行失败（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录。`);
     }
+
+    // 6. Handle Autopilot autonomous loops
+    if (session.autopilot?.active) {
+      const config = session.autopilot;
+      
+      // Check if maximum iterations reached
+      if (config.currentIteration >= config.maxIterations) {
+        session.autopilot.active = false;
+        await reply.send(`${ICONS.warning} [Autopilot] 已达到最大自主迭代次数限制 (${config.maxIterations} 次)，自主循环已停止。`);
+        return;
+      }
+
+      // Check for stop keywords in AI response
+      const lowercaseOutput = finalCleanText.toLowerCase();
+      const triggeredStop = config.stopKeywords.find(kw => lowercaseOutput.includes(kw.toLowerCase()));
+      if (triggeredStop) {
+        session.autopilot.active = false;
+        await reply.send(`${ICONS.success} [Autopilot] 检测到终止关键字 "${triggeredStop}"，自主循环优雅结束。`);
+        return;
+      }
+
+      // Proceed with next iteration
+      config.currentIteration++;
+      const nextIterationStatusMsg = await reply.send(
+        `${ICONS.processing} *[Autopilot 自主迭代 ${config.currentIteration}/${config.maxIterations}]*\n` +
+        `正在评估并开始执行下一阶段目标: \`"${config.goal}"\` ...`
+      );
+
+      // Auto-trigger next processMessage step recursively
+      const nextPrompt = `请继续推进您的工作并执行下一步。当前总目标是："${config.goal}"。\n` +
+        `如果您觉得已经完美达成该目标，或者已经无法继续前行，请务必在您的回答中包含 "TASK_COMPLETE" 关键字以结束本轮循环。`;
+
+      // Delay slightly for better UX feel
+      await new Promise(r => setTimeout(r, 1500));
+      await reply.delete(nextIterationStatusMsg);
+
+      await processMessage(
+        session,
+        { text: nextPrompt },
+        reply,
+        formatter
+      );
+    }
+
+  } catch (e: any) {
+    logger.error(`[messageLoop] Error running prompt: ${e?.message || e}`);
+    if (signal.aborted) {
+      await reply.send(`${ICONS.cancel} 任务已被用户取消。`);
+    } else {
+      await reply.send(`${ICONS.error} 发生错误: ${e?.message || String(e)}`);
+    }
+  } finally {
+    session.busy = false;
   }
+}
+
+const FALLBACK_MAP: Record<string, string> = {
+  'Claude Opus 4.6 (Thinking)': 'Claude Sonnet 4.6 (Thinking)',
+  'Claude Sonnet 4.6 (Thinking)': 'Gemini 3.1 Pro (High)',
+  'GPT-OSS 120B (Medium)': 'Gemini 3.1 Pro (High)',
+  'Gemini 3.1 Pro (High)': 'Gemini 3.5 Flash (High)',
+  'Gemini 3.1 Pro (Low)': 'Gemini 3.5 Flash (Medium)',
+  'Gemini 3.5 Flash (High)': 'Gemini 3.5 Flash (Medium)',
+  'Gemini 3.5 Flash (Medium)': 'Gemini 3.5 Flash (Low)',
+  'Gemini 3.5 Flash (Low)': 'Web2API: Gemini Auto',
+  'Web2API: Gemini 3.5 Flash Thinking': 'Web2API: Gemini 3.5 Flash Thinking Lite',
+  'Web2API: Gemini 3.5 Flash Thinking Lite': 'Web2API: Gemini 3.1 Pro',
+  'Web2API: Gemini 3.1 Pro': 'Web2API: Gemini 3.5 Flash',
+  'Web2API: Gemini 3.5 Flash': 'Web2API: Gemini Flash Lite',
+  'Web2API: Gemini Flash Lite': 'Web2API: Gemini Auto',
+};
+
+export function getFallbackModel(currentModel: string): string | null {
+  return FALLBACK_MAP[currentModel] ?? null;
+}
+
+export function isRateLimitOrUnavailableError(stderr: string, output: string): boolean {
+  const lowerStderr = stderr.toLowerCase();
+  const lowerOutput = output.toLowerCase();
+  
+  const keywords = [
+    '429',
+    'quota',
+    'exhausted',
+    'rate_limit',
+    'rate limit',
+    'limit exceeded',
+    'resource_exhausted',
+    'unavailable',
+    'overloaded',
+    'capacity',
+  ];
+
+  return keywords.some(keyword => lowerStderr.includes(keyword) || lowerOutput.includes(keyword));
 }
