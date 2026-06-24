@@ -92,7 +92,7 @@ const draftIds = new Map<number, number>();
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  */
-function buildChannelReply(
+export function buildChannelReply(
   ctx: Context,
   chatId: number,
   parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'HTML',
