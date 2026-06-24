@@ -4,11 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {
-  Config,
-  GeminiClient,
-  Scheduler,
-} from '@google/gemini-cli-core';
 import type { SendMediaFn } from '../channels/telegram/outbound.js';
 
 export type { SendMediaFn, MediaType } from '../channels/telegram/outbound.js';
@@ -37,6 +32,10 @@ export interface ChannelReply {
   editPlain(messageId: number, text: string): Promise<void>;
   sendDocument(path: string, caption?: string): Promise<void>;
   delete(messageId: number): Promise<void>;
+  // Optional Rich Message API helper methods
+  sendRich?(text: string): Promise<number>;
+  sendRichDraft?(text: string): Promise<number>;
+  editRich?(messageId: number, text: string): Promise<void>;
 }
 
 /**
@@ -79,19 +78,33 @@ export interface AutopilotConfig {
 }
 
 /**
+ * Settings block for telegram chat (such as parseMode)
+ */
+export interface TelegramSettings {
+  parseMode?: 'HTML' | 'MarkdownV2' | 'RichText';
+}
+
+export interface SessionSettings {
+  telegram?: TelegramSettings;
+}
+
+/**
  * Channel-agnostic session — one per conversation/chat.
  */
 export interface DaemonSession {
   sessionId: string;
-  config: Config;
-  geminiClient: GeminiClient;
-  scheduler: Scheduler;
+  chatId?: number;
+  conversationId?: string; // Local agy conversation UUID
+  model?: string;          // Selected model override
+  proxy?: string;          // Configured proxy server
   abortController: AbortController;
   busy: boolean;
   turnCount: number;
   createdAt: Date;
   /** Current project/workspace */
   currentProject?: ProjectInfo;
+  /** Settings (e.g. format parseMode) */
+  settings?: SessionSettings;
   /** Thinking steps for current operation */
   thinkingSteps: ThinkingStep[];
   /** Active typing indicator interval, if any. Cleared on cancel/completion. */
@@ -100,6 +113,9 @@ export interface DaemonSession {
   sendMedia?: SendMediaFn;
   /** Autopilot / self-reply until configuration */
   autopilot?: AutopilotConfig;
+  /** Compatibility fields for config and geminiClient */
+  config?: any;
+  geminiClient?: any;
 }
 
 /**
@@ -109,6 +125,7 @@ export interface SessionOptions {
   cwd?: string;
   model?: string;
   project?: ProjectInfo;
+  proxy?: string;
 }
 
 /**
