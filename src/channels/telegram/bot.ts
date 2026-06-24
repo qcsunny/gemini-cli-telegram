@@ -5,6 +5,7 @@
  */
 
 import { Bot, Context, InputFile } from 'grammy';
+import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { run, sequentialize } from '@grammyjs/runner';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -35,6 +36,7 @@ export interface TelegramBotOptions {
   allowedUsers?: number[];
   model?: string;
   cwd?: string;
+  proxy?: string;
 }
 
 /**
@@ -43,18 +45,21 @@ export interface TelegramBotOptions {
  * Regular messages get keyed by chatId, so they're processed serially per chat.
  * /cancel gets a separate key (`control:${chatId}`) so it runs concurrently
  * with the in-progress message handler — otherwise it would be queued behind it.
+ * Callback queries are bypass-sequentialized (returns undefined) so they respond immediately.
  */
-function getSequentialKey(ctx: {
-  chat?: { id?: number };
-  message?: { text?: string };
-}): string {
-  const chatId = ctx.chat?.id ?? 0;
+export function getSequentialKey(ctx: any): string | undefined {
+  if (ctx.callbackQuery) {
+    return undefined;
+  }
+  const chatId = ctx.chat?.id;
+  if (!chatId) return undefined;
   const text = ctx.message?.text ?? '';
   if (text.startsWith('/cancel')) {
     return `control:${chatId}`;
   }
   return `chat:${chatId}`;
 }
+
 
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
@@ -226,6 +231,7 @@ async function withSession(
 async function downloadTelegramFile(
   ctx: Context,
   fileId: string,
+  proxyAgent?: ProxyAgent,
 ): Promise<string> {
   const file = await ctx.api.getFile(fileId);
   if (!file.file_path) {
@@ -237,7 +243,9 @@ async function downloadTelegramFile(
   let lastError: Error | undefined;
   for (let attempt = 1; attempt <= DOWNLOAD_MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch(fileUrl);
+      const response = await undiciFetch(fileUrl, {
+        dispatcher: proxyAgent,
+      });
       if (!response.ok) {
         throw new Error(
           `HTTP ${response.status}: ${response.statusText}`,
@@ -330,15 +338,30 @@ export class TelegramBot {
   private sessionManager: SessionManager;
   private defaultOptions: SessionOptions;
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private proxyAgent: ProxyAgent | undefined;
 
   constructor(token: string, options: TelegramBotOptions = {}) {
-    this.bot = new Bot(token);
+    const clientConfig: any = {};
+    if (options.proxy) {
+      this.proxyAgent = new ProxyAgent(options.proxy);
+      clientConfig.baseFetchConfig = {
+        dispatcher: this.proxyAgent,
+        compress: true,
+      };
+      clientConfig.fetch = (url: any, init: any) => {
+        const cleanInit = init ? { ...init } : {};
+        delete cleanInit.signal;
+        return undiciFetch(url, cleanInit);
+      };
+    }
+    this.bot = new Bot(token, { client: clientConfig });
     this.sessionManager = new SessionManager(
       (chatId) => createTelegramSendMedia(this.bot.api, chatId),
     );
     this.defaultOptions = {
       cwd: options.cwd || process.cwd(),
       model: options.model,
+      proxy: options.proxy,
     };
 
     this.setupMiddleware(options.allowedUsers);
@@ -429,7 +452,7 @@ export class TelegramBot {
       { command: 'model', description: 'Switch model (starts new session)' },
       { command: 'compact', description: 'Compress chat history' },
       { command: 'addfolder', description: 'Add a folder for read+write access' },
-      { command: 'stats', description: 'Show session statistics' },
+      { command: 'status', description: 'Show session statistics' },
       { command: 'id', description: 'Show current session ID' },
       { command: 'help', description: 'Show help message' },
     ]);
@@ -683,7 +706,7 @@ export class TelegramBot {
       ctx,
       this.defaultOptions,
       async (session, channelReply) => {
-        tempFilePath = await downloadTelegramFile(ctx, info.fileId);
+        tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
 
         const multimodalInput: MultimodalInput = {
           text: info.caption,

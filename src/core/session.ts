@@ -8,16 +8,10 @@ import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { Scheduler, ROOT_SCHEDULER_ID } from '@google/gemini-cli-core';
-import {
-  loadDaemonConfig,
-  type DaemonConfigOptions,
-} from '../config/config.js';
 import { logger } from '../utils/logger.js';
 import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './types.js';
-import { SendMediaTool } from '../tools/send-media.js';
 import { ChatScheduler } from './scheduler.js';
-import { ScheduleChatTool, AutopilotTool } from '../tools/schedule-control.js';
+import { getConversationId, deleteConversation, getStoredModel, setConversation } from '../agy/conversationStore.js';
 
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
 
@@ -283,9 +277,9 @@ export class SessionManager {
     if (session) {
       session.abortController.abort('Session destroyed');
       try {
-        await session.config.dispose();
+        await deleteConversation(chatId);
       } catch (e) {
-        logger.warn(`Error disposing session for chat ${chatId}: ${e}`);
+        logger.warn(`Error deleting conversation for chat ${chatId}: ${e}`);
       }
       this.sessions.delete(chatId);
       logger.info(`Session destroyed for chat ${chatId}`);
@@ -315,17 +309,31 @@ export class SessionManager {
     const sessionId = crypto.randomUUID();
     logger.info(`Creating session ${sessionId} for chat ${chatId}`);
 
-    const cwd = options.project?.path || options.cwd || process.cwd();
+    let project = options.project;
+    if (!project) {
+      let found = this.projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
+      if (!found) {
+        const hardcodedPath = '/home/user/Documents/通用知识专家_RichText';
+        try {
+          await fs.access(hardcodedPath);
+          found = await this.projectManager.addProject({
+            name: '通用知识专家_RichText',
+            path: hardcodedPath,
+            description: '通用知识专家 - 10.1 富文本渲染版',
+          });
+          logger.info(`[SessionManager] Discovered and added missing default project from physical path: ${hardcodedPath}`);
+        } catch {
+          // Ignore if directory does not exist or cannot be accessed
+        }
+      }
+      if (found) {
+        project = found;
+        logger.info(`[SessionManager] Automatically set default project: 通用知识专家_RichText (${project.path})`);
+      }
+    }
+
+    const cwd = project?.path || options.cwd || process.cwd();
     
-    const configOptions: DaemonConfigOptions = {
-      cwd,
-      model: options.model,
-    };
-
-    logger.debug(`Loading daemon config for session ${sessionId}...`);
-    const config = await loadDaemonConfig(sessionId, configOptions);
-    logger.debug(`Config loaded. Model: ${config.getModel()}`);
-
     // Check for write access to the workspace directory
     try {
       const testFile = path.join(cwd, `.write_test_${sessionId}`);
@@ -334,74 +342,64 @@ export class SessionManager {
       logger.debug(`Write access verified for ${cwd}`);
     } catch (e) {
       logger.warn(`Potential write access issue in ${cwd}: ${e}`);
-      // Don't throw here, just log it. Some features might still work.
     }
 
-    // Allow read access to the user's home directory so the daemon can
-    // browse and reference files (write access stays scoped to cwd).
-    const workspace = config.getWorkspaceContext();
-    workspace.addReadOnlyPath(os.homedir());
-
-    // If project specified, also add it
-    if (options.project) {
-      workspace.addDirectory(options.project.path);
-      await this.projectManager.updateProjectLastUsed(options.project.id);
+    if (project) {
+      await this.projectManager.updateProjectLastUsed(project.id);
     }
 
-    const geminiClient = config.getGeminiClient();
-    logger.debug('Initializing Gemini client...');
-    await geminiClient.initialize();
-    logger.debug('Gemini client initialized');
-
-    const scheduler = new Scheduler({
-      config: config,
-      messageBus: config.getMessageBus(),
-      getPreferredEditor: () => undefined,
-      schedulerId: ROOT_SCHEDULER_ID,
-    });
-
-    // Register daemon-specific tools
+    const conversationId = (await getConversationId(chatId)) || undefined;
+    const storedModel = await getStoredModel(chatId);
+    const modelToUse = storedModel || options.model || 'Gemini 3.1 Pro (High)';
     const sendMedia = this.sendMediaFactory?.(chatId);
-    if (sendMedia) {
-      const sendMediaTool = new SendMediaTool(
-        config.getMessageBus(),
-        sendMedia,
-      );
-      config.getToolRegistry().registerTool(sendMediaTool);
-      logger.debug('Registered send_media tool');
-    }
-
-    // Register schedule control tool
-    const scheduleTool = new ScheduleChatTool(
-      config.getMessageBus(),
-      this.chatScheduler,
-      chatId,
-    );
-    config.getToolRegistry().registerTool(scheduleTool);
-    logger.debug('Registered schedule_chat tool');
-
-    // Register autopilot control tool
-    const autopilotTool = new AutopilotTool(
-      config.getMessageBus(),
-      this,
-      chatId,
-    );
-    config.getToolRegistry().registerTool(autopilotTool);
-    logger.debug('Registered autopilot_control tool');
 
     const session: DaemonSession = {
       sessionId,
-      config,
-      geminiClient,
-      scheduler,
+      chatId,
+      conversationId,
+      model: modelToUse,
+      proxy: options.proxy,
       abortController: new AbortController(),
       busy: false,
       turnCount: 0,
       createdAt: new Date(),
-      currentProject: options.project,
+      currentProject: project,
+      settings: {
+        telegram: {
+          parseMode: 'RichText', // 默认修改为 RichText！
+        },
+      },
       thinkingSteps: [],
       sendMedia,
       autopilot: undefined,
+      config: {
+        getModel: () => session.model || 'Gemini 3.1 Pro (High)',
+        setModel: (modelName: string) => {
+          session.model = modelName;
+          setConversation(chatId, session.conversationId || '', session.currentProject?.path || process.cwd(), modelName).catch(err => {
+            logger.error(`Error setting model in store: ${err}`);
+          });
+        },
+        getTargetDir: () => session.currentProject?.path || process.cwd(),
+        getWorkspaceContext: () => ({
+          addDirectory: (dir: string) => {
+            logger.info(`[Session compatibility] addDirectory called: ${dir}`);
+          }
+        }),
+        storage: {
+          getProjectTempDir: () => path.join(os.tmpdir(), 'gemini-cli-telegram'),
+        }
+      },
+      geminiClient: {
+        getHistory: () => [],
+        setHistory: (history: any[]) => {
+          logger.info(`[Session compatibility] setHistory called with ${history.length} items`);
+        },
+        getChatRecordingService: () => null,
+        tryCompressChat: async (sessId: string, force: boolean) => {
+          logger.info(`[Session compatibility] tryCompressChat called: ${sessId}, force=${force}`);
+        }
+      }
     };
 
     this.sessions.set(chatId, session);
