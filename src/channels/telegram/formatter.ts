@@ -602,6 +602,14 @@ export function markdownToHtml(markdown: string): string {
   let html = renderIRToHtml(ir);
   // Convert blockquotes with [details] marker into expandable blockquotes, stripping the marker
   html = html.replace(/<blockquote>([\s\S]*?)\s*\[details\]\s*([\s\S]*?)<\/blockquote>/gi, '<blockquote expandable>$1$2</blockquote>');
+  html = html.replace(/\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)\]/gi, (match, model, inputTokens, outputTokens, cost) => {
+    const m = model.trim();
+    const i = inputTokens.trim();
+    const o = outputTokens.trim();
+    const c = cost.trim();
+    const totalTokens = Number(i) + Number(o);
+    return `<footer>🤖 运行模型: ${m} | 📊 消耗 Token: 输入 ${i} + 输出 ${o} = ${totalTokens} | 💰 消费金额: ${c}</footer>`;
+  });
   return html;
 }
 

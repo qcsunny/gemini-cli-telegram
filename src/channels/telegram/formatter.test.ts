@@ -107,4 +107,10 @@ Thanks for reading! 🚀
     expect(Array.isArray(blocks)).toBe(true);
     expect(blocks.length).toBeGreaterThan(0);
   });
+
+  it('should format footers into native <footer> tags', () => {
+    const input = 'This is the main response.\n\n[footer: Gemini 3.5 Flash (Medium) | 120 | 250 | $0.000084]';
+    const html = markdownToHtml(input);
+    expect(html).toContain('<footer>🤖 运行模型: Gemini 3.5 Flash (Medium) | 📊 消耗 Token: 输入 120 + 输出 250 = 370 | 💰 消费金额: $0.000084</footer>');
+  });
 });
