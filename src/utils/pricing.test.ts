@@ -1,0 +1,78 @@
+/**
+ * @license
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { describe, it, expect } from 'vitest';
+import { estimateTokens, calculateCost, formatFooterMarker } from './pricing.js';
+
+describe('Pricing and Token Estimation', () => {
+  describe('estimateTokens', () => {
+    it('should return 0 for empty string', () => {
+      expect(estimateTokens('')).toBe(0);
+    });
+
+    it('should return 1 for a single character or minimal input', () => {
+      expect(estimateTokens('a')).toBe(1);
+    });
+
+    it('should estimate English text correctly', () => {
+      // "hello world" has 2 English words.
+      // English words count = 2.
+      // 2 * 1.3 = 2.6.
+      // If we round/ceil, let's see. If we use Math.round(2.6), it is 3. If we use Math.ceil(2.6), it is 3.
+      expect(estimateTokens('hello world')).toBe(3);
+    });
+
+    it('should estimate CJK text correctly', () => {
+      // "你好" has 2 CJK characters.
+      // 2 * 0.8 = 1.6.
+      // Math.ceil(1.6) = 2, or Math.round(1.6) = 2.
+      expect(estimateTokens('你好')).toBe(2);
+    });
+
+    it('should estimate multilingual text correctly', () => {
+      // "hello你好" has 1 English word ("hello") and 2 CJK characters ("你好").
+      // English words: 1 * 1.3 = 1.3
+      // CJK characters: 2 * 0.8 = 1.6
+      // Total = 2.9
+      // Ceil = 3.
+      expect(estimateTokens('hello你好')).toBe(3);
+    });
+  });
+
+  describe('calculateCost', () => {
+    it('should calculate cost for Gemini 3.5 Flash', () => {
+      // Input: $0.075 / 1M tokens, Output: $0.30 / 1M tokens
+      // For 1,000,000 input and 2,000,000 output:
+      // inputCost = 0.075, outputCost = 0.60, totalCost = 0.675
+      const cost = calculateCost('Gemini 3.5 Flash (High)', 1_000_000, 2_000_000);
+      expect(cost.inputCost).toBeCloseTo(0.075, 8);
+      expect(cost.outputCost).toBeCloseTo(0.60, 8);
+      expect(cost.totalCost).toBeCloseTo(0.675, 8);
+    });
+
+    it('should handle partial case-insensitive matching for models', () => {
+      const cost = calculateCost('gemini 3.1 pro', 1_000_000, 1_000_000);
+      // Input: $1.25 / 1M, Output: $5.00 / 1M
+      expect(cost.inputCost).toBeCloseTo(1.25, 8);
+      expect(cost.outputCost).toBeCloseTo(5.00, 8);
+      expect(cost.totalCost).toBeCloseTo(6.25, 8);
+    });
+  });
+
+  describe('formatFooterMarker', () => {
+    it('should format footer marker string correctly', () => {
+      const marker = formatFooterMarker('Claude Sonnet 4.6 (Thinking)', 'hello', 'world');
+      // "hello" -> 1 word * 1.3 = 1.3 -> 2 tokens
+      // "world" -> 1 word * 1.3 = 1.3 -> 2 tokens
+      // Claude Sonnet 4.6: Input: $3.00 / 1M, Output: $15.00 / 1M
+      // inputCost = 2 * (3.00 / 1,000,000) = 0.000006
+      // outputCost = 2 * (15.00 / 1,000,000) = 0.000030
+      // totalCost = 0.000036
+      // Expected footer format: [footer: Claude Sonnet 4.6 (Thinking) | 2 | 2 | $0.000036]
+      expect(marker).toBe('[footer: Claude Sonnet 4.6 (Thinking) | 2 | 2 | $0.000036]');
+    });
+  });
+});
