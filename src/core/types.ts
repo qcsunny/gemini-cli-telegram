@@ -32,6 +32,9 @@ export interface ChannelReply {
   editPlain(messageId: number, text: string): Promise<void>;
   sendDocument(path: string, caption?: string): Promise<void>;
   delete(messageId: number): Promise<void>;
+  sendRich?(text: string): Promise<number>;
+  sendRichDraft?(text: string): Promise<number>;
+  editRich?(messageId: number, text: string): Promise<void>;
 }
 
 /**
