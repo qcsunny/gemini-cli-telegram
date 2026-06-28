@@ -89,6 +89,11 @@ function prepareTelegramMarkdown(markdown: string): string {
 
 const draftIds = new Map<number, number>();
 
+export function clearDraftIds(): void {
+  draftIds.clear();
+}
+
+
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  */
@@ -212,6 +217,13 @@ export function buildChannelReply(
     },
 
     editRich: async (messageId: number, originalText: string): Promise<void> => {
+      // If we have an active draft for this chat, the messageId is actually a draftId.
+      // We must promote/send the final message as a NEW message instead of editing.
+      if (draftIds.has(chatId)) {
+        await replyObj.sendRich!(originalText);
+        return;
+      }
+
       // Option A: Native Rich HTML
       try {
         const html = markdownToHtml(originalText);
@@ -291,6 +303,7 @@ export function buildChannelReply(
           }
         }
       }
+      draftIds.delete(chatId);
       const msg = await ctx.reply(replyText);
       return msg.message_id;
     },
