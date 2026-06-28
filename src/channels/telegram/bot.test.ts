@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TelegramBot, buildChannelReply } from './bot.js';
+import { TelegramBot, buildChannelReply, clearDraftIds } from './bot.js';
 import { processMessage } from '../../core/messageLoop.js';
 import * as fs from 'fs/promises';
 
@@ -150,6 +150,7 @@ describe('TelegramBot', () => {
     const chatId = 12345;
 
     beforeEach(() => {
+      clearDraftIds();
       mockCtx = {
         reply: vi.fn().mockResolvedValue({ message_id: 999 }),
         replyWithDocument: vi.fn().mockResolvedValue(undefined),
@@ -280,6 +281,26 @@ describe('TelegramBot', () => {
       });
       const parsed = mockCtx.api.raw.editMessageText.mock.calls[0][0].rich_message;
       expect(parsed).toHaveProperty('html');
+    });
+
+    it('should promote ephemeral draft preview to a real message when finalization is reached via editRich', async () => {
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      
+      // Simulate draft is active (this sets a draft ID in draftIds map for the chatId)
+      await reply.sendRichDraft!('some draft');
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+
+      // Now call editRich (simulating finalization edit)
+      await reply.editRich!(9999, 'final text');
+
+      // It should NOT call editMessageText since it's a draftId, but rather promote it by calling sendRichMessage
+      expect(mockCtx.api.raw.editMessageText).not.toHaveBeenCalled();
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith({
+        chat_id: chatId,
+        rich_message: expect.objectContaining({
+          html: expect.any(String),
+        }),
+      });
     });
 
     it('should fallback to edit Option B (Markdown) if Option A throws', async () => {
