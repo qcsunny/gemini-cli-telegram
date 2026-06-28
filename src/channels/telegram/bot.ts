@@ -21,7 +21,7 @@ import type {
   MultimodalInput,
 } from '../../core/types.js';
 import { registerCommands } from './commands.js';
-import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks } from './formatter.js';
+import { telegramFormatter, markdownToHtml, markdownToMarkdownV2 } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
 
@@ -95,8 +95,9 @@ const draftIds = new Map<number, number>();
 export function buildChannelReply(
   ctx: Context,
   chatId: number,
-  parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'HTML',
+  parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'RichText',
 ): ChannelReply {
+  const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
   const safeEdit = async (messageId: number, text: string, html = true) => {
     try {
       if (html) {
@@ -127,12 +128,13 @@ export function buildChannelReply(
 
   const replyObj: ChannelReply = {
     sendRich: async (originalText: string): Promise<number> => {
-      // Option A: Rich Blocks
+      // Option A: Native Rich HTML (Telegram parses this on the server)
       try {
-        const blocks = markdownToRichBlocks(originalText);
+        const html = markdownToHtml(originalText);
         const res: any = await (ctx.api.raw as any).sendRichMessage({
           chat_id: chatId,
-          blocks,
+          message_thread_id: messageThreadId,
+          rich_message: { html },
         });
         draftIds.delete(chatId);
         return res.message_id;
@@ -145,7 +147,8 @@ export function buildChannelReply(
         const safeMarkdown = prepareTelegramMarkdown(originalText);
         const res: any = await (ctx.api.raw as any).sendRichMessage({
           chat_id: chatId,
-          markdown: safeMarkdown,
+          message_thread_id: messageThreadId,
+          rich_message: { markdown: safeMarkdown },
         });
         draftIds.delete(chatId);
         return res.message_id;
@@ -176,13 +179,14 @@ export function buildChannelReply(
         draftIds.set(chatId, draftId);
       }
 
-      // Option A: Rich Blocks
+      // Option A: Native Rich HTML with native thinking animation
       try {
-        const blocks = markdownToRichBlocks(originalText);
+        const html = markdownToHtml(originalText);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
+          message_thread_id: messageThreadId,
           draft_id: draftId,
-          blocks,
+          rich_message: { html: `${html}\n<tg-thinking>正在思考...</tg-thinking>` },
         });
         return draftId;
       } catch (err: any) {
@@ -194,8 +198,9 @@ export function buildChannelReply(
         const safeMarkdown = prepareTelegramMarkdown(originalText);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
+          message_thread_id: messageThreadId,
           draft_id: draftId,
-          markdown: safeMarkdown,
+          rich_message: { markdown: safeMarkdown },
         });
         return draftId;
       } catch (err: any) {
@@ -205,13 +210,13 @@ export function buildChannelReply(
     },
 
     editRich: async (messageId: number, originalText: string): Promise<void> => {
-      // Option A: Rich Blocks
+      // Option A: Native Rich HTML
       try {
-        const blocks = markdownToRichBlocks(originalText);
+        const html = markdownToHtml(originalText);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
           message_id: messageId,
-          blocks,
+          rich_message: { html },
         });
         return;
       } catch (err: any) {
@@ -227,7 +232,7 @@ export function buildChannelReply(
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
           message_id: messageId,
-          markdown: safeMarkdown,
+          rich_message: { markdown: safeMarkdown },
         });
         return;
       } catch (err: any) {
@@ -269,27 +274,23 @@ export function buildChannelReply(
       await safeEdit(messageId, newText, true);
     },
     sendPlain: async (replyText: string): Promise<number> => {
-      if (parseMode === 'RichText') {
-        if (replyText.trim()) {
-          try {
-            return await replyObj.sendRichDraft!(replyText);
-          } catch (e) {
-            logger.warn(`Failed sendRichDraft inside sendPlain: ${e}`);
-          }
+      if (parseMode === 'RichText' && replyText.trim()) {
+        try {
+          return await replyObj.sendRichDraft!(replyText);
+        } catch (e) {
+          logger.warn(`Failed to send rich draft stream: ${e}`);
         }
       }
       const msg = await ctx.reply(replyText);
       return msg.message_id;
     },
     editPlain: async (messageId: number, newText: string): Promise<void> => {
-      if (parseMode === 'RichText') {
-        if (newText.trim()) {
-          try {
-            await replyObj.sendRichDraft!(newText);
-            return;
-          } catch (e) {
-            logger.warn(`Failed sendRichDraft inside editPlain: ${e}`);
-          }
+      if (parseMode === 'RichText' && newText.trim()) {
+        try {
+          await replyObj.sendRichDraft!(newText);
+          return;
+        } catch (e) {
+          logger.warn(`Failed to edit rich draft stream: ${e}`);
         }
       }
       await safeEdit(messageId, newText, false);
@@ -382,7 +383,7 @@ async function withSession(
     }
   }, TYPING_TTL_MS);
 
-  const parseMode = session.settings?.telegram?.parseMode || 'HTML';
+  const parseMode = session.settings?.telegram?.parseMode || 'RichText';
   try {
     await handler(session, buildChannelReply(ctx, chatId, parseMode));
   } catch (e) {
@@ -527,13 +528,26 @@ export class TelegramBot {
     if (options.proxy) {
       this.proxyAgent = new ProxyAgent(options.proxy);
       clientConfig.baseFetchConfig = {
-        dispatcher: this.proxyAgent,
         compress: true,
       };
       clientConfig.fetch = (url: any, init: any) => {
         const cleanInit = init ? { ...init } : {};
-        delete cleanInit.signal;
-        return undiciFetch(url, cleanInit);
+        if (cleanInit.signal) {
+          const grammySignal = cleanInit.signal;
+          const nativeController = new globalThis.AbortController();
+          if (grammySignal.aborted) {
+            nativeController.abort();
+          } else {
+            grammySignal.addEventListener('abort', () => {
+              nativeController.abort();
+            });
+          }
+          cleanInit.signal = nativeController.signal;
+        }
+        return undiciFetch(url, {
+          ...cleanInit,
+          dispatcher: this.proxyAgent,
+        });
       };
     }
     this.bot = new Bot(token, { client: clientConfig });
@@ -728,6 +742,24 @@ export class TelegramBot {
   }
 
   private setupMiddleware(allowedUsers?: number[]): void {
+    // Diagnostic logging middleware to track update latency
+    this.bot.use(async (ctx, next) => {
+      const start = Date.now();
+      const updateId = ctx.update.update_id;
+      const message = ctx.message || ctx.editedMessage || ctx.callbackQuery?.message;
+      const msgDate = message?.date ? message.date * 1000 : null;
+      const dateDiff = msgDate ? (start - msgDate) / 1000 : null;
+      
+      logger.info(`[Update ${updateId}] Received update. Message date: ${msgDate ? new Date(msgDate).toISOString() : 'N/A'}. Delay from sending: ${dateDiff !== null ? dateDiff.toFixed(2) + 's' : 'N/A'}`);
+      
+      try {
+        await next();
+      } finally {
+        const duration = Date.now() - start;
+        logger.info(`[Update ${updateId}] Processed in ${duration}ms`);
+      }
+    });
+
     // Sequentialize: messages in the same chat run serially,
     // but /cancel gets its own key so it bypasses the queue.
     this.bot.use(sequentialize(getSequentialKey));
