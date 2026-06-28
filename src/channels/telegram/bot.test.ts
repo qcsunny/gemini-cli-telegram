@@ -165,20 +165,34 @@ describe('TelegramBot', () => {
       };
     });
 
-    it('should successfully send Rich Blocks (Option A) and clear draft ID', async () => {
+    it('should successfully send Rich HTML (Option A) and clear draft ID', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('**bold** text');
 
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith({
         chat_id: chatId,
-        blocks: expect.any(Array),
+        rich_message: expect.any(Object),
       });
+      const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
+      expect(parsed).toHaveProperty('html');
       expect(msgId).toBe(888);
     });
 
-    it('should fallback to Option B (Markdown) if Option A (Blocks) throws', async () => {
+    it('should pass message_thread_id if available in the context', async () => {
+      mockCtx.message = { message_thread_id: 42 };
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      await reply.sendRich!('Hello Forum!');
+      
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: chatId,
+        message_thread_id: 42,
+        rich_message: { html: expect.any(String) }
+      }));
+    });
+
+    it('should fallback to Option B (Markdown) if Option A (HTML) throws', async () => {
       // Option A throws error
-      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('Blocks not supported'));
+      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('HTML not supported'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('some text');
@@ -186,22 +200,24 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(2);
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith({
         chat_id: chatId,
-        markdown: expect.any(String),
+        rich_message: expect.any(Object),
       });
+      const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[1][0].rich_message;
+      expect(parsed).toHaveProperty('markdown');
       expect(msgId).toBe(888);
     });
 
     it('should fallback to Option C (HTML) if both Option A and Option B throw', async () => {
       // Option A throws, then Option B throws
       mockCtx.api.raw.sendRichMessage
-        .mockRejectedValueOnce(new Error('Blocks fail'))
+        .mockRejectedValueOnce(new Error('HTML fail'))
         .mockRejectedValueOnce(new Error('Markdown fail'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('**bold** text');
 
       expect(mockCtx.reply).toHaveBeenCalledWith(
-        expect.stringContaining('<b>bold</b>'),
+        expect.stringContaining('<strong>bold</strong>'),
         { parse_mode: 'HTML' }
       );
       expect(msgId).toBe(999);
@@ -214,20 +230,24 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledWith({
         chat_id: chatId,
         draft_id: firstDraftId,
-        blocks: expect.any(Array),
+        rich_message: expect.any(Object),
       });
+      let parsed = mockCtx.api.raw.sendRichMessageDraft.mock.calls[0][0].rich_message;
+      expect(parsed).toHaveProperty('html');
 
       const secondDraftId = await reply.sendRichDraft!('draft text 2');
       expect(secondDraftId).toBe(firstDraftId);
       expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenLastCalledWith({
         chat_id: chatId,
         draft_id: firstDraftId,
-        blocks: expect.any(Array),
+        rich_message: expect.any(Object),
       });
+      parsed = mockCtx.api.raw.sendRichMessageDraft.mock.calls[1][0].rich_message;
+      expect(parsed).toHaveProperty('html');
     });
 
     it('should fallback to Option B in sendRichDraft if Option A throws', async () => {
-      mockCtx.api.raw.sendRichMessageDraft.mockRejectedValueOnce(new Error('Blocks draft fail'));
+      mockCtx.api.raw.sendRichMessageDraft.mockRejectedValueOnce(new Error('HTML draft fail'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const draftId = await reply.sendRichDraft!('draft text');
@@ -236,23 +256,27 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenLastCalledWith({
         chat_id: chatId,
         draft_id: draftId,
-        markdown: expect.any(String),
+        rich_message: expect.any(Object),
       });
+      const parsed = mockCtx.api.raw.sendRichMessageDraft.mock.calls[1][0].rich_message;
+      expect(parsed).toHaveProperty('markdown');
     });
 
-    it('should successfully edit Rich Blocks (Option A)', async () => {
+    it('should successfully edit Rich HTML (Option A)', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       await reply.editRich!(100, '**bold** text');
 
       expect(mockCtx.api.raw.editMessageText).toHaveBeenCalledWith({
         chat_id: chatId,
         message_id: 100,
-        blocks: expect.any(Array),
+        rich_message: expect.any(Object),
       });
+      const parsed = mockCtx.api.raw.editMessageText.mock.calls[0][0].rich_message;
+      expect(parsed).toHaveProperty('html');
     });
 
     it('should fallback to edit Option B (Markdown) if Option A throws', async () => {
-      mockCtx.api.raw.editMessageText.mockRejectedValueOnce(new Error('Blocks edit fail'));
+      mockCtx.api.raw.editMessageText.mockRejectedValueOnce(new Error('HTML edit fail'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       await reply.editRich!(100, '**bold** text');
@@ -261,13 +285,15 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.raw.editMessageText).toHaveBeenLastCalledWith({
         chat_id: chatId,
         message_id: 100,
-        markdown: expect.any(String),
+        rich_message: expect.any(Object),
       });
+      const parsed = mockCtx.api.raw.editMessageText.mock.calls[1][0].rich_message;
+      expect(parsed).toHaveProperty('markdown');
     });
 
     it('should fallback to edit Option C (HTML) if Option A and Option B throw', async () => {
       mockCtx.api.raw.editMessageText
-        .mockRejectedValueOnce(new Error('Blocks edit fail'))
+        .mockRejectedValueOnce(new Error('HTML edit fail'))
         .mockRejectedValueOnce(new Error('Markdown edit fail'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
@@ -276,9 +302,24 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.editMessageText).toHaveBeenCalledWith(
         chatId,
         100,
-        expect.stringContaining('<b>bold</b>'),
+        expect.stringContaining('<strong>bold</strong>'),
         { parse_mode: 'HTML' }
       );
+    });
+
+    it('should redirect sendPlain to sendRichDraft when parseMode is RichText', async () => {
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      const draftId = await reply.sendPlain('streaming text');
+
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+      expect(draftId).toBeDefined();
+    });
+
+    it('should redirect editPlain to sendRichDraft when parseMode is RichText', async () => {
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      await reply.editPlain(100, 'streaming update');
+
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
     });
   });
 });
