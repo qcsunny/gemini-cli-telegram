@@ -7,21 +7,28 @@
 import type { Bot, Context } from 'grammy';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import {
-  DEFAULT_GEMINI_MODEL,
-  DEFAULT_GEMINI_FLASH_MODEL,
-  DEFAULT_GEMINI_FLASH_LITE_MODEL,
-  DEFAULT_GEMINI_MODEL_AUTO,
-  PREVIEW_GEMINI_MODEL,
-  PREVIEW_GEMINI_3_1_MODEL,
-  PREVIEW_GEMINI_FLASH_MODEL,
-  PREVIEW_GEMINI_MODEL_AUTO,
-  getDisplayString,
-} from '@google/gemini-cli-core';
+import * as fs from 'node:fs/promises';
+function getDisplayString(model: string): string {
+  const displayNames: Record<string, string> = {
+    'gemini-1.5-pro': 'Gemini 1.5 Pro',
+    'gemini-1.5-flash': 'Gemini 1.5 Flash',
+    'gemini-2.5-pro': 'Gemini 2.5 Pro',
+    'gemini-2.5-flash': 'Gemini 2.5 Flash',
+    'gemini-3.1-pro-high': 'Gemini 3.1 Pro (High)',
+    'gemini-3.1-pro-low': 'Gemini 3.1 Pro (Low)',
+    'gemini-3.5-flash-high': 'Gemini 3.5 Flash (High)',
+    'gemini-3.5-flash-medium': 'Gemini 3.5 Flash (Medium)',
+    'gemini-3.5-flash-low': 'Gemini 3.5 Flash (Low)',
+    'claude-3-5-sonnet': 'Claude Sonnet 4.6 (Thinking)',
+    'claude-3-opus': 'Claude Opus 4.6 (Thinking)',
+  };
+  return displayNames[model] || model;
+}
 import type { SessionManager } from '../../core/session.js';
 import type { SessionOptions } from '../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../core/resume.js';
 import { logger } from '../../utils/logger.js';
+import { messageCache } from '../../utils/messageCache.js';
 import {
   ICONS,
   buildMainKeyboard,
@@ -35,17 +42,7 @@ import {
   truncate,
   escapeHtml,
 } from './ui.js';
-
-const AVAILABLE_MODELS = [
-  DEFAULT_GEMINI_MODEL_AUTO,
-  DEFAULT_GEMINI_MODEL,
-  DEFAULT_GEMINI_FLASH_MODEL,
-  DEFAULT_GEMINI_FLASH_LITE_MODEL,
-  PREVIEW_GEMINI_MODEL_AUTO,
-  PREVIEW_GEMINI_MODEL,
-  PREVIEW_GEMINI_3_1_MODEL,
-  PREVIEW_GEMINI_FLASH_MODEL,
-];
+import { AVAILABLE_MODELS } from '../../agy/agyCli.js';
 
 const PROJECTS_PER_PAGE = 5;
 
@@ -61,6 +58,15 @@ export function registerCommands(
   // ── Start Command ──
   bot.command('start', async (ctx: Context) => {
     const userName = ctx.from?.first_name;
+    const chatId = ctx.chat?.id;
+    if (chatId) {
+      try {
+        // Ensure session exists without destroying existing history
+        await sessionManager.getOrCreate(chatId, defaultOptions);
+      } catch (e) {
+        logger.error(`Error ensuring session for chat ${chatId} on /start: ${e}`);
+      }
+    }
     await ctx.reply(formatWelcome(userName), {
       parse_mode: 'HTML',
       reply_markup: buildMainKeyboard(),
@@ -73,9 +79,12 @@ export function registerCommands(
     if (!chatId) return;
 
     try {
-      await sessionManager.reset(chatId, defaultOptions);
+      await sessionManager.reset(chatId, {
+        ...defaultOptions,
+        model: 'Gemini 3.1 Pro (High)',
+      });
       await ctx.reply(
-        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
+        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.1 Pro (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
       );
     } catch (e) {
@@ -250,8 +259,8 @@ export function registerCommands(
     }
   });
 
-  // ── Stats ──
-  bot.command('stats', async (ctx: Context) => {
+  // ── Status ──
+  bot.command('status', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
 
@@ -320,6 +329,206 @@ export function registerCommands(
     await ctx.reply(`${ICONS.session} <b>Session ID:</b>\n<code>${session.sessionId}</code>`, {
       parse_mode: 'HTML',
     });
+  });
+
+  // ── Undo ──
+  bot.command('undo', async (ctx: Context) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    const session = sessionManager.getSession(chatId);
+    if (!session) {
+      await ctx.reply(`${ICONS.warning} <b>No active session to undo.</b>`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    if (session.busy) {
+      await ctx.reply(`${ICONS.warning} <b>Session is busy.</b>\nPlease cancel the current operation first.`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    try {
+      if (!session.conversationId) {
+        await ctx.reply(`${ICONS.warning} <b>No conversation history found to undo.</b>`, { parse_mode: 'HTML' });
+        return;
+      }
+
+      const { undoLastTurn } = await import('../../agy/historyManager.js');
+      const success = undoLastTurn(session.conversationId);
+
+      if (success) {
+        await ctx.reply(`${ICONS.success} <b>Undo Successful</b>\n\nI've rolled back the last user message and the subsequent assistant response.`, {
+          parse_mode: 'HTML',
+          reply_markup: buildMainKeyboard(),
+        });
+      } else {
+        await ctx.reply(`${ICONS.warning} <b>No undoable turns or failed to modify history in database.</b>`, { parse_mode: 'HTML' });
+      }
+    } catch (e) {
+      logger.error(`Error performing /undo for chat ${chatId}: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Undo failed:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
+    }
+  });
+
+  // ── Save message to notebook ──
+  bot.command('save', async (ctx: Context) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    const replyToMessage = ctx.message?.reply_to_message;
+    if (!replyToMessage) {
+      await ctx.reply(`${ICONS.warning} <b>Please reply to a message you want to save.</b>`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    let textToSave = messageCache.get(replyToMessage.message_id);
+    if (!textToSave) {
+      textToSave = replyToMessage.text || '';
+    }
+
+    if (!textToSave.trim()) {
+      await ctx.reply(`${ICONS.warning} <b>The replied message has no content to save.</b>`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    try {
+      // Parse first markdown header as title
+      const headerLines = textToSave.split('\n');
+      let rawTitle = '';
+      for (const line of headerLines) {
+        const match = line.match(/^\s*#{1,6}\s+(.+)$/);
+        if (match) {
+          rawTitle = match[1].trim();
+          break;
+        }
+      }
+
+      if (!rawTitle) {
+        for (const line of headerLines) {
+          if (line.trim()) {
+            rawTitle = line.trim();
+            break;
+          }
+        }
+      }
+
+      if (!rawTitle) {
+        rawTitle = 'Saved_Message';
+      }
+
+      // Sanitize filename: keep Chinese, alphanumeric, and spaces
+      let sanitizedTitle = rawTitle.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, '').trim();
+      if (sanitizedTitle.length > 15) {
+        sanitizedTitle = sanitizedTitle.substring(0, 15).trim();
+      }
+
+      if (!sanitizedTitle) {
+        sanitizedTitle = 'Saved_Message';
+      }
+
+      // Replace spaces with underscores
+      sanitizedTitle = sanitizedTitle.replace(/\s+/g, '_');
+
+      // Get YYYYMMDD prefix in local time
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const date = String(now.getDate()).padStart(2, '0');
+      const dateStr = `${year}${month}${date}`;
+
+      const folderPath = '/mnt/pool/1000/jack/00_输入缓冲_Inbox/外部采集_External';
+      const fileName = `${dateStr}_${sanitizedTitle}.md`;
+      const filePath = path.join(folderPath, fileName);
+
+      // Ensure directory exists
+      await fs.mkdir(folderPath, { recursive: true });
+
+      // Save content
+      await fs.writeFile(filePath, textToSave, 'utf8');
+
+      await ctx.reply(`${ICONS.success} <b>Saved to Notebook</b>\n\nSaved successfully to:\n<code>${escapeHtml(filePath)}</code>`, {
+        parse_mode: 'HTML',
+        reply_markup: buildMainKeyboard(),
+      });
+    } catch (e) {
+      logger.error(`Error saving message to notebook: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Save failed:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
+    }
+  });
+
+  // ── Delete Session ──
+  bot.command('delete_session', async (ctx: Context) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
+    if (!arg) {
+      await ctx.reply(`${ICONS.warning} <b>Usage:</b> <code>/delete_session &lt;index&gt;</code>`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    const idx = parseInt(arg, 10);
+    if (isNaN(idx) || idx <= 0) {
+      await ctx.reply(`${ICONS.warning} <b>Please provide a valid session index from /resume.</b>`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    let session;
+    try {
+      session = await sessionManager.getOrCreate(chatId, defaultOptions);
+    } catch (e) {
+      logger.error(`Failed to create session for chat ${chatId}: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Initialization failed:</b> ${e}`);
+      return;
+    }
+
+    if (session.busy) {
+      await ctx.reply(`${ICONS.warning} <b>Session is busy.</b>\nPlease cancel the current operation first.`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    try {
+      const sessions = await listAvailableSessions(session.config);
+      if (idx > sessions.length) {
+        await ctx.reply(`${ICONS.error} <b>Session index ${idx} out of range.</b> Max is ${sessions.length}.`, { parse_mode: 'HTML' });
+        return;
+      }
+
+      const target = sessions[idx - 1];
+      const chatsDir = path.join(session.config.storage.getProjectTempDir(), 'chats');
+      const sessionFilePath = path.join(chatsDir, target.fileName);
+
+      // Check if this was the active session
+      const isActive = session.sessionId === target.id;
+
+      // Delete files
+      await fs.unlink(sessionFilePath);
+
+      const logsDir = path.join(session.config.storage.getProjectTempDir(), 'logs');
+      const logPath = path.join(logsDir, `session-${target.id}.jsonl`);
+      try {
+        await fs.unlink(logPath);
+      } catch {
+        // Ignore if file doesn't exist
+      }
+
+      let activeResetMsg = '';
+      if (isActive) {
+        await sessionManager.reset(chatId, {
+          ...defaultOptions,
+          model: 'Gemini 3.1 Pro (High)',
+        });
+        activeResetMsg = ` This was the active session, so your session has been reset and set to <code>Gemini 3.1 Pro (High)</code>.`;
+      }
+
+      await ctx.reply(`${ICONS.success} <b>Session Deleted</b>\n\nDeleted session ${idx}: "${target.title}".${activeResetMsg}`, {
+        parse_mode: 'HTML',
+        reply_markup: buildMainKeyboard(),
+      });
+    } catch (e) {
+      logger.error(`Error deleting session ${idx} for chat ${chatId}: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Delete failed:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
+    }
   });
 
   // ── Help ──
@@ -556,17 +765,6 @@ export function registerCommands(
     const projectManager = sessionManager.getProjectManager();
     let projects = projectManager.getProjects();
 
-    // If no projects saved, scan home directory
-    if (projects.length === 0) {
-      await ctx.reply(`${ICONS.loading} <b>Scanning for projects...</b>`, { parse_mode: 'HTML' });
-      try {
-        projects = await projectManager.scanDirectory(os.homedir(), 3);
-        await projectManager.saveProjects();
-      } catch (e) {
-        logger.error(`Failed to scan projects: ${e}`);
-      }
-    }
-
     if (projects.length === 0) {
       await ctx.reply(`${ICONS.info} <b>No projects found.</b>\n\nUse <code>/project_browse &lt;path&gt;</code> to find and add project directories.`, {
         parse_mode: 'HTML',
@@ -689,7 +887,7 @@ export function registerCommands(
 
     // Handle navigation callbacks
     if (data === '/start') {
-      await ctx.answerCallbackQuery('Main Menu');
+      ctx.answerCallbackQuery('Main Menu').catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(formatWelcome(ctx.from?.first_name), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
@@ -698,29 +896,26 @@ export function registerCommands(
     }
 
     if (data === '/new') {
-      await ctx.answerCallbackQuery('Resetting session...');
+      ctx.answerCallbackQuery('Resetting session...').catch(e => logger.error(`Failed callback: ${e}`));
       try {
-        await sessionManager.reset(chatId, defaultOptions);
+        await sessionManager.reset(chatId, {
+          ...defaultOptions,
+          model: 'Gemini 3.1 Pro (High)',
+        });
         await ctx.editMessageText(
-          `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
+          `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.1 Pro (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
           { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
         );
       } catch (e) {
-        await ctx.answerCallbackQuery('Failed to reset session');
+        logger.error(`Failed to reset session: ${e}`);
       }
       return;
     }
 
     if (data === '/projects') {
-      await ctx.answerCallbackQuery('Loading workspaces...');
-      // Reuse the projects command logic
+      ctx.answerCallbackQuery('Loading workspaces...').catch(e => logger.error(`Failed callback: ${e}`));
       const projectManager = sessionManager.getProjectManager();
-      let projects = projectManager.getProjects();
-
-      if (projects.length === 0) {
-        projects = await projectManager.scanDirectory(os.homedir(), 3);
-        await projectManager.saveProjects();
-      }
+      const projects = projectManager.getProjects();
 
       if (projects.length === 0) {
         await ctx.editMessageText(`${ICONS.info} <b>No projects found.</b>`, {
@@ -749,7 +944,7 @@ export function registerCommands(
     }
 
     if (data === '/model') {
-      await ctx.answerCallbackQuery('Loading models...');
+      ctx.answerCallbackQuery('Loading models...').catch(e => logger.error(`Failed callback: ${e}`));
       const session = sessionManager.getSession(chatId);
       const currentModel = session?.config.getModel() || 'unknown';
 
@@ -770,13 +965,11 @@ export function registerCommands(
     }
 
     if (data === '/resume') {
-      await ctx.answerCallbackQuery('Loading sessions...');
-      // Reuse resume logic
+      ctx.answerCallbackQuery('Loading sessions...').catch(e => logger.error(`Failed callback: ${e}`));
       let session;
       try {
         session = await sessionManager.getOrCreate(chatId, defaultOptions);
       } catch {
-        await ctx.answerCallbackQuery('Failed to load sessions');
         return;
       }
 
@@ -803,14 +996,14 @@ export function registerCommands(
             reply_markup: buildResumeKeyboard(sessionItems),
           },
         );
-      } catch {
-        await ctx.answerCallbackQuery('Failed to list sessions');
+      } catch (e) {
+        logger.error(`Failed to load sessions: ${e}`);
       }
       return;
     }
 
-    if (data === '/stats') {
-      await ctx.answerCallbackQuery('Loading stats...');
+    if (data === '/status') {
+      ctx.answerCallbackQuery('Loading status...').catch(e => logger.error(`Failed callback: ${e}`));
       const session = sessionManager.getSession(chatId);
       if (!session) {
         await ctx.editMessageText(`${ICONS.warning} <b>No active session.</b>`, {
@@ -837,7 +1030,7 @@ export function registerCommands(
     }
 
     if (data === '/help') {
-      await ctx.answerCallbackQuery('Loading Help...');
+      ctx.answerCallbackQuery('Loading Help...').catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(formatHelp(), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
@@ -846,8 +1039,8 @@ export function registerCommands(
     }
 
     if (data === '/project_browse') {
-      await ctx.answerCallbackQuery('Browsing...');
-      const browsePath = os.homedir();
+      ctx.answerCallbackQuery('Browsing...').catch(e => logger.error(`Failed callback: ${e}`));
+      const browsePath = path.join(os.homedir(), 'Documents');
       
       // Update message to show scanning status
       await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });
@@ -890,8 +1083,53 @@ export function registerCommands(
       return;
     }
 
+    if (data === '/project_scan_documents') {
+      ctx.answerCallbackQuery('Scanning Documents...').catch(e => logger.error(`Failed callback: ${e}`));
+      const scanPath = path.join(os.homedir(), 'Documents');
+      
+      // Update message to show scanning status
+      await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(scanPath)}</code>`, { parse_mode: 'HTML' });
+
+      try {
+        const projectManager = sessionManager.getProjectManager();
+        const projects = await projectManager.scanDirectory(scanPath, 3);
+        await projectManager.saveProjects();
+
+        if (projects.length === 0) {
+          await ctx.editMessageText(`${ICONS.info} <b>No projects found</b> in <code>${escapeHtml(scanPath)}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
+            parse_mode: 'HTML',
+            reply_markup: buildMainKeyboard(),
+          });
+          return;
+        }
+
+        const session = sessionManager.getSession(chatId);
+        const currentProjectId = session?.currentProject?.id;
+
+        await ctx.editMessageText(
+          `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects in <code>${escapeHtml(scanPath)}</code>. Select one to activate:`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: buildProjectKeyboard(
+              projects.slice(0, PROJECTS_PER_PAGE),
+              projects.length > PROJECTS_PER_PAGE,
+              0,
+              currentProjectId,
+            ),
+          },
+        );
+      } catch (e) {
+        logger.error(`Error scanning Documents: ${e}`);
+        await ctx.editMessageText(`${ICONS.error} <b>Failed to scan Documents.</b>`, {
+          parse_mode: 'HTML',
+          reply_markup: buildMainKeyboard(),
+        });
+      }
+      return;
+    }
+
     if (data === '/schedule') {
-      await ctx.answerCallbackQuery('Loading Scheduler...');
+      ctx.answerCallbackQuery('Loading Scheduler...').catch(e => logger.error(`Failed callback: ${e}`));
       const scheduler = sessionManager.getChatScheduler();
       const tasks = scheduler.getTasksForChat(chatId);
 
@@ -927,7 +1165,7 @@ export function registerCommands(
     }
 
     if (data === '/autopilot') {
-      await ctx.answerCallbackQuery('Autopilot Mode');
+      ctx.answerCallbackQuery('Autopilot Mode').catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(
         `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until done (max 10 iterations)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately`,
         {
@@ -947,10 +1185,11 @@ export function registerCommands(
           ? AVAILABLE_MODELS[num - 1]
           : modelArg;
 
+      ctx.answerCallbackQuery(`Brain: ${modelName}`).catch(e => logger.error(`Failed callback: ${e}`));
+
       try {
         const session = await sessionManager.getOrCreate(chatId, defaultOptions);
         session.config.setModel(modelName, false);
-        await ctx.answerCallbackQuery(`Brain: ${modelName}`);
         await ctx.editMessageText(
           `${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${modelName}</code>`,
           {
@@ -959,7 +1198,7 @@ export function registerCommands(
           },
         );
       } catch {
-        await ctx.answerCallbackQuery('Switch failed');
+        logger.error('Switch failed');
       }
       return;
     }
@@ -971,9 +1210,11 @@ export function registerCommands(
       const project = projectManager.getProject(projectId);
 
       if (!project) {
-        await ctx.answerCallbackQuery('Project not found');
+        ctx.answerCallbackQuery('Project not found').catch(e => logger.error(`Failed callback: ${e}`));
         return;
       }
+
+      ctx.answerCallbackQuery(`Workspace: ${project.name}`).catch(e => logger.error(`Failed callback: ${e}`));
 
       try {
         await sessionManager.reset(chatId, {
@@ -981,7 +1222,6 @@ export function registerCommands(
           project,
         });
 
-        await ctx.answerCallbackQuery(`Workspace: ${project.name}`);
         await ctx.editMessageText(
           `${ICONS.success} <b>Workspace Switched</b>\n\n${formatProjectInfo(project)}`,
           {
@@ -990,7 +1230,7 @@ export function registerCommands(
           },
         );
       } catch {
-        await ctx.answerCallbackQuery('Switch failed');
+        logger.error('Switch failed');
       }
       return;
     }
@@ -1005,7 +1245,7 @@ export function registerCommands(
       const session = sessionManager.getSession(chatId);
       const currentProjectId = session?.currentProject?.id;
 
-      await ctx.answerCallbackQuery(`Page ${page + 1}`);
+      ctx.answerCallbackQuery(`Page ${page + 1}`).catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(
         `${ICONS.project} <b>Workspace Manager</b> (Page ${page + 1})\n\nSelect a project:`,
         {
@@ -1021,6 +1261,6 @@ export function registerCommands(
       return;
     }
 
-    await ctx.answerCallbackQuery();
+    ctx.answerCallbackQuery().catch(e => logger.error(`Failed callback: ${e}`));
   });
 }

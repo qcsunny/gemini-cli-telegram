@@ -7,39 +7,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processMessage } from './messageLoop.js';
 import type { MultimodalInput } from './types.js';
-import { GeminiEventType } from '@google/gemini-cli-core';
-import * as fs from 'fs/promises';
 
-vi.mock('fs/promises');
+// Mock agyCli module
+vi.mock('../agy/agyCli.js', () => ({
+  runAgyPrint: vi.fn(),
+}));
+
+// Mock conversationStore module
+vi.mock('../agy/conversationStore.js', () => ({
+  setConversation: vi.fn(),
+}));
+
+import { runAgyPrint } from '../agy/agyCli.js';
+import { setConversation } from '../agy/conversationStore.js';
 
 describe('processMessage', () => {
   let mockSession: any;
   let mockReply: any;
   let mockFormatter: any;
-  let mockGeminiClient: any;
 
   beforeEach(() => {
     vi.resetAllMocks();
 
-    mockGeminiClient = {
-      sendMessageStream: vi.fn(),
-      getChat: vi.fn().mockReturnValue({
-        recordCompletedToolCalls: vi.fn(),
-      }),
-      getCurrentSequenceModel: vi.fn(),
-    };
-
     mockSession = {
-      sessionId: 'test-session',
-      geminiClient: mockGeminiClient,
-      scheduler: {
-        schedule: vi.fn(),
+      sessionId: '123456',
+      conversationId: 'test-conv-id',
+      model: 'test-model',
+      currentProject: {
+        path: '/test/project/path',
       },
       abortController: new AbortController(),
-      config: {
-        getModel: vi.fn().mockReturnValue('test-model'),
-      },
       turnCount: 0,
+      busy: false,
     };
 
     mockReply = {
@@ -47,7 +46,6 @@ describe('processMessage', () => {
       edit: vi.fn(),
       sendPlain: vi.fn().mockResolvedValue(456),
       editPlain: vi.fn(),
-      sendDocument: vi.fn(),
       delete: vi.fn(),
     };
 
@@ -57,71 +55,129 @@ describe('processMessage', () => {
     };
   });
 
-  it('should process text-only input', async () => {
+  it('should process text-only input and stream response', async () => {
     const input: MultimodalInput = { text: 'hello' };
-    
-    mockGeminiClient.sendMessageStream.mockReturnValue((async function* () {
-      yield { type: GeminiEventType.Content, value: 'Hi there!' };
-    })());
+
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      // Simulate onChunk callback being triggered
+      if (options.onChunk) {
+        options.onChunk('Hi ');
+        options.onChunk('there!');
+      }
+      return {
+        output: 'Hi there!',
+        conversationId: 'updated-conv-id',
+        exitCode: 0,
+      };
+    });
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi there!');
-    expect(mockReply.edit).toHaveBeenCalledWith(expect.any(Number), 'Hi there!');
+    expect(runAgyPrint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: 'hello',
+        cwd: '/test/project/path',
+        conversationId: 'test-conv-id',
+        model: 'test-model',
+      })
+    );
+
+    // During streaming
+    expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi ');
+
+    // After completion (final rendering)
+    expect(mockReply.edit).toHaveBeenCalledWith(456, 'Hi there!');
+    expect(mockSession.conversationId).toBe('updated-conv-id');
+    expect(setConversation).toHaveBeenCalledWith(123456, 'updated-conv-id', '/test/project/path', 'test-model');
   });
 
-  it('should process multimodal input with images', async () => {
-    const input: MultimodalInput = {
-      text: 'What is this?',
-      media: [{ type: 'photo', path: 'test.jpg', mimeType: 'image/jpeg' }]
-    };
+  it('should automatically fallback to a lower model when rate limit (429) is hit', async () => {
+    mockSession.model = 'Gemini 3.1 Pro (High)';
+    const input: MultimodalInput = { text: 'hello fallback' };
 
-    vi.mocked(fs.readFile).mockResolvedValue(Buffer.from('fake-image-data'));
-
-    mockGeminiClient.sendMessageStream.mockReturnValue((async function* () {
-      yield { type: GeminiEventType.Content, value: 'It is a test image.' };
-    })());
+    let callCount = 0;
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          output: '',
+          stderr: 'Error: Resource exhausted (429) - Quota limit reached.',
+          conversationId: 'test-conv-id',
+          exitCode: 1,
+        };
+      } else {
+        if (options.onChunk) {
+          options.onChunk('Hi fallback!');
+        }
+        return {
+          output: 'Hi fallback!',
+          conversationId: 'fallback-conv-id',
+          exitCode: 0,
+        };
+      }
+    });
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    expect(fs.readFile).toHaveBeenCalledWith('test.jpg');
-    expect(mockReply.sendPlain).toHaveBeenCalledWith('It is a test image.');
-    expect(mockReply.edit).toHaveBeenCalledWith(expect.any(Number), 'It is a test image.');
+    // Should have called runAgyPrint twice
+    expect(runAgyPrint).toHaveBeenCalledTimes(2);
+
+    // First call uses original model
+    expect(runAgyPrint).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        model: 'Gemini 3.1 Pro (High)',
+      })
+    );
+
+    // Second call uses fallback model
+    expect(runAgyPrint).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        model: 'Gemini 3.5 Flash (High)',
+      })
+    );
+
+    // Warning should have been sent to channel
+    expect(mockReply.send).toHaveBeenCalledWith(
+      expect.stringContaining('Gemini 3.1 Pro (High)')
+    );
+    expect(mockReply.send).toHaveBeenCalledWith(
+      expect.stringContaining('Gemini 3.5 Flash (High)')
+    );
+
+    // Session model must have updated
+    expect(mockSession.model).toBe('Gemini 3.5 Flash (High)');
+    expect(mockSession.conversationId).toBe('fallback-conv-id');
+
+    // Conversation should be saved to database with fallback model
+    expect(setConversation).toHaveBeenCalledWith(
+      123456,
+      'fallback-conv-id',
+      '/test/project/path',
+      'Gemini 3.5 Flash (High)'
+    );
   });
 
-  it('should process multimodal input with audio', async () => {
+  it('should format multimodal input into the prompt', async () => {
     const input: MultimodalInput = {
-      media: [{ type: 'voice', path: 'test.ogg', mimeType: 'audio/ogg' }]
+      text: 'Describe this image',
+      media: [{ type: 'photo', path: '/local/test.jpg', mimeType: 'image/jpeg', fileName: 'test.jpg' }],
     };
 
-    vi.mocked(fs.readFile).mockResolvedValue(Buffer.from('fake-audio-data'));
-
-    mockGeminiClient.sendMessageStream.mockReturnValue((async function* () {
-      yield { type: GeminiEventType.Content, value: 'I heard some audio.' };
-    })());
+    vi.mocked(runAgyPrint).mockResolvedValue({
+      output: 'It is a beautiful landscape.',
+      conversationId: 'updated-conv-id',
+      exitCode: 0,
+    });
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    expect(fs.readFile).toHaveBeenCalledWith('test.ogg');
-    expect(mockReply.sendPlain).toHaveBeenCalledWith('I heard some audio.');
-    expect(mockReply.edit).toHaveBeenCalledWith(expect.any(Number), 'I heard some audio.');
-  });
-
-  it('should handle file read errors gracefully', async () => {
-    const input: MultimodalInput = {
-      media: [{ type: 'photo', path: 'invalid.jpg', mimeType: 'image/jpeg' }]
-    };
-
-    vi.mocked(fs.readFile).mockRejectedValue(new Error('File not found'));
-
-    mockGeminiClient.sendMessageStream.mockReturnValue((async function* () {
-      yield { type: GeminiEventType.Content, value: 'I see nothing.' };
-    })());
-
-    await processMessage(mockSession, input, mockReply, mockFormatter);
-
-    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('Failed to process file'));
-    // It should still continue with the parts it has (which might be empty if only one part failed)
-    expect(mockGeminiClient.sendMessageStream).toHaveBeenCalled();
+    const expectedPrompt = '[本地关联文件 - 类型: photo, 物理路径: "/local/test.jpg", 原始文件名: "test.jpg"]\n\nDescribe this image';
+    expect(runAgyPrint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expectedPrompt,
+      })
+    );
   });
 });
