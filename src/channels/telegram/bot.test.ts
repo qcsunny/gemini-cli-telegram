@@ -181,9 +181,16 @@ describe('TelegramBot', () => {
     it('should pass message_thread_id if available in the context', async () => {
       mockCtx.message = { message_thread_id: 42 };
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
-      await reply.sendRich!('Hello Forum!');
       
+      await reply.sendRich!('Hello Forum!');
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: chatId,
+        message_thread_id: 42,
+        rich_message: { html: expect.any(String) }
+      }));
+
+      await reply.sendRichDraft!('Hello Draft!');
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledWith(expect.objectContaining({
         chat_id: chatId,
         message_thread_id: 42,
         rich_message: { html: expect.any(String) }
@@ -320,6 +327,23 @@ describe('TelegramBot', () => {
       await reply.editPlain(100, 'streaming update');
 
       expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+    });
+
+    it('should trigger circuit breaker and fall back to plain editing if sendRichDraft fails twice', async () => {
+      mockCtx.api.raw.sendRichMessageDraft.mockRejectedValue(new Error('Draft rate limit'));
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      
+      // Attempt sending drafts, which fail
+      await reply.sendPlain('stream chunk 1');
+      await reply.editPlain(100, 'stream chunk 2');
+
+      // Verify it handles failures gracefully and does not throw to the caller
+      expect(mockCtx.reply).toHaveBeenCalled();
+      
+      // Verify subsequent calls directly bypass sendRichMessageDraft (it won't be called more times after threshold is hit)
+      mockCtx.api.raw.sendRichMessageDraft.mockClear();
+      await reply.sendPlain('stream chunk 3');
+      expect(mockCtx.api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
     });
   });
 });
