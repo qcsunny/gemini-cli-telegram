@@ -108,9 +108,9 @@ Thanks for reading! 🚀
     expect(blocks.length).toBeGreaterThan(0);
   });
 
-  it('should format footers into native <footer> tags', () => {
+  it('should format footers with standard Telegram tags', () => {
     const input = 'This is the main response.\n\n[footer: Gemini 3.5 Flash (Medium) | 120 | 250 | $0.000084]';
     const html = markdownToHtml(input);
-    expect(html).toContain('<footer>🤖 运行模型: Gemini 3.5 Flash (Medium) | 📊 消耗 Token: 输入 120 + 输出 250 = 370 | 💰 消费金额: $0.000084</footer>');
+    expect(html).toContain('<i>🤖 运行模型: <code>Gemini 3.5 Flash (Medium)</code> | 📊 消耗 Token: <code>输入 120 + 输出 250 = 370</code> | 💰 消费金额: <code>$0.000084</code></i>');
   });
 });

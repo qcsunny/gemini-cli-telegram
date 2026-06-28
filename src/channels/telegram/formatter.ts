@@ -22,9 +22,9 @@ type MarkdownStyle =
   | 'blockquote'
   | 'spoiler';
 
-type StyleSpan = { start: number; end: number; style: MarkdownStyle };
+type StyleSpan = { start: number; end: number; style: MarkdownStyle; info?: string };
 type LinkSpan = { start: number; end: number; href: string };
-type MarkdownIR = { text: string; styles: StyleSpan[]; links: LinkSpan[] };
+type MarkdownIR = { text: string; styles: StyleSpan[]; links: LinkSpan[]; tables?: string[] };
 
 type MarkdownToken = {
   type: string;
@@ -46,11 +46,24 @@ type RenderTarget = {
   openStyles: { style: MarkdownStyle; start: number }[];
   links: LinkSpan[];
   linkStack: { href: string; labelStart: number }[];
+  tables?: string[];
 };
 
 type RenderState = RenderTarget & {
   listStack: ListState[];
 };
+
+function getAlignAttr(token: MarkdownToken): string | null {
+  const style = getAttr(token, 'style');
+  if (style) {
+    if (style.includes('text-align:center') || style.includes('text-align: center')) return 'center';
+    if (style.includes('text-align:right') || style.includes('text-align: right')) return 'right';
+    if (style.includes('text-align:left') || style.includes('text-align: left')) return 'left';
+  }
+  const align = getAttr(token, 'align');
+  if (align) return align;
+  return null;
+}
 
 // ── Telegram formatter (message chunking) ──
 
@@ -333,67 +346,118 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         state.styles.push({
           start,
           end: start + code.length,
-          style: 'code',
+          style: 'code_block',
+          info: token.info || undefined,
         });
         if (state.listStack.length === 0) state.text += '\n';
         break;
       }
       case 'table_open': {
-        const grid: string[][] = [];
-        let currentRow: string[] = [];
-        let j = i + 1;
-        while (j < tokens.length && tokens[j].type !== 'table_close') {
-          const t = tokens[j];
-          if (t.type === 'tr_open') {
-            currentRow = [];
-          } else if (t.type === 'tr_close') {
-            grid.push(currentRow);
-          } else if (t.type === 'inline') {
-            const cellState: RenderState = {
-              text: '',
-              styles: [],
-              openStyles: [],
-              links: [],
-              linkStack: [],
-              listStack: [],
-            };
-            if (t.children) {
-              renderTokens(t.children, cellState);
-            }
-            currentRow.push(cellState.text.trim());
-          }
-          j++;
-        }
-        i = j;
+        if (state.tables !== undefined) {
+          let tableHtml = '<table bordered striped>';
+          let j = i + 1;
+          let currentAlign: string | null = null;
+          let isHeader = false;
 
-        if (grid.length > 0) {
-          const colWidths: number[] = [];
-          for (const row of grid) {
-            for (let c = 0; c < row.length; c++) {
-              colWidths[c] = Math.max(colWidths[c] || 0, (row[c] || '').length);
+          while (j < tokens.length && tokens[j].type !== 'table_close') {
+            const t = tokens[j];
+            if (t.type === 'thead_open') {
+              tableHtml += '<thead>';
+            } else if (t.type === 'thead_close') {
+              tableHtml += '</thead>';
+            } else if (t.type === 'tbody_open') {
+              tableHtml += '<tbody>';
+            } else if (t.type === 'tbody_close') {
+              tableHtml += '</tbody>';
+            } else if (t.type === 'tr_open') {
+              tableHtml += '<tr>';
+            } else if (t.type === 'tr_close') {
+              tableHtml += '</tr>';
+            } else if (t.type === 'th_open' || t.type === 'td_open') {
+              isHeader = t.type === 'th_open';
+              currentAlign = getAlignAttr(t);
+            } else if (t.type === 'inline') {
+              const cellState: RenderState = {
+                text: '',
+                styles: [],
+                openStyles: [],
+                links: [],
+                linkStack: [],
+                listStack: [],
+              };
+              if (t.children) {
+                renderTokens(t.children, cellState);
+              }
+              const cellHtml = renderIRToHtml(cellState);
+              const tag = isHeader ? 'th' : 'td';
+              const alignAttr = currentAlign ? ` align="${currentAlign}"` : '';
+              tableHtml += `<${tag}${alignAttr}>${cellHtml}</${tag}>`;
             }
+            j++;
           }
+          i = j;
+          tableHtml += '</table>';
 
-          let tableText = '';
-          for (let r = 0; r < grid.length; r++) {
-            const row = grid[r];
-            const formattedCells = row.map((cell, c) => cell.padEnd(colWidths[c]));
-            tableText += '| ' + formattedCells.join(' | ') + ' |\n';
-            if (r === 0) {
-              const separatorCells = colWidths.map(w => '-'.repeat(w));
-              tableText += '| ' + separatorCells.join(' | ') + ' |\n';
+          const placeholderIdx = state.tables.length;
+          state.tables.push(tableHtml);
+          state.text += `\n___TELEGRAM_TABLE_PLACEHOLDER_${placeholderIdx}___\n`;
+        } else {
+          const grid: string[][] = [];
+          let currentRow: string[] = [];
+          let j = i + 1;
+          while (j < tokens.length && tokens[j].type !== 'table_close') {
+            const t = tokens[j];
+            if (t.type === 'tr_open') {
+              currentRow = [];
+            } else if (t.type === 'tr_close') {
+              grid.push(currentRow);
+            } else if (t.type === 'inline') {
+              const cellState: RenderState = {
+                text: '',
+                styles: [],
+                openStyles: [],
+                links: [],
+                linkStack: [],
+                listStack: [],
+              };
+              if (t.children) {
+                renderTokens(t.children, cellState);
+              }
+              currentRow.push(cellState.text.trim());
             }
+            j++;
           }
+          i = j;
 
-          const start = state.text.length;
-          const wrappedTableText = `\n${tableText}`;
-          state.text += wrappedTableText;
-          state.styles.push({
-            start: start + 1,
-            end: start + wrappedTableText.length,
-            style: 'code',
-          });
-          state.text += '\n';
+          if (grid.length > 0) {
+            const colWidths: number[] = [];
+            for (const row of grid) {
+              for (let c = 0; c < row.length; c++) {
+                colWidths[c] = Math.max(colWidths[c] || 0, (row[c] || '').length);
+              }
+            }
+
+            let tableText = '';
+            for (let r = 0; r < grid.length; r++) {
+              const row = grid[r];
+              const formattedCells = row.map((cell, c) => cell.padEnd(colWidths[c]));
+              tableText += '| ' + formattedCells.join(' | ') + ' |\n';
+              if (r === 0) {
+                const separatorCells = colWidths.map(w => '-'.repeat(w));
+                tableText += '| ' + separatorCells.join(' | ') + ' |\n';
+              }
+            }
+
+            const start = state.text.length;
+            const wrappedTableText = `\n${tableText}`;
+            state.text += wrappedTableText;
+            state.styles.push({
+              start: start + 1,
+              end: start + wrappedTableText.length,
+              style: 'code',
+            });
+            state.text += '\n';
+          }
         }
         break;
       }
@@ -411,7 +475,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
   }
 }
 
-function markdownToIR(markdown: string): MarkdownIR {
+function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
   const tokens = md.parse(markdown ?? '', {}) as any as MarkdownToken[];
   const state: RenderState = {
     text: '',
@@ -420,6 +484,7 @@ function markdownToIR(markdown: string): MarkdownIR {
     links: [],
     linkStack: [],
     listStack: [],
+    tables: isHtml ? [] : undefined,
   };
 
   renderTokens(tokens as MarkdownToken[], state);
@@ -437,7 +502,7 @@ function markdownToIR(markdown: string): MarkdownIR {
   }
 
   const trimmed = state.text.trimEnd();
-  return { text: trimmed, styles: state.styles, links: state.links };
+  return { text: trimmed, styles: state.styles, links: state.links, tables: state.tables };
 }
 
 // ── IR → Telegram HTML ──
@@ -558,11 +623,22 @@ function renderIRToHtml(ir: MarkdownIR): string {
     const openStyles = startsAt.get(pos);
     if (openStyles) {
       for (const [index, span] of openStyles.entries()) {
-        const m = STYLE_MARKERS[span.style];
+        let openMarker = '';
+        let closeMarker = '';
+        if (span.style === 'code_block') {
+          const lang = span.info ? escapeHtmlAttr(span.info) : '';
+          const classAttr = lang ? ` class="language-${lang}"` : '';
+          openMarker = `<pre><code${classAttr}>`;
+          closeMarker = '</code></pre>';
+        } else {
+          const m = STYLE_MARKERS[span.style];
+          openMarker = m.open;
+          closeMarker = m.close;
+        }
         openItems.push({
           end: span.end,
-          open: m.open,
-          close: m.close,
+          open: openMarker,
+          close: closeMarker,
           kind: 'style',
           style: span.style,
           index,
@@ -598,18 +674,33 @@ function renderIRToHtml(ir: MarkdownIR): string {
 }
 
 export function markdownToHtml(markdown: string): string {
-  const ir = markdownToIR(markdown);
+  const ir = markdownToIR(markdown, true);
   let html = renderIRToHtml(ir);
-  // Convert blockquotes with [details] marker into expandable blockquotes, stripping the marker
-  html = html.replace(/<blockquote>([\s\S]*?)\s*\[details\]\s*([\s\S]*?)<\/blockquote>/gi, '<blockquote expandable>$1$2</blockquote>');
+
+  if (ir.tables && ir.tables.length > 0) {
+    for (let idx = 0; idx < ir.tables.length; idx++) {
+      html = html.replace(`___TELEGRAM_TABLE_PLACEHOLDER_${idx}___`, ir.tables[idx]);
+    }
+  }
+
+  // Convert blockquotes with [details] marker into collapsible details block, stripping the marker
+  html = html.replace(/<blockquote>([\s\S]*?)\[details\]\s*([^\n<]*?)(?:<br\s*\/?>|\n)?([\s\S]*?)<\/blockquote>/gi, (match, p1, p2, p3) => {
+    const summary = p2.trim() || '点击展开';
+    return `<details><summary>${summary}</summary>${p3}</details>`;
+  });
+
   html = html.replace(/\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)\]/gi, (match, model, inputTokens, outputTokens, cost) => {
     const m = model.trim();
     const i = inputTokens.trim();
     const o = outputTokens.trim();
     const c = cost.trim();
     const totalTokens = Number(i) + Number(o);
-    return `<footer>🤖 运行模型: ${m} | 📊 消耗 Token: 输入 ${i} + 输出 ${o} = ${totalTokens} | 💰 消费金额: ${c}</footer>`;
+    return `\n\n<i>🤖 运行模型: <code>${m}</code> | 📊 消耗 Token: <code>输入 ${i} + 输出 ${o} = ${totalTokens}</code> | 💰 消费金额: <code>${c}</code></i>`;
   });
+
+  html = convertMath(html);
+  html = convertNewlines(html);
+
   return html;
 }
 
@@ -706,15 +797,13 @@ function renderIRToMarkdownV2(ir: MarkdownIR): string {
       for (const [index, span] of openStyles.entries()) {
         let openMarker = '';
         let closeMarker = '';
-        if (span.style === 'code') {
-          const codeContent = text.slice(span.start, span.end);
-          if (codeContent.includes('\n')) {
-            openMarker = '```\n';
-            closeMarker = '```';
-          } else {
-            openMarker = '`';
-            closeMarker = '`';
-          }
+        if (span.style === 'code_block') {
+          const lang = span.info ? escapeMarkdownV2(span.info) : '';
+          openMarker = `\`\`\`${lang}\n`;
+          closeMarker = '```';
+        } else if (span.style === 'code') {
+          openMarker = '`';
+          closeMarker = '`';
         } else if (span.style === 'bold') {
           openMarker = '*';
           closeMarker = '*';
@@ -764,7 +853,7 @@ function renderIRToMarkdownV2(ir: MarkdownIR): string {
     if (next === undefined) break;
     if (next > pos) {
       const segment = text.slice(pos, next);
-      const isInsideCode = stack.some(item => item.style === 'code');
+      const isInsideCode = stack.some(item => item.style === 'code' || item.style === 'code_block');
       if (isInsideCode) {
         out += segment;
       } else {
@@ -938,3 +1027,25 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
 
   return blocks;
 }
+
+function convertMath(html: string): string {
+  const parts = html.split(/(<pre[\s\S]*?<\/pre>)/gi);
+  return parts.map(part => {
+    if (/^<pre/i.test(part.trim())) return part;
+    let content = part;
+    content = content.replace(/\$\$([\s\S]+?)\$\$/g, '<tg-math-block>$1</tg-math-block>');
+    content = content.replace(/\$([^\s$](?:[^$\n\r]*?[^\s$])?)\$/g, '<tg-math>$1</tg-math>');
+    return content;
+  }).join('');
+}
+
+function convertNewlines(html: string): string {
+  const parts = html.split(/(<pre[\s\S]*?<\/pre>|<table[\s\S]*?<\/table>|<tg-math-block[\s\S]*?<\/tg-math-block>)/gi);
+  return parts.map(part => {
+    if (/^<(pre|table|tg-math-block)/i.test(part.trim())) return part;
+    let content = part;
+    content = content.replace(/\n/g, '<br>');
+    return content;
+  }).join('');
+}
+

@@ -21,15 +21,10 @@ import type {
   MultimodalInput,
 } from '../../core/types.js';
 import { registerCommands } from './commands.js';
-import {
-  telegramFormatter,
-  markdownToHtml,
-  markdownToMarkdownV2,
-} from './formatter.js';
-import { formatError } from '../../utils/error.js';
-import { messageCache } from '../../utils/messageCache.js';
+import { telegramFormatter, markdownToHtml, markdownToMarkdownV2 } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
+import { messageCache } from '../../utils/messageCache.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
 const TYPING_TTL_MS = 3_600_000; // Safety: auto-stop typing after 1 hour
@@ -68,15 +63,9 @@ export function getSequentialKey(ctx: any): string | undefined {
 
 
 function prepareTelegramMarkdown(markdown: string): string {
-  // Convert math delimiters to Telegram supported ones ($ and $$)
   let text = markdown;
-  
-  // Replace block math: \[ ... \] -> $$ ... $$
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$');
-  
-  // Replace inline math: \( ... \) -> $ ... $
   text = text.replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
-
   const lines = text.split('\n');
   const fixedLines = lines.map(line => {
     if (line.includes('|')) {
@@ -85,17 +74,11 @@ function prepareTelegramMarkdown(markdown: string): string {
         if (index === 0 || index === parts.length - 1) return part;
         let fixed = part;
         const backtickCount = (fixed.match(/`/g) || []).length;
-        if (backtickCount % 2 !== 0) {
-          fixed = fixed.replace(/`/g, '');
-        }
+        if (backtickCount % 2 !== 0) fixed = fixed.replace(/`/g, '');
         const underscoreCount = (fixed.match(/_/g) || []).length;
-        if (underscoreCount % 2 !== 0) {
-          fixed = fixed.replace(/_/g, '');
-        }
+        if (underscoreCount % 2 !== 0) fixed = fixed.replace(/_/g, '');
         const starCount = (fixed.match(/\*/g) || []).length;
-        if (starCount % 2 !== 0) {
-          fixed = fixed.replace(/\*/g, '');
-        }
+        if (starCount % 2 !== 0) fixed = fixed.replace(/\*/g, '');
         return fixed;
       });
       return fixedParts.join('|');
@@ -110,36 +93,36 @@ const draftIds = new Map<number, number>();
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  */
-function buildChannelReply(
+export function buildChannelReply(
   ctx: Context,
   chatId: number,
-  parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'HTML',
+  parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'RichText',
 ): ChannelReply {
   const safeEdit = async (messageId: number, text: string, html = true) => {
     try {
       if (html) {
-        if (parseMode === 'MarkdownV2') {
-          await ctx.api.editMessageText(chatId, messageId, markdownToMarkdownV2(text), {
-            parse_mode: 'MarkdownV2',
-          });
-        } else {
-          await ctx.api.editMessageText(chatId, messageId, markdownToHtml(text), {
-            parse_mode: 'HTML',
-          });
-        }
+        await ctx.api.editMessageText(chatId, messageId, markdownToHtml(text), {
+          parse_mode: 'HTML',
+        });
       } else {
         await ctx.api.editMessageText(chatId, messageId, text);
       }
+      messageCache.set(messageId, text);
     } catch (e: any) {
       if (e?.description?.includes('message is not modified')) {
+        messageCache.set(messageId, text);
         return;
       }
       if (html) {
+        // Fallback to plain text if HTML fails
         try {
           await ctx.api.editMessageText(chatId, messageId, text);
+          messageCache.set(messageId, text);
         } catch (e2: any) {
           if (!e2?.description?.includes('message is not modified')) {
             logger.warn(`Failed to edit message ${messageId}: ${e2}`);
+          } else {
+            messageCache.set(messageId, text);
           }
         }
       } else {
@@ -148,21 +131,143 @@ function buildChannelReply(
     }
   };
 
-  return {
+
+  const replyObj: ChannelReply = {
+    sendRich: async (originalText: string): Promise<number> => {
+      // Option A: Native Rich HTML (Telegram parses this on the server)
+      try {
+        const html = markdownToHtml(originalText);
+        const res: any = await (ctx.api.raw as any).sendRichMessage({
+          chat_id: chatId,
+          rich_message: { html },
+        });
+        draftIds.delete(chatId);
+        messageCache.set(res.message_id, originalText);
+        return res.message_id;
+      } catch (err: any) {
+        logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
+      }
+
+      // Option B: Rich Markdown
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        const res: any = await (ctx.api.raw as any).sendRichMessage({
+          chat_id: chatId,
+          rich_message: { markdown: safeMarkdown },
+        });
+        draftIds.delete(chatId);
+        messageCache.set(res.message_id, originalText);
+        return res.message_id;
+      } catch (err: any) {
+        logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
+      }
+
+      // Option C: HTML Fallback
+      try {
+        const htmlText = markdownToHtml(originalText);
+        const msg = await ctx.reply(htmlText, {
+          parse_mode: 'HTML',
+        });
+        draftIds.delete(chatId);
+        messageCache.set(msg.message_id, originalText);
+        return msg.message_id;
+      } catch (err: any) {
+        logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
+        const msg = await ctx.reply(originalText);
+        draftIds.delete(chatId);
+        messageCache.set(msg.message_id, originalText);
+        return msg.message_id;
+      }
+    },
+
+    sendRichDraft: async (originalText: string): Promise<number> => {
+      let draftId = draftIds.get(chatId);
+      if (!draftId) {
+        draftId = Math.floor(Math.random() * 2147483647) + 1;
+        draftIds.set(chatId, draftId);
+      }
+
+      // Option A: Native Rich HTML with native thinking animation
+      try {
+        const html = markdownToHtml(originalText);
+        await (ctx.api.raw as any).sendRichMessageDraft({
+          chat_id: chatId,
+          draft_id: draftId,
+          rich_message: { html: `${html}\n<tg-thinking>正在思考...</tg-thinking>` },
+        });
+        messageCache.set(draftId, originalText);
+        return draftId;
+      } catch (err: any) {
+        logger.warn(`sendRichDraft Option A failed: ${err.message || err}. Trying Option B...`);
+      }
+
+      // Option B: Rich Markdown
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        await (ctx.api.raw as any).sendRichMessageDraft({
+          chat_id: chatId,
+          draft_id: draftId,
+          rich_message: { markdown: safeMarkdown },
+        });
+        messageCache.set(draftId, originalText);
+        return draftId;
+      } catch (err: any) {
+        logger.warn(`sendRichDraft Option B failed: ${err.message || err}.`);
+        throw err;
+      }
+    },
+
+    editRich: async (messageId: number, originalText: string): Promise<void> => {
+      // Option A: Native Rich HTML
+      try {
+        const html = markdownToHtml(originalText);
+        await (ctx.api.raw as any).editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          rich_message: { html },
+        });
+        messageCache.set(messageId, originalText);
+        return;
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) {
+          messageCache.set(messageId, originalText);
+          return;
+        }
+        logger.warn(`editRich Option A failed: ${err.message || err}. Trying Option B...`);
+      }
+
+      // Option B: Rich Markdown
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        await (ctx.api.raw as any).editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          rich_message: { markdown: safeMarkdown },
+        });
+        messageCache.set(messageId, originalText);
+        return;
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) {
+          messageCache.set(messageId, originalText);
+          return;
+        }
+        logger.warn(`editRich Option B failed: ${err.message || err}. Trying Option C...`);
+      }
+
+      // Option C: HTML Fallback
+      await safeEdit(messageId, originalText, true);
+    },
+
     send: async (replyText: string): Promise<number> => {
       try {
         if (parseMode === 'RichText') {
           if (replyText.trim()) {
-            return await buildChannelReply(ctx, chatId, 'RichText').sendRich!(
-              replyText,
-            );
+            return await replyObj.sendRich!(replyText);
           }
         }
         const msg = await ctx.reply(
           parseMode === 'MarkdownV2' ? markdownToMarkdownV2(replyText) : markdownToHtml(replyText),
-          {
-            parse_mode: parseMode as any,
-          },
+          { parse_mode: parseMode === 'MarkdownV2' ? 'MarkdownV2' : 'HTML' },
         );
         messageCache.set(msg.message_id, replyText);
         return msg.message_id;
@@ -173,86 +278,21 @@ function buildChannelReply(
         return msg.message_id;
       }
     },
-    sendRich: async (originalText: string): Promise<number> => {
-      const text = originalText.trim() ? originalText : '...';
-      const cleanText = text.replace(/^>\s*\[details\]\s*/gim, '> ');
-      const safeText = prepareTelegramMarkdown(cleanText);
-      try {
-        // API 10.1 sendRichMessage
-        const msg = await (ctx.api as any).raw.sendRichMessage({
-          chat_id: chatId,
-          rich_message: JSON.stringify({ markdown: safeText }),
-        });
-        messageCache.set(msg.message_id, originalText);
-        draftIds.delete(chatId);
-        return msg.message_id;
-      } catch (e) {
-        logger.warn(`sendRichMessage failed, falling back to HTML: ${e}`);
-        const msg = await ctx.reply(markdownToHtml(originalText), { parse_mode: 'HTML' });
-        messageCache.set(msg.message_id, originalText);
-        return msg.message_id;
-      }
-    },
-    sendRichDraft: async (originalText: string): Promise<number> => {
-      const text = originalText.trim() ? originalText : '...';
-      const cleanText = text.replace(/^>\s*\[details\]\s*/gim, '> ');
-      const safeText = prepareTelegramMarkdown(cleanText);
-      try {
-        // API 10.1 sendRichMessageDraft
-        let draftId = draftIds.get(chatId);
-        if (!draftId) {
-          draftId = Math.floor(Math.random() * 1000000000) + 1;
-          draftIds.set(chatId, draftId);
-        }
-        const msg = await (ctx.api as any).raw.sendRichMessageDraft({
-          chat_id: chatId,
-          rich_message: JSON.stringify({ markdown: safeText }),
-          draft_id: draftId,
-        });
-        return msg.message_id;
-      } catch (e) {
-        logger.warn(`sendRichMessageDraft failed: ${e}`);
-        throw e;
-      }
-    },
-    editRich: async (messageId: number, originalText: string): Promise<void> => {
-      const text = originalText.trim() ? originalText : '...';
-      const cleanText = text.replace(/^>\s*\[details\]\s*/gim, '> ');
-      const safeText = prepareTelegramMarkdown(cleanText);
-      try {
-        // API 10.1 update to editMessageText
-        await (ctx.api as any).raw.editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          rich_message: JSON.stringify({ markdown: safeText }),
-        });
-        messageCache.set(messageId, originalText);
-        draftIds.delete(chatId);
-      } catch (e) {
-        logger.warn(`editRich failed: ${e}`);
-        await safeEdit(messageId, originalText, true);
-      }
-    },
     edit: async (messageId: number, newText: string): Promise<void> => {
       if (parseMode === 'RichText') {
         if (newText.trim()) {
-          await buildChannelReply(ctx, chatId, 'RichText').editRich!(messageId, newText);
+          await replyObj.editRich!(messageId, newText);
           return;
         }
       }
       await safeEdit(messageId, newText, true);
-      messageCache.set(messageId, newText);
     },
     sendPlain: async (replyText: string): Promise<number> => {
-      if (parseMode === 'RichText') {
-        if (replyText.trim()) {
-          try {
-            return await buildChannelReply(ctx, chatId, 'RichText').sendRichDraft!(
-              replyText,
-            );
-          } catch (e) {
-            // fallback to plain send
-          }
+      if (parseMode === 'RichText' && replyText.trim()) {
+        try {
+          return await replyObj.sendRichDraft!(replyText);
+        } catch (e) {
+          logger.warn(`Failed to send rich draft stream: ${e}`);
         }
       }
       const msg = await ctx.reply(replyText);
@@ -260,32 +300,23 @@ function buildChannelReply(
       return msg.message_id;
     },
     editPlain: async (messageId: number, newText: string): Promise<void> => {
-      if (parseMode === 'RichText') {
-        if (newText.trim()) {
-          try {
-            await buildChannelReply(ctx, chatId, 'RichText').sendRichDraft!(
-              newText,
-            );
-            return;
-          } catch (e) {
-            // fallback to HTML edit
-          }
+      if (parseMode === 'RichText' && newText.trim()) {
+        try {
+          await replyObj.sendRichDraft!(newText);
+          return;
+        } catch (e) {
+          logger.warn(`Failed to edit rich draft stream: ${e}`);
         }
       }
       await safeEdit(messageId, newText, false);
-      messageCache.set(messageId, newText);
     },
     sendDocument: async (
       filePath: string,
       docCaption?: string,
     ): Promise<void> => {
       await ctx.replyWithDocument(new InputFile(filePath), {
-        caption: docCaption
-          ? parseMode === 'MarkdownV2'
-            ? markdownToMarkdownV2(docCaption)
-            : markdownToHtml(docCaption)
-          : undefined,
-        parse_mode: docCaption ? parseMode as any : undefined,
+        caption: docCaption ? markdownToHtml(docCaption) : undefined,
+        parse_mode: docCaption ? 'HTML' : undefined,
       });
     },
     delete: async (messageId: number): Promise<void> => {
@@ -296,6 +327,8 @@ function buildChannelReply(
       }
     },
   };
+
+  return replyObj;
 }
 
 /**
@@ -315,7 +348,7 @@ async function withSession(
     session = await sessionManager.getOrCreate(chatId, defaultOptions);
   } catch (e) {
     logger.error(`Failed to create session for chat ${chatId}: ${e}`);
-    await ctx.reply(`${ICONS.error} Failed to initialize session: ${formatError(e)}`);
+    await ctx.reply(`${ICONS.error} Failed to initialize session: ${e}`);
     return;
   }
 
@@ -365,14 +398,14 @@ async function withSession(
     }
   }, TYPING_TTL_MS);
 
+  const parseMode = session.settings?.telegram?.parseMode || 'RichText';
   try {
-    const parseMode = session.settings?.telegram?.parseMode || 'HTML';
     await handler(session, buildChannelReply(ctx, chatId, parseMode));
   } catch (e) {
     logger.error(`Error in handler for chat ${chatId}: ${e}`);
     try {
       await ctx.reply(
-        `${ICONS.error} <b>Operation failed:</b>\n<i>${formatError(e)}</i>`,
+        `${ICONS.error} <b>Operation failed:</b>\n<i>${e instanceof Error ? e.message : String(e)}</i>`,
         { parse_mode: 'HTML' }
       );
     } catch {
@@ -435,13 +468,17 @@ async function downloadTelegramFile(
       lastError = e instanceof Error ? e : new Error(String(e));
       if (attempt < DOWNLOAD_MAX_RETRIES) {
         const delay = DOWNLOAD_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-        logger.warn(`File download attempt ${attempt} failed: ${lastError.message}. Retrying in ${delay}ms...`);
+        logger.warn(
+          `File download attempt ${attempt} failed: ${lastError.message}. Retrying in ${delay}ms...`,
+        );
         await new Promise((r) => setTimeout(r, delay));
       }
     }
   }
 
-  throw new Error(`Failed to download file after ${DOWNLOAD_MAX_RETRIES} attempts: ${lastError?.message}`);
+  throw new Error(
+    `Failed to download file after ${DOWNLOAD_MAX_RETRIES} attempts: ${lastError?.message}`,
+  );
 }
 
 /** Supported Telegram media types for extraction. */
@@ -462,6 +499,7 @@ function extractMediaInfo(
   ctx: Context,
   mediaType: TelegramMediaType,
 ): TelegramMediaInfo | undefined {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const msg = ctx.message as any;
   if (!msg) return undefined;
   const caption = msg.caption as string | undefined;
@@ -470,6 +508,7 @@ function extractMediaInfo(
     const photos = msg.photo as { file_id: string }[] | undefined;
     if (!photos || photos.length === 0) return undefined;
     const photo = photos[photos.length - 1];
+    if (!photo) return undefined;
     return { fileId: photo.file_id, mimeType: 'image/jpeg', caption };
   } else if (mediaType === 'voice') {
     const voice = msg.voice as { file_id: string; mime_type?: string } | undefined;
@@ -504,13 +543,26 @@ export class TelegramBot {
     if (options.proxy) {
       this.proxyAgent = new ProxyAgent(options.proxy);
       clientConfig.baseFetchConfig = {
-        dispatcher: this.proxyAgent,
         compress: true,
       };
       clientConfig.fetch = (url: any, init: any) => {
         const cleanInit = init ? { ...init } : {};
-        delete cleanInit.signal;
-        return undiciFetch(url, cleanInit);
+        if (cleanInit.signal) {
+          const grammySignal = cleanInit.signal;
+          const nativeController = new globalThis.AbortController();
+          if (grammySignal.aborted) {
+            nativeController.abort();
+          } else {
+            grammySignal.addEventListener('abort', () => {
+              nativeController.abort();
+            });
+          }
+          cleanInit.signal = nativeController.signal;
+        }
+        return undiciFetch(url, {
+          ...cleanInit,
+          dispatcher: this.proxyAgent,
+        });
       };
     }
     this.bot = new Bot(token, { client: clientConfig });
@@ -546,6 +598,7 @@ export class TelegramBot {
           }
         };
 
+        // Build a custom ChannelReply for scheduled messages
         const scheduledReply: ChannelReply = {
           send: async (text: string): Promise<number> => {
             const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML' });
@@ -553,15 +606,6 @@ export class TelegramBot {
           },
           edit: async (messageId: number, newText: string): Promise<void> => {
             await safeEdit(messageId, newText, true);
-          },
-          sendRich: async (originalText: string): Promise<number> => {
-            return await this.bot.api.sendMessage(chatId, originalText).then(m => m.message_id);
-          },
-          sendRichDraft: async (originalText: string): Promise<number> => {
-            return await this.bot.api.sendMessage(chatId, originalText).then(m => m.message_id);
-          },
-          editRich: async (messageId: number, originalText: string): Promise<void> => {
-            await safeEdit(messageId, originalText, true);
           },
           sendPlain: async (text: string): Promise<number> => {
             const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML' });
@@ -576,23 +620,39 @@ export class TelegramBot {
           delete: async (messageId: number): Promise<void> => {
             await this.bot.api.deleteMessage(chatId, messageId);
           },
+          sendRich: async (text: string): Promise<number> => {
+            return await scheduledReply.send(text);
+          },
+          sendRichDraft: async (text: string): Promise<number> => {
+            return await scheduledReply.send(text);
+          },
+          editRich: async (messageId: number, newText: string): Promise<void> => {
+            await scheduledReply.edit(messageId, newText);
+          },
         };
 
         const session = await this.sessionManager.getOrCreate(chatId, this.defaultOptions);
         if (session.busy) {
+          const msg = `Session busy for chat ${chatId}, skipping scheduled task ${task.id}`;
+          logger.warn(msg);
           throw new Error('Session is currently busy with another operation.');
         }
 
         session.busy = true;
         try {
-          await processMessage(session, { text: task.message }, scheduledReply, telegramFormatter);
+          await processMessage(
+            session,
+            { text: task.message },
+            scheduledReply,
+            telegramFormatter,
+          );
         } finally {
           session.busy = false;
         }
       } catch (e) {
         logger.error(`Scheduled task execution failed: ${e}`);
         try {
-          await this.bot.api.sendMessage(chatId, `${ICONS.error} Scheduled task failed: ${formatError(e)}`);
+          await this.bot.api.sendMessage(chatId, `${ICONS.error} Scheduled task failed: ${e instanceof Error ? e.message : String(e)}`);
         } catch { /* ignore */ }
       }
     }).catch(e => logger.error(`Failed to initialize scheduler: ${e}`));
@@ -697,6 +757,24 @@ export class TelegramBot {
   }
 
   private setupMiddleware(allowedUsers?: number[]): void {
+    // Diagnostic logging middleware to track update latency
+    this.bot.use(async (ctx, next) => {
+      const start = Date.now();
+      const updateId = ctx.update.update_id;
+      const message = ctx.message || ctx.editedMessage || ctx.callbackQuery?.message;
+      const msgDate = message?.date ? message.date * 1000 : null;
+      const dateDiff = msgDate ? (start - msgDate) / 1000 : null;
+      
+      logger.info(`[Update ${updateId}] Received update. Message date: ${msgDate ? new Date(msgDate).toISOString() : 'N/A'}. Delay from sending: ${dateDiff !== null ? dateDiff.toFixed(2) + 's' : 'N/A'}`);
+      
+      try {
+        await next();
+      } finally {
+        const duration = Date.now() - start;
+        logger.info(`[Update ${updateId}] Processed in ${duration}ms`);
+      }
+    });
+
     // Sequentialize: messages in the same chat run serially,
     // but /cancel gets its own key so it bypasses the queue.
     this.bot.use(sequentialize(getSequentialKey));
