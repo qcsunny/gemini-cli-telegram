@@ -9,11 +9,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { ProjectManager, SessionManager } from './session.js';
-import { loadDaemonConfig } from '../config/config.js';
-
 vi.mock('node:fs/promises');
 vi.mock('node:os');
-vi.mock('../config/config.js');
 vi.mock('../utils/logger.js', () => ({
   logger: {
     info: vi.fn(),
@@ -21,39 +18,6 @@ vi.mock('../utils/logger.js', () => ({
     error: vi.fn(),
     debug: vi.fn(),
   },
-}));
-
-// Mock @google/gemini-cli-core
-vi.mock('@google/gemini-cli-core', () => ({
-  Scheduler: vi.fn().mockImplementation(() => ({})),
-  ROOT_SCHEDULER_ID: 'root',
-  BaseDeclarativeTool: class {},
-  BaseToolInvocation: class {
-    constructor(public params: any, public messageBus: any, public toolName?: string, public displayName?: string) {}
-  },
-  Kind: {
-    Communicate: 'Communicate',
-    Action: 'Action',
-  },
-}));
-
-// Mock loadDaemonConfig
-vi.mock('../config/config.js', () => ({
-  loadDaemonConfig: vi.fn().mockResolvedValue({
-    getModel: vi.fn().mockReturnValue('test-model'),
-    getWorkspaceContext: vi.fn().mockReturnValue({
-      addReadOnlyPath: vi.fn(),
-      addDirectory: vi.fn(),
-    }),
-    getGeminiClient: vi.fn().mockReturnValue({
-      initialize: vi.fn().mockResolvedValue(undefined),
-    }),
-    getMessageBus: vi.fn(),
-    getToolRegistry: vi.fn().mockReturnValue({
-      registerTool: vi.fn(),
-    }),
-    dispose: vi.fn().mockResolvedValue(undefined),
-  }),
 }));
 
 describe('ProjectManager', () => {
@@ -157,22 +121,6 @@ describe('SessionManager', () => {
     vi.mocked(fs.mkdir).mockResolvedValue(undefined);
     vi.mocked(fs.readFile).mockResolvedValue('[]');
     vi.mocked(fs.writeFile).mockResolvedValue(undefined);
-    
-    vi.mocked(loadDaemonConfig).mockResolvedValue({
-      getModel: vi.fn().mockReturnValue('test-model'),
-      getWorkspaceContext: vi.fn().mockReturnValue({
-        addReadOnlyPath: vi.fn(),
-        addDirectory: vi.fn(),
-      }),
-      getGeminiClient: vi.fn().mockReturnValue({
-        initialize: vi.fn().mockResolvedValue(undefined),
-      }),
-      getMessageBus: vi.fn(),
-      getToolRegistry: vi.fn().mockReturnValue({
-        registerTool: vi.fn(),
-      }),
-      dispose: vi.fn().mockResolvedValue(undefined),
-    } as any);
 
     sessionManager = new SessionManager();
   });
@@ -202,15 +150,15 @@ describe('SessionManager', () => {
   });
 
   describe('destroy', () => {
-    it('should destroy a session and dispose its config', async () => {
+    it('should destroy a session', async () => {
       const chatId = 12345;
       const options = { cwd: '/test/path', model: 'test-model' };
       
       const session = await sessionManager.getOrCreate(chatId, options);
+      expect(session).toBeDefined();
       await sessionManager.destroy(chatId);
       
       expect(sessionManager.getSession(chatId)).toBeUndefined();
-      expect(session.config.dispose).toHaveBeenCalled();
     });
   });
 });

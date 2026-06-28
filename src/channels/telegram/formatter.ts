@@ -6,7 +6,6 @@
 
 import MarkdownIt from 'markdown-it';
 import type { MessageFormatter } from '../../core/types.js';
-
 const TELEGRAM_MAX_LENGTH = 4096;
 
 // ── Types ──
@@ -15,9 +14,11 @@ type MarkdownStyle =
   | 'bold'
   | 'italic'
   | 'strikethrough'
+  | 'underline'
   | 'code'
   | 'code_block'
-  | 'blockquote';
+  | 'blockquote'
+  | 'spoiler';
 
 type StyleSpan = { start: number; end: number; style: MarkdownStyle };
 type LinkSpan = { start: number; end: number; href: string };
@@ -26,8 +27,12 @@ type MarkdownIR = { text: string; styles: StyleSpan[]; links: LinkSpan[] };
 type MarkdownToken = {
   type: string;
   content?: string;
-  children?: MarkdownToken[];
-  attrs?: [string, string][];
+  children?: MarkdownToken[] | null;
+  tag: string;
+  info?: string;
+  markup?: string;
+  map?: [number, number] | null;
+  attrs?: [string, string][] | null;
   attrGet?: (name: string) => string | null;
 };
 
@@ -89,8 +94,8 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
-function escapeHtmlAttr(text: string): string {
-  return escapeHtml(text).replace(/"/g, '&quot;');
+export function escapeMarkdownV2(text: string): string {
+  return text.replace(/([\\_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 }
 
 // ── Markdown → IR (using markdown-it) ──
@@ -111,8 +116,62 @@ const md = new MarkdownIt({
   breaks: false,
   typographer: false,
 });
-md.enable('strikethrough');
-md.disable('table');
+md.enable(['strikethrough', 'table']);
+
+md.inline.ruler.at('text', (state, silent) => {
+  const pos = state.pos;
+  const idx = state.src.slice(pos).search(/[\n!#$&*+\-:<=>@[\\\]^_`{}~|]/);
+
+  if (idx === 0) { return false; }
+  
+  let end = pos + idx;
+  if (idx < 0) {
+    end = state.posMax;
+  }
+
+  if (!silent) {
+    state.pending += state.src.slice(pos, end);
+  }
+
+  state.pos = end;
+  return true;
+});
+
+md.inline.ruler.after('escape', 'spoiler', (state, silent) => {
+  const max = state.posMax;
+  const start = state.pos;
+
+  if (state.src.charCodeAt(start) !== 0x7C/* | */) return false;
+  if (start + 1 >= max || state.src.charCodeAt(start + 1) !== 0x7C/* | */) return false;
+
+  // Find closing ||
+  let matchStart = start + 2;
+  let matchEnd = -1;
+  while (matchStart < max) {
+    if (state.src.charCodeAt(matchStart) === 0x7C && matchStart + 1 < max && state.src.charCodeAt(matchStart + 1) === 0x7C) {
+      matchEnd = matchStart;
+      break;
+    }
+    matchStart++;
+  }
+
+  if (matchEnd === -1) return false;
+
+  if (silent) return true;
+
+  const oldMax = state.posMax;
+
+  state.pos = start + 2;
+  state.posMax = matchEnd;
+
+  state.push('spoiler_open', 'span', 1);
+  state.md.inline.tokenize(state);
+  state.push('spoiler_close', 'span', -1);
+
+  state.pos = matchEnd + 2;
+  state.posMax = oldMax;
+  return true;
+});
 
 function appendText(state: RenderState, value: string) {
   if (value) state.text += value;
@@ -160,7 +219,8 @@ function handleLinkClose(state: RenderState) {
 }
 
 function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
     switch (token.type) {
       case 'inline':
         if (token.children) renderTokens(token.children, state);
@@ -185,6 +245,12 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case 's_close':
         closeStyle(state, 'strikethrough');
+        break;
+      case 'spoiler_open':
+        openStyle(state, 'spoiler');
+        break;
+      case 'spoiler_close':
+        closeStyle(state, 'spoiler');
         break;
       case 'code_inline':
         if (token.content) {
@@ -252,8 +318,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case 'list_item_close':
         if (!state.text.endsWith('\n')) state.text += '\n';
         break;
-      case 'code_block':
-      case 'fence': {
+      case 'fence':
+      case 'code_block': {
         let code = token.content ?? '';
         if (!code.endsWith('\n')) code += '\n';
         const start = state.text.length;
@@ -261,9 +327,68 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         state.styles.push({
           start,
           end: start + code.length,
-          style: 'code_block',
+          style: 'code',
         });
         if (state.listStack.length === 0) state.text += '\n';
+        break;
+      }
+      case 'table_open': {
+        const grid: string[][] = [];
+        let currentRow: string[] = [];
+        let j = i + 1;
+        while (j < tokens.length && tokens[j].type !== 'table_close') {
+          const t = tokens[j];
+          if (t.type === 'tr_open') {
+            currentRow = [];
+          } else if (t.type === 'tr_close') {
+            grid.push(currentRow);
+          } else if (t.type === 'inline') {
+            const cellState: RenderState = {
+              text: '',
+              styles: [],
+              openStyles: [],
+              links: [],
+              linkStack: [],
+              listStack: [],
+            };
+            if (t.children) {
+              renderTokens(t.children, cellState);
+            }
+            currentRow.push(cellState.text.trim());
+          }
+          j++;
+        }
+        i = j;
+
+        if (grid.length > 0) {
+          const colWidths: number[] = [];
+          for (const row of grid) {
+            for (let c = 0; c < row.length; c++) {
+              colWidths[c] = Math.max(colWidths[c] || 0, (row[c] || '').length);
+            }
+          }
+
+          let tableText = '';
+          for (let r = 0; r < grid.length; r++) {
+            const row = grid[r];
+            const formattedCells = row.map((cell, c) => cell.padEnd(colWidths[c]));
+            tableText += '| ' + formattedCells.join(' | ') + ' |\n';
+            if (r === 0) {
+              const separatorCells = colWidths.map(w => '-'.repeat(w));
+              tableText += '| ' + separatorCells.join(' | ') + ' |\n';
+            }
+          }
+
+          const start = state.text.length;
+          const wrappedTableText = `\n${tableText}`;
+          state.text += wrappedTableText;
+          state.styles.push({
+            start: start + 1,
+            end: start + wrappedTableText.length,
+            style: 'code',
+          });
+          state.text += '\n';
+        }
         break;
       }
       case 'html_block':
@@ -271,7 +396,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendText(state, token.content ?? '');
         break;
       case 'hr':
-        state.text += '\u2500\u2500\u2500\n\n';
+        state.text += '───\n\n';
         break;
       default:
         if (token.children) renderTokens(token.children, state);
@@ -281,7 +406,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
 }
 
 function markdownToIR(markdown: string): MarkdownIR {
-  const tokens = md.parse(markdown ?? '', {});
+  const tokens = md.parse(markdown ?? '', {}) as any as MarkdownToken[];
   const state: RenderState = {
     text: '',
     styles: [],
@@ -309,8 +434,6 @@ function markdownToIR(markdown: string): MarkdownIR {
   return { text: trimmed, styles: state.styles, links: state.links };
 }
 
-// ── IR → Telegram HTML ──
-
 const STYLE_ORDER: MarkdownStyle[] = [
   'blockquote',
   'code_block',
@@ -318,32 +441,228 @@ const STYLE_ORDER: MarkdownStyle[] = [
   'bold',
   'italic',
   'strikethrough',
+  'underline',
+  'spoiler',
 ];
 
 const STYLE_RANK = new Map(STYLE_ORDER.map((s, i) => [s, i]));
 
-const STYLE_MARKERS: Record<
-  MarkdownStyle,
-  { open: string; close: string }
-> = {
-  bold: { open: '<b>', close: '</b>' },
-  italic: { open: '<i>', close: '</i>' },
-  strikethrough: { open: '<s>', close: '</s>' },
-  code: { open: '<code>', close: '</code>' },
-  code_block: { open: '<pre><code>', close: '</code></pre>' },
-  blockquote: { open: '<blockquote>', close: '</blockquote>' },
+const mdHtml = new MarkdownIt({
+  html: true,
+  linkify: true,
+  breaks: false,
+  typographer: false,
+});
+mdHtml.enable(['table', 'strikethrough']);
+
+// Custom rule for inline code block rendering to make sure it strictly uses <code>
+mdHtml.renderer.rules.code_inline = (tokens, idx) => {
+  return `<code>${escapeHtml(tokens[idx].content)}</code>`;
 };
 
-function renderIRToHtml(ir: MarkdownIR): string {
+// Custom rule for fenced code block rendering to strictly use <pre><code class="language-...">
+mdHtml.renderer.rules.fence = (tokens, idx) => {
+  const token = tokens[idx];
+  const info = token.info ? token.info.trim() : '';
+  const langClass = info ? ` class="language-${info}"` : '';
+  return `<pre><code${langClass}>${escapeHtml(token.content)}</code></pre>`;
+};
+
+const ALLOWED_NAMED_ENTITIES = new Set([
+  'lt', 'gt', 'amp', 'quot', 'apos', 'nbsp', 'hellip', 'mdash', 'ndash', 'lsquo', 'rsquo', 'ldquo', 'rdquo'
+]);
+
+const ENTITY_MAP: Record<string, string> = {
+  'times': '&#215;',
+  'bull': '&#8226;',
+  'trade': '&#8482;',
+  'reg': '&#174;',
+  'copy': '&#169;',
+  'cent': '&#162;',
+  'pound': '&#163;',
+  'yen': '&#165;',
+  'euro': '&#8364;',
+  'sect': '&#167;',
+  'middot': '&#183;',
+  'deg': '&#176;',
+  'plusmn': '&#177;',
+  'para': '&#182;',
+  'divide': '&#247;',
+  'raquo': '&#187;',
+  'laquo': '&#171;',
+};
+
+export function sanitizeHtmlForTelegram(html: string): string {
+  // Pre-process unsupported named entities
+  html = html.replace(/&([a-zA-Z0-9]+);/g, (match, entityName) => {
+    if (ALLOWED_NAMED_ENTITIES.has(entityName)) {
+      return match;
+    }
+    return ENTITY_MAP[entityName] ?? `&#${entityName.charCodeAt(0)};`;
+  });
+
+  const ALLOWED_TAGS = new Set([
+    'a', 'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'code', 'mark',
+    'sub', 'sup', 'tg-spoiler', 'tg-reference', 'tg-emoji', 'img', 'tg-time', 'tg-math',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'footer', 'hr', 'ul', 'ol', 'li',
+    'input', 'blockquote', 'cite', 'aside', 'video', 'audio', 'figure', 'figcaption',
+    'tg-map', 'tg-collage', 'tg-slideshow', 'table', 'tr', 'th', 'td', 'caption',
+    'details', 'summary', 'tg-math-block', 'tg-thinking'
+  ]);
+
+  const ALLOWED_ATTRS: Record<string, Set<string>> = {
+    'a': new Set(['href', 'name']),
+    'tg-reference': new Set(['name']),
+    'tg-emoji': new Set(['emoji-id']),
+    'img': new Set(['src', 'alt', 'tg-spoiler']),
+    'video': new Set(['src', 'tg-spoiler']),
+    'audio': new Set(['src']),
+    'tg-time': new Set(['unix', 'format']),
+    'ol': new Set(['start', 'type', 'reversed']),
+    'li': new Set(['value', 'type']),
+    'input': new Set(['type', 'checked']),
+    'tg-map': new Set(['lat', 'long', 'zoom']),
+    'table': new Set(['bordered', 'striped']),
+    'td': new Set(['colspan', 'rowspan', 'align', 'valign']),
+    'th': new Set(['colspan', 'rowspan', 'align', 'valign']),
+    'details': new Set(['open']),
+    'code': new Set(['class'])
+  };
+
+  const tagRegex = /<(\/?[a-zA-Z0-9\-]+)([^>]*?)(\/?>)/g;
+
+  return html.replace(tagRegex, (fullMatch, tagNameWithSlash, attrsPart, closingSlash) => {
+    const isClosing = tagNameWithSlash.startsWith('/');
+    const tagName = (isClosing ? tagNameWithSlash.slice(1) : tagNameWithSlash).toLowerCase();
+
+    if (!ALLOWED_TAGS.has(tagName)) {
+      return '';
+    }
+
+    if (isClosing) {
+      return `</${tagName}>`;
+    }
+
+    const allowedAttrs = ALLOWED_ATTRS[tagName];
+    let sanitizedAttrs = '';
+
+    if (allowedAttrs) {
+      const attrRegex = /([a-zA-Z0-9\-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+      let match;
+      while ((match = attrRegex.exec(attrsPart)) !== null) {
+        const attrName = match[1].toLowerCase();
+        const attrValue = match[2] ?? match[3] ?? match[4] ?? '';
+
+        if (allowedAttrs.has(attrName)) {
+          if (attrName === 'class' && tagName === 'code') {
+            if (attrValue.startsWith('language-')) {
+              sanitizedAttrs += ` class="${attrValue}"`;
+            }
+          } else if (match[2] !== undefined || match[3] !== undefined || match[4] !== undefined) {
+            sanitizedAttrs += ` ${attrName}="${attrValue}"`;
+          } else {
+            sanitizedAttrs += ` ${attrName}`;
+          }
+        }
+      }
+    }
+
+    const isSelfClosing = closingSlash.trim() === '/' || tagName === 'img' || tagName === 'hr' || tagName === 'input' || tagName === 'tg-map';
+    return `<${tagName}${sanitizedAttrs}${isSelfClosing ? ' /' : ''}>`;
+  });
+}
+
+export function markdownToHtml(markdown: string): string {
+  if (!markdown || !markdown.trim()) return '';
+
+  let text = markdown;
+
+  const mathBlocks: string[] = [];
+  const mathInlines: string[] = [];
+
+  text = text.replace(/```math\n([\s\S]*?)```/g, (_, formula) => {
+    mathBlocks.push(formula.trim());
+    return `\n\nMATHBLOCKLH${mathBlocks.length - 1}LH\n\n`;
+  });
+
+  text = text.replace(/\$\$(.+?)\$\$/gs, (_, formula) => {
+    mathBlocks.push(formula.trim());
+    return `\n\nMATHBLOCKLH${mathBlocks.length - 1}LH\n\n`;
+  });
+
+  text = text.replace(/(?<!\$)\$([^$\n]+?)\$(?!\$)/g, (_, formula) => {
+    mathInlines.push(formula.trim());
+    return `MATHINLINELH${mathInlines.length - 1}LH`;
+  });
+
+  text = text.replace(/\|\|([\s\S]*?)\|\|/g, '<tg-spoiler>$1</tg-spoiler>');
+
+  let html = mdHtml.render(text);
+
+  for (let i = 0; i < mathBlocks.length; i++) {
+    const placeholder = `MATHBLOCKLH${i}LH`;
+    const regex = new RegExp(`<p>\\s*${placeholder}\\s*</p>`, 'gi');
+    if (regex.test(html)) {
+      html = html.replace(regex, `<tg-math-block>${mathBlocks[i]}</tg-math-block>`);
+    } else {
+      html = html.replace(new RegExp(placeholder, 'g'), `<tg-math-block>${mathBlocks[i]}</tg-math-block>`);
+    }
+  }
+
+  for (let i = 0; i < mathInlines.length; i++) {
+    html = html.replace(new RegExp(`MATHINLINELH${i}LH`, 'g'), `<tg-math>${mathInlines[i]}</tg-math>`);
+  }
+
+  html = html
+    .replace(/<table>/gi, '<table bordered striped>')
+    .replace(/<\/?thead>/gi, '')
+    .replace(/<\/?tbody>/gi, '');
+
+  html = html
+    .replace(/<li>\[ \] /gi, '<li><input type="checkbox">')
+    .replace(/<li>\[x\] /gi, '<li><input type="checkbox" checked>');
+
+  html = html.replace(/<blockquote>\s*<p>\s*\[details\]\s*(.*?)\s*[\r\n]+([\s\S]*?)<\/p>\s*<\/blockquote>/gi, '<details><summary>$1</summary><p>$2</p></details>');
+  html = html.replace(/<blockquote>\s*<p>\s*\[details\]\s*(.*?)\s*<br>\s*([\s\S]*?)<\/p>\s*<\/blockquote>/gi, '<details><summary>$1</summary><p>$2</p></details>');
+  html = html.replace(/<blockquote>\s*<p>\s*\[details\]\s*(.*?)\s*<\/p>\s*([\s\S]*?)<\/blockquote>/gi, '<details><summary>$1</summary>$2</details>');
+
+  // Post-process HTML to merge adjacent image elements
+  // 1. Merge adjacent paragraphs containing ONLY images
+  let prev;
+  let current = html;
+  do {
+    prev = current;
+    current = current.replace(/(<p>(?:\s*<img[^>]+>\s*)+<\/p>)\s*(<p>(?:\s*<img[^>]+>\s*)+<\/p>)/gi, (m, p1, p2) => {
+      const imgs1 = p1.replace(/<\/?p>/gi, '').trim();
+      const imgs2 = p2.replace(/<\/?p>/gi, '').trim();
+      return `<p>${imgs1}\n${imgs2}</p>`;
+    });
+  } while (current !== prev);
+  html = current;
+
+  // 2. Wrap contiguous images inside paragraphs into <tg-collage>
+  html = html.replace(/<p>(\s*(?:<img[^>]+>\s*){2,})<\/p>/gi, (match, imgs) => {
+    return `<tg-collage>${imgs.trim()}</tg-collage>`;
+  });
+
+  // 3. Wrap any remaining contiguous images outside of paragraphs (or separated by <br>) into <tg-collage>
+  html = html.replace(/(?<!<tg-collage>)(?:^|\s*)(<img[^>]+>)(?:\s*(?:<br\s*\/?>)?\s*(<img[^>]+>))+(?!\s*<\/tg-collage>)/gi, (match) => {
+    return `<tg-collage>${match.trim()}</tg-collage>`;
+  });
+
+  return sanitizeHtmlForTelegram(html);
+}
+
+// ── IR → Telegram MarkdownV2 ──
+
+function renderIRToMarkdownV2(ir: MarkdownIR): string {
   const { text, styles, links } = ir;
   if (!text) return '';
 
-  // Collect all boundary positions
   const boundaries = new Set<number>([0, text.length]);
 
-  // Filter to styles that have markers, sort by start/end/rank
   const sorted = styles
-    .filter((s) => STYLE_MARKERS[s.style] && s.end > s.start)
+    .filter((s) => s.end > s.start)
     .sort((a, b) => {
       if (a.start !== b.start) return a.start - b.start;
       if (a.end !== b.end) return b.end - a.end;
@@ -359,7 +678,6 @@ function renderIRToHtml(ir: MarkdownIR): string {
     else startsAt.set(span.start, [span]);
   }
 
-  // Sort each bucket: widest span first, then by rank
   for (const spans of startsAt.values()) {
     spans.sort((a, b) => {
       if (a.end !== b.end) return b.end - a.end;
@@ -367,7 +685,6 @@ function renderIRToHtml(ir: MarkdownIR): string {
     });
   }
 
-  // Build link markers
   type RenderLink = {
     start: number;
     end: number;
@@ -377,12 +694,12 @@ function renderIRToHtml(ir: MarkdownIR): string {
   const linkStarts = new Map<number, RenderLink[]>();
   for (const link of links) {
     if (!link.href || link.start >= link.end) continue;
-    const safeHref = escapeHtmlAttr(link.href);
+    const escapedUrl = escapeMarkdownV2(link.href);
     const rl: RenderLink = {
       start: link.start,
       end: link.end,
-      open: `<a href="${safeHref}">`,
-      close: '</a>',
+      open: '[',
+      close: `](${escapedUrl})`,
     };
     boundaries.add(rl.start);
     boundaries.add(rl.end);
@@ -392,7 +709,7 @@ function renderIRToHtml(ir: MarkdownIR): string {
   }
 
   const points = [...boundaries].sort((a, b) => a - b);
-  const stack: { close: string; end: number }[] = [];
+  const stack: { close: string; end: number; style?: MarkdownStyle }[] = [];
 
   type OpenItem =
     | { end: number; open: string; close: string; kind: 'link'; index: number }
@@ -410,13 +727,11 @@ function renderIRToHtml(ir: MarkdownIR): string {
   for (let i = 0; i < points.length; i++) {
     const pos = points[i];
 
-    // Close all elements that end at this position (LIFO)
     while (stack.length && stack[stack.length - 1]?.end === pos) {
       const item = stack.pop();
       if (item) out += item.close;
     }
 
-    // Collect everything that opens at this position
     const openItems: OpenItem[] = [];
 
     const openLinks = linkStarts.get(pos);
@@ -429,11 +744,38 @@ function renderIRToHtml(ir: MarkdownIR): string {
     const openStyles = startsAt.get(pos);
     if (openStyles) {
       for (const [index, span] of openStyles.entries()) {
-        const m = STYLE_MARKERS[span.style];
+        let openMarker = '';
+        let closeMarker = '';
+        if (span.style === 'code') {
+          const codeContent = text.slice(span.start, span.end);
+          if (codeContent.includes('\n')) {
+            openMarker = '```\n';
+            closeMarker = '```';
+          } else {
+            openMarker = '`';
+            closeMarker = '`';
+          }
+        } else if (span.style === 'bold') {
+          openMarker = '*';
+          closeMarker = '*';
+        } else if (span.style === 'italic') {
+          openMarker = '_';
+          closeMarker = '_';
+        } else if (span.style === 'underline') {
+          openMarker = '__';
+          closeMarker = '__';
+        } else if (span.style === 'strikethrough') {
+          openMarker = '~';
+          closeMarker = '~';
+        } else if (span.style === 'spoiler') {
+          openMarker = '||';
+          closeMarker = '||';
+        }
+
         openItems.push({
           end: span.end,
-          open: m.open,
-          close: m.close,
+          open: openMarker,
+          close: closeMarker,
           kind: 'style',
           style: span.style,
           index,
@@ -442,8 +784,7 @@ function renderIRToHtml(ir: MarkdownIR): string {
     }
 
     if (openItems.length > 0) {
-      // Sort: widest span first; links before styles at same position
-      openItems.sort((a, b) => {
+      openItems.sort((a: any, b: any) => {
         if (a.end !== b.end) return b.end - a.end;
         if (a.kind !== b.kind) return a.kind === 'link' ? -1 : 1;
         if (a.kind === 'style' && b.kind === 'style') {
@@ -455,28 +796,29 @@ function renderIRToHtml(ir: MarkdownIR): string {
       });
       for (const item of openItems) {
         out += item.open;
-        stack.push({ close: item.close, end: item.end });
+        stack.push({ close: item.close, end: item.end, style: item.kind === 'style' ? item.style : undefined });
       }
     }
 
     const next = points[i + 1];
     if (next === undefined) break;
     if (next > pos) {
-      out += escapeHtml(text.slice(pos, next));
+      const segment = text.slice(pos, next);
+      const isInsideCode = stack.some(item => item.style === 'code');
+      if (isInsideCode) {
+        out += segment;
+      } else {
+        out += escapeMarkdownV2(segment);
+      }
     }
   }
 
   return out;
 }
 
-// ── Public API ──
-
-/**
- * Convert markdown to Telegram-compatible HTML using a proper markdown-it
- * parser. Produces correctly nested HTML tags for bold, italic, strikethrough,
- * code, code blocks, blockquotes, links, lists, and headings.
- */
-export function markdownToHtml(markdown: string): string {
+export function markdownToMarkdownV2(markdown: string): string {
   const ir = markdownToIR(markdown);
-  return renderIRToHtml(ir);
+  return renderIRToMarkdownV2(ir);
 }
+
+// Legacy rich blocks parsing has been deprecated in favor of native Rich HTML (Option A).

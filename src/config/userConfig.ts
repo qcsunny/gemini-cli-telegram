@@ -17,6 +17,7 @@ export interface UserConfig {
   telegramBotToken: string;
   allowedUsers: number[];
   model?: string;
+  proxy?: string;
 }
 
 export function configExists(): boolean {

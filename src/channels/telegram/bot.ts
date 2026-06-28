@@ -98,6 +98,8 @@ export function buildChannelReply(
   parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'RichText',
 ): ChannelReply {
   const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
+  let draftsDisabled = false;
+  let consecutiveDraftFailures = 0;
   const safeEdit = async (messageId: number, text: string, html = true) => {
     try {
       if (html) {
@@ -274,23 +276,38 @@ export function buildChannelReply(
       await safeEdit(messageId, newText, true);
     },
     sendPlain: async (replyText: string): Promise<number> => {
-      if (parseMode === 'RichText' && replyText.trim()) {
+      if (parseMode === 'RichText' && !draftsDisabled && replyText.trim()) {
         try {
-          return await replyObj.sendRichDraft!(replyText);
+          const res = await replyObj.sendRichDraft!(replyText);
+          consecutiveDraftFailures = 0;
+          return res;
         } catch (e) {
-          logger.warn(`Failed to send rich draft stream: ${e}`);
+          consecutiveDraftFailures++;
+          if (consecutiveDraftFailures >= 2) {
+            draftsDisabled = true;
+            logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
+          } else {
+            logger.warn(`Failed to send rich draft stream (attempt ${consecutiveDraftFailures}): ${e}`);
+          }
         }
       }
       const msg = await ctx.reply(replyText);
       return msg.message_id;
     },
     editPlain: async (messageId: number, newText: string): Promise<void> => {
-      if (parseMode === 'RichText' && newText.trim()) {
+      if (parseMode === 'RichText' && !draftsDisabled && newText.trim()) {
         try {
           await replyObj.sendRichDraft!(newText);
+          consecutiveDraftFailures = 0;
           return;
         } catch (e) {
-          logger.warn(`Failed to edit rich draft stream: ${e}`);
+          consecutiveDraftFailures++;
+          if (consecutiveDraftFailures >= 2) {
+            draftsDisabled = true;
+            logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
+          } else {
+            logger.warn(`Failed to edit rich draft stream (attempt ${consecutiveDraftFailures}): ${e}`);
+          }
         }
       }
       await safeEdit(messageId, newText, false);
@@ -528,26 +545,13 @@ export class TelegramBot {
     if (options.proxy) {
       this.proxyAgent = new ProxyAgent(options.proxy);
       clientConfig.baseFetchConfig = {
+        dispatcher: this.proxyAgent,
         compress: true,
       };
       clientConfig.fetch = (url: any, init: any) => {
         const cleanInit = init ? { ...init } : {};
-        if (cleanInit.signal) {
-          const grammySignal = cleanInit.signal;
-          const nativeController = new globalThis.AbortController();
-          if (grammySignal.aborted) {
-            nativeController.abort();
-          } else {
-            grammySignal.addEventListener('abort', () => {
-              nativeController.abort();
-            });
-          }
-          cleanInit.signal = nativeController.signal;
-        }
-        return undiciFetch(url, {
-          ...cleanInit,
-          dispatcher: this.proxyAgent,
-        });
+        delete cleanInit.signal;
+        return undiciFetch(url, cleanInit);
       };
     }
     this.bot = new Bot(token, { client: clientConfig });
@@ -742,24 +746,6 @@ export class TelegramBot {
   }
 
   private setupMiddleware(allowedUsers?: number[]): void {
-    // Diagnostic logging middleware to track update latency
-    this.bot.use(async (ctx, next) => {
-      const start = Date.now();
-      const updateId = ctx.update.update_id;
-      const message = ctx.message || ctx.editedMessage || ctx.callbackQuery?.message;
-      const msgDate = message?.date ? message.date * 1000 : null;
-      const dateDiff = msgDate ? (start - msgDate) / 1000 : null;
-      
-      logger.info(`[Update ${updateId}] Received update. Message date: ${msgDate ? new Date(msgDate).toISOString() : 'N/A'}. Delay from sending: ${dateDiff !== null ? dateDiff.toFixed(2) + 's' : 'N/A'}`);
-      
-      try {
-        await next();
-      } finally {
-        const duration = Date.now() - start;
-        logger.info(`[Update ${updateId}] Processed in ${duration}ms`);
-      }
-    });
-
     // Sequentialize: messages in the same chat run serially,
     // but /cancel gets its own key so it bypasses the queue.
     this.bot.use(sequentialize(getSequentialKey));

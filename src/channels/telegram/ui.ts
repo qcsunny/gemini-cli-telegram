@@ -72,7 +72,7 @@ export function buildMainKeyboard(): InlineKeyboard {
     .text(`${ICONS.bot} Autopilot`, '/autopilot')
     .row()
     .text(`${ICONS.model} Model`, '/model')
-    .text(`${ICONS.stats} Stats`, '/stats')
+    .text(`${ICONS.stats} Status`, '/status')
     .text(`${ICONS.help} Help`, '/help');
 }
 
@@ -117,7 +117,7 @@ export function buildProjectKeyboard(projects: ProjectInfo[], hasMore = false, p
     keyboard.row();
   }
   
-  keyboard.text(`${ICONS.search} Browse Folders`, '/project_browse').row();
+  keyboard.text(`${ICONS.search} Scan Documents`, '/project_scan_documents').row();
   keyboard.text(`${ICONS.back} Main Menu`, '/start');
   return keyboard;
 }
@@ -212,7 +212,7 @@ export function formatHelp(): string {
     `  /model — Change AI brain ${ICONS.model}`,
     `  /compact — Optimize context ${ICONS.compact}`,
     `  /addfolder — Grant access ${ICONS.folder}`,
-    `  /stats — Session metrics ${ICONS.stats}`,
+    `  /status — Session metrics ${ICONS.stats}`,
     `  /help — Show this guide ${ICONS.help}`,
     '',
     '<b>Quick Tips</b>',

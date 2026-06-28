@@ -6,19 +6,7 @@
 
 import * as readline from 'node:readline';
 import { Bot } from 'grammy';
-import { runAuthProbe } from './index.js';
-import {
-  saveApiKey,
-  DEFAULT_GEMINI_MODEL,
-  DEFAULT_GEMINI_FLASH_MODEL,
-  DEFAULT_GEMINI_FLASH_LITE_MODEL,
-  DEFAULT_GEMINI_MODEL_AUTO,
-  PREVIEW_GEMINI_MODEL,
-  PREVIEW_GEMINI_3_1_MODEL,
-  PREVIEW_GEMINI_FLASH_MODEL,
-  PREVIEW_GEMINI_MODEL_AUTO,
-  getDisplayString,
-} from '@google/gemini-cli-core';
+import { getAvailableModels } from './agy/agyCli.js';
 import {
   saveUserConfig,
   loadUserConfig,
@@ -28,18 +16,7 @@ import {
 } from './config/userConfig.js';
 import { ICONS } from './channels/telegram/ui.js';
 
-const AVAILABLE_MODELS = [
-  DEFAULT_GEMINI_MODEL_AUTO,
-  DEFAULT_GEMINI_MODEL,
-  DEFAULT_GEMINI_FLASH_MODEL,
-  DEFAULT_GEMINI_FLASH_LITE_MODEL,
-  PREVIEW_GEMINI_MODEL_AUTO,
-  PREVIEW_GEMINI_MODEL,
-  PREVIEW_GEMINI_3_1_MODEL,
-  PREVIEW_GEMINI_FLASH_MODEL,
-];
-
-export type SetupStep = 'token' | 'users' | 'model' | 'auth';
+export type SetupStep = 'token' | 'users' | 'model';
 
 function ask(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => {
@@ -183,11 +160,11 @@ async function setupModel(rl: readline.Interface): Promise<{ model: string | und
   // Close readline entirely to flush its buffer before raw mode
   rl.close();
 
+  const models = await getAvailableModels();
   const options = [
     { label: 'Use Gemini CLI default', value: undefined as string | undefined },
-    ...AVAILABLE_MODELS.map((m) => {
-      const display = getDisplayString(m);
-      return { label: display !== m ? `${m} — ${display}` : m, value: m as string | undefined };
+    ...models.map((m) => {
+      return { label: m, value: m as string | undefined };
     }),
   ];
 
@@ -200,75 +177,6 @@ async function setupModel(rl: readline.Interface): Promise<{ model: string | und
   });
 
   return { model, rl: newRl };
-}
-
-/**
- * Run the auth step. Accepts the readline interface so it can be closed
- * before triggering OAuth (which needs its own stdin access).
- * Returns a new readline interface if one was closed and reopened.
- */
-async function setupAuth(rl: readline.Interface): Promise<readline.Interface> {
-  console.log('Gemini Authentication');
-  console.log('  Checking existing credentials...');
-
-  // Close readline before probing — the probe may trigger a consent
-  // prompt via its own readline, which conflicts with ours.
-  rl.close();
-
-  // Try existing auth silently — if it works, skip.
-  try {
-    await runAuthProbe();
-    console.log('  Authenticated. Skipping.\n');
-    return readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-  } catch {
-    // Auth not configured — ask user to set it up.
-  }
-
-  rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  console.log('  Choose how to authenticate:');
-  console.log('  (1) OAuth — opens your browser to sign in with Google');
-  console.log('  (2) API Key — paste a key or set GEMINI_API_KEY env var\n');
-
-  const authChoice = await ask(rl, 'Auth method [1]: ');
-
-  if (authChoice === '2') {
-    console.log('  Get a key from https://aistudio.google.com/apikey\n');
-    console.log('  You can either paste it here to save it securely,');
-    console.log('  or set GEMINI_API_KEY in your environment and press Enter to skip.\n');
-    const key = await ask(rl, 'Gemini API key (or Enter to skip): ');
-    if (key) {
-      await saveApiKey(key);
-      console.log('API key saved.\n');
-    } else {
-      console.log('Skipped. Make sure GEMINI_API_KEY is set in your environment.\n');
-    }
-    return rl;
-  }
-
-  // OAuth: close readline so the auth probe can use stdin exclusively.
-  rl.close();
-
-  console.log('  Opening browser for Google sign-in...\n');
-  try {
-    await runAuthProbe();
-    console.log('OAuth authentication complete.\n');
-  } catch (e) {
-    console.log(`OAuth failed: ${e instanceof Error ? e.message : String(e)}`);
-    console.log('You can retry with: gemini-cli-telegram setup auth\n');
-  }
-
-  // Reopen readline for any remaining steps.
-  return readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
 }
 
 /**
@@ -298,15 +206,9 @@ export async function runSetup(only?: SetupStep): Promise<void> {
   }
 
   // Single step with no existing config for required fields
-  if (only && !existing && only !== 'auth') {
+  if (only && !existing) {
     console.log('No existing config. Run full setup first: gemini-cli-telegram setup');
     rl.close();
-    return;
-  }
-
-  if (only === 'auth') {
-    const finalRl = await setupAuth(rl);
-    finalRl.close();
     return;
   }
 
@@ -327,10 +229,6 @@ export async function runSetup(only?: SetupStep): Promise<void> {
     currentRl = result.rl;
   } else {
     model = existing?.model;
-  }
-
-  if (!only) {
-    currentRl = await setupAuth(currentRl);
   }
 
   const config: UserConfig = {

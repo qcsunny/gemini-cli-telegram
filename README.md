@@ -144,7 +144,8 @@ This will create a service named `gemini-telegram` that starts on boot and resta
 | Stop | `sudo systemctl stop gemini-telegram` |
 | Restart | `sudo systemctl restart gemini-telegram` |
 | Status | `sudo systemctl status gemini-telegram` |
-| Live Logs | `sudo journalctl -u gemini-telegram -f` |
+| Application Logs | `tail -f ~/.gemini-cli-telegram/daemon.log` |
+| Systemd Logs | `sudo journalctl -u gemini-telegram -f` |
 
 ---
 
