@@ -742,13 +742,23 @@ export class TelegramBot {
       if (sessions) {
         for (const [chatId, session] of sessions) {
           if (session.busy) {
-            const busySince = (session as { _busySince?: number })._busySince;
+            const busySince = session._busySince;
             if (busySince && Date.now() - busySince > MAX_MESSAGE_PROCESSING_MS) {
-              logger.warn(`Health check: resetting stuck session for chat ${chatId}`);
+              logger.warn(`Health check: resetting stuck session for chat ${chatId} (childPid=${session.childPid ?? 'none'})`);
+              // SIGKILL the hung agy child process first, so it doesn't linger
+              if (session.childPid !== undefined) {
+                try {
+                  process.kill(session.childPid, 'SIGKILL');
+                  logger.info(`Health check: sent SIGKILL to agy pid ${session.childPid}`);
+                } catch (killErr) {
+                  logger.warn(`Health check: failed to kill pid ${session.childPid}: ${killErr}`);
+                }
+              }
               session.abortController.abort('Health check: session stuck');
               session.abortController = new AbortController();
               session.busy = false;
-              (session as { _busySince?: number })._busySince = undefined;
+              session._busySince = undefined;
+              session.childPid = undefined;
             }
           }
         }

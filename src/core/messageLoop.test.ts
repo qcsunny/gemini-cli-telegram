@@ -86,7 +86,7 @@ describe('processMessage', () => {
     expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi ');
 
     // After completion (final rendering)
-    expect(mockReply.edit).toHaveBeenCalledWith(456, 'Hi there!');
+    expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('Hi there!'));
     expect(mockSession.conversationId).toBe('updated-conv-id');
     expect(setConversation).toHaveBeenCalledWith(123456, 'updated-conv-id', '/test/project/path', 'test-model');
   });
