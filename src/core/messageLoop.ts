@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
 import { runAgyPrint } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
+import { formatFooterMarker } from '../utils/pricing.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
 
@@ -89,6 +90,7 @@ export async function processMessage(
 
   try {
     session.busy = true;
+    session._busySince = Date.now();
     session.turnCount++;
 
     let modelToUse = session.model;
@@ -110,6 +112,7 @@ export async function processMessage(
           model: modelToUse,
           proxy: session.proxy,
           signal,
+          onSpawn: (pid) => { session.childPid = pid; },
           onChunk: (chunk) => {
             responseText += stripAnsi(chunk);
             updateMessageStream(false).catch(err => {
@@ -184,8 +187,16 @@ export async function processMessage(
     }
 
     // 5. Final full rendering of response text (supports RichText and multi-chunk partitioning)
-    const finalCleanText = stripAnsi(finalResult.output || responseText);
+    let finalCleanText = stripAnsi(finalResult.output || responseText);
     if (finalCleanText.trim()) {
+      // Append the footer marker containing Model name, token counts, and cost
+      const footerMarker = formatFooterMarker(
+        modelToUse || 'Gemini 3.5 Flash (Medium)',
+        finalPrompt,
+        finalCleanText
+      );
+      finalCleanText = `${finalCleanText}\n\n${footerMarker}`;
+
       const chunks = formatter.chunkText(finalCleanText);
       if (currentMessageId) {
         try {
@@ -264,6 +275,8 @@ export async function processMessage(
     }
   } finally {
     session.busy = false;
+    session._busySince = undefined;
+    session.childPid = undefined;
   }
 }
 

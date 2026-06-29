@@ -650,6 +650,24 @@ export function markdownToHtml(markdown: string): string {
     return `<tg-collage>${match.trim()}</tg-collage>`;
   });
 
+  html = html.replace(/<p>\s*\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)\]\s*<\/p>/gi, (match, model, inputTokens, outputTokens, cost) => {
+    const m = model.trim();
+    const i = inputTokens.trim();
+    const o = outputTokens.trim();
+    const c = cost.trim();
+    const totalTokens = Number(i) + Number(o);
+    return `\n\n<i>🤖 运行模型: <code>${m}</code> | 📊 消耗 Token: <code>输入 ${i} + 输出 ${o} = ${totalTokens}</code> | 💰 消费金额: <code>${c}</code></i>`;
+  });
+
+  html = html.replace(/\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)\]/gi, (match, model, inputTokens, outputTokens, cost) => {
+    const m = model.trim();
+    const i = inputTokens.trim();
+    const o = outputTokens.trim();
+    const c = cost.trim();
+    const totalTokens = Number(i) + Number(o);
+    return `\n\n<i>🤖 运行模型: <code>${m}</code> | 📊 消耗 Token: <code>输入 ${i} + 输出 ${o} = ${totalTokens}</code> | 💰 消费金额: <code>${c}</code></i>`;
+  });
+
   return sanitizeHtmlForTelegram(html);
 }
 

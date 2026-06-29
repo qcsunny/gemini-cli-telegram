@@ -134,4 +134,10 @@ Thanks for reading! 🚀`;
     expect(html).toContain('<img src="https://example.com/2.png"');
     expect(html).toContain('</tg-collage>');
   });
+
+  it('should format footers with standard Telegram tags', () => {
+    const input = 'This is the main response.\n\n[footer: Gemini 3.5 Flash (Medium) | 120 | 250 | $0.000084]';
+    const html = markdownToHtml(input);
+    expect(html).toContain('<i>🤖 运行模型: <code>Gemini 3.5 Flash (Medium)</code> | 📊 消耗 Token: <code>输入 120 + 输出 250 = 370</code> | 💰 消费金额: <code>$0.000084</code></i>');
+  });
 });

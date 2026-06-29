@@ -116,6 +116,10 @@ export interface DaemonSession {
   /** Compatibility fields for config and geminiClient */
   config?: any;
   geminiClient?: any;
+  /** PID of the currently running agy child process (set by agyCli onSpawn, cleared on close). */
+  childPid?: number;
+  /** Timestamp (ms) when session.busy was set to true — used by health check for stuck detection. */
+  _busySince?: number;
 }
 
 /**
