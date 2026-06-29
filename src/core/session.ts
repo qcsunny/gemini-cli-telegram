@@ -32,6 +32,18 @@ export class ProjectManager {
 
     const solidified = [
       {
+        id: "c0723167-918e-4a7b-bf0a-53c876398dd4",
+        name: "通用知识专家",
+        path: "/home/user/Documents/通用知识专家",
+        description: "通用知识专家 - 2.1 基础版"
+      },
+      {
+        id: "d0723167-918e-4a7b-bf0a-53c876398dd4",
+        name: "通用知识专家_MarkdownV2",
+        path: "/home/user/Documents/通用知识专家_MarkdownV2",
+        description: "通用知识专家 - 2.1 MarkdownV2版"
+      },
+      {
         id: "b0723167-918e-4a7b-bf0a-53c876398dd4",
         name: "通用知识专家_RichText",
         path: "/home/user/Documents/通用知识专家_RichText",
