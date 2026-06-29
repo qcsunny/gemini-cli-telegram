@@ -120,6 +120,10 @@ export interface DaemonSession {
   childPid?: number;
   /** Timestamp (ms) when session.busy was set to true — used by health check for stuck detection. */
   _busySince?: number;
+  /** Circuit breaker for Rich Draft functionality. */
+  draftsDisabled?: boolean;
+  /** Consecutive failures count for sending rich drafts. */
+  consecutiveDraftFailures?: number;
 }
 
 /**

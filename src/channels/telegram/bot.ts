@@ -101,10 +101,35 @@ export function buildChannelReply(
   ctx: Context,
   chatId: number,
   parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'RichText',
+  session?: DaemonSession,
 ): ChannelReply {
   const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
-  let draftsDisabled = false;
-  let consecutiveDraftFailures = 0;
+  let localDraftsDisabled = false;
+  let localConsecutiveDraftFailures = 0;
+
+  const getDraftsDisabled = (): boolean => {
+    return session ? !!session.draftsDisabled : localDraftsDisabled;
+  };
+
+  const setDraftsDisabled = (val: boolean) => {
+    if (session) {
+      session.draftsDisabled = val;
+    } else {
+      localDraftsDisabled = val;
+    }
+  };
+
+  const getConsecutiveDraftFailures = (): number => {
+    return session ? session.consecutiveDraftFailures ?? 0 : localConsecutiveDraftFailures;
+  };
+
+  const setConsecutiveDraftFailures = (val: number) => {
+    if (session) {
+      session.consecutiveDraftFailures = val;
+    } else {
+      localConsecutiveDraftFailures = val;
+    }
+  };
   const safeEdit = async (messageId: number, text: string, html = true) => {
     try {
       if (html) {
@@ -135,47 +160,47 @@ export function buildChannelReply(
 
   const replyObj: ChannelReply = {
     sendRich: async (originalText: string): Promise<number> => {
-      // Option A: Native Rich HTML (Telegram parses this on the server)
       try {
-        const html = markdownToHtml(originalText);
-        const res: any = await (ctx.api.raw as any).sendRichMessage({
-          chat_id: chatId,
-          message_thread_id: messageThreadId,
-          rich_message: { html },
-        });
-        draftIds.delete(chatId);
-        return res.message_id;
-      } catch (err: any) {
-        logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
-      }
+        // Option A: Native Rich HTML (Telegram parses this on the server)
+        try {
+          const html = markdownToHtml(originalText);
+          const res: any = await (ctx.api.raw as any).sendRichMessage({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            rich_message: { html },
+          });
+          return res.message_id;
+        } catch (err: any) {
+          logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
+        }
 
-      // Option B: Rich Markdown
-      try {
-        const safeMarkdown = prepareTelegramMarkdown(originalText);
-        const res: any = await (ctx.api.raw as any).sendRichMessage({
-          chat_id: chatId,
-          message_thread_id: messageThreadId,
-          rich_message: { markdown: safeMarkdown },
-        });
-        draftIds.delete(chatId);
-        return res.message_id;
-      } catch (err: any) {
-        logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
-      }
+        // Option B: Rich Markdown
+        try {
+          const safeMarkdown = prepareTelegramMarkdown(originalText);
+          const res: any = await (ctx.api.raw as any).sendRichMessage({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            rich_message: { markdown: safeMarkdown },
+          });
+          return res.message_id;
+        } catch (err: any) {
+          logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
+        }
 
-      // Option C: HTML Fallback
-      try {
-        const htmlText = markdownToHtml(originalText);
-        const msg = await ctx.reply(htmlText, {
-          parse_mode: 'HTML',
-        });
+        // Option C: HTML Fallback
+        try {
+          const htmlText = markdownToHtml(originalText);
+          const msg = await ctx.reply(htmlText, {
+            parse_mode: 'HTML',
+          });
+          return msg.message_id;
+        } catch (err: any) {
+          logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
+          const msg = await ctx.reply(originalText);
+          return msg.message_id;
+        }
+      } finally {
         draftIds.delete(chatId);
-        return msg.message_id;
-      } catch (err: any) {
-        logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
-        const msg = await ctx.reply(originalText);
-        draftIds.delete(chatId);
-        return msg.message_id;
       }
     },
 
@@ -288,18 +313,19 @@ export function buildChannelReply(
       await safeEdit(messageId, newText, true);
     },
     sendPlain: async (replyText: string): Promise<number> => {
-      if (parseMode === 'RichText' && !draftsDisabled && replyText.trim()) {
+      if (parseMode === 'RichText' && !getDraftsDisabled() && replyText.trim()) {
         try {
           const res = await replyObj.sendRichDraft!(replyText);
-          consecutiveDraftFailures = 0;
+          setConsecutiveDraftFailures(0);
           return res;
         } catch (e) {
-          consecutiveDraftFailures++;
-          if (consecutiveDraftFailures >= 2) {
-            draftsDisabled = true;
+          const failures = getConsecutiveDraftFailures() + 1;
+          setConsecutiveDraftFailures(failures);
+          if (failures >= 2) {
+            setDraftsDisabled(true);
             logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
           } else {
-            logger.warn(`Failed to send rich draft stream (attempt ${consecutiveDraftFailures}): ${e}`);
+            logger.warn(`Failed to send rich draft stream (attempt ${failures}): ${e}`);
           }
         }
       }
@@ -308,18 +334,19 @@ export function buildChannelReply(
       return msg.message_id;
     },
     editPlain: async (messageId: number, newText: string): Promise<void> => {
-      if (parseMode === 'RichText' && !draftsDisabled && newText.trim()) {
+      if (parseMode === 'RichText' && !getDraftsDisabled() && newText.trim()) {
         try {
           await replyObj.sendRichDraft!(newText);
-          consecutiveDraftFailures = 0;
+          setConsecutiveDraftFailures(0);
           return;
         } catch (e) {
-          consecutiveDraftFailures++;
-          if (consecutiveDraftFailures >= 2) {
-            draftsDisabled = true;
+          const failures = getConsecutiveDraftFailures() + 1;
+          setConsecutiveDraftFailures(failures);
+          if (failures >= 2) {
+            setDraftsDisabled(true);
             logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
           } else {
-            logger.warn(`Failed to edit rich draft stream (attempt ${consecutiveDraftFailures}): ${e}`);
+            logger.warn(`Failed to edit rich draft stream (attempt ${failures}): ${e}`);
           }
         }
       }
@@ -347,6 +374,26 @@ export function buildChannelReply(
 }
 
 /**
+ * Gracefully kill any hung child process and reset the busy state of a stuck session.
+ */
+function resetStuckSession(session: DaemonSession, reason: string): void {
+  logger.warn(`Resetting stuck session (childPid=${session.childPid ?? 'none'}): ${reason}`);
+  if (session.childPid !== undefined) {
+    try {
+      process.kill(session.childPid, 'SIGKILL');
+      logger.info(`Stuck session cleanup: sent SIGKILL to agy pid ${session.childPid}`);
+    } catch (killErr) {
+      logger.warn(`Stuck session cleanup: failed to kill pid ${session.childPid}: ${killErr}`);
+    }
+  }
+  session.abortController.abort(reason);
+  session.abortController = new AbortController();
+  session.busy = false;
+  session._busySince = undefined;
+  session.childPid = undefined;
+}
+
+/**
  * Wrap a handler with session acquisition, typing indicator, and cleanup.
  */
 async function withSession(
@@ -370,13 +417,9 @@ async function withSession(
   // Check if session appears stuck (busy for too long)
   if (session.busy) {
     const now = Date.now();
-    const busySince = (session as { _busySince?: number })._busySince;
+    const busySince = session._busySince;
     if (busySince && now - busySince > MAX_MESSAGE_PROCESSING_MS) {
-      logger.warn(`Session for chat ${chatId} appears stuck (busy for ${now - busySince}ms). Resetting.`);
-      session.abortController.abort('Session timeout (stuck)');
-      session.abortController = new AbortController();
-      session.busy = false;
-      (session as { _busySince?: number })._busySince = undefined;
+      resetStuckSession(session, 'Session timeout (stuck)');
       try {
         await ctx.reply(`${ICONS.warning} Previous operation timed out and was cancelled. Please try again.`);
       } catch { /* ignore */ }
@@ -415,7 +458,7 @@ async function withSession(
 
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
   try {
-    await handler(session, buildChannelReply(ctx, chatId, parseMode));
+    await handler(session, buildChannelReply(ctx, chatId, parseMode, session));
   } catch (e) {
     logger.error(`Error in handler for chat ${chatId}: ${e}`);
     try {
@@ -740,25 +783,11 @@ export class TelegramBot {
 
       const sessions = (this.sessionManager as unknown as { sessions?: Map<number, DaemonSession> }).sessions;
       if (sessions) {
-        for (const [chatId, session] of sessions) {
+        for (const [, session] of sessions) {
           if (session.busy) {
             const busySince = session._busySince;
             if (busySince && Date.now() - busySince > MAX_MESSAGE_PROCESSING_MS) {
-              logger.warn(`Health check: resetting stuck session for chat ${chatId} (childPid=${session.childPid ?? 'none'})`);
-              // SIGKILL the hung agy child process first, so it doesn't linger
-              if (session.childPid !== undefined) {
-                try {
-                  process.kill(session.childPid, 'SIGKILL');
-                  logger.info(`Health check: sent SIGKILL to agy pid ${session.childPid}`);
-                } catch (killErr) {
-                  logger.warn(`Health check: failed to kill pid ${session.childPid}: ${killErr}`);
-                }
-              }
-              session.abortController.abort('Health check: session stuck');
-              session.abortController = new AbortController();
-              session.busy = false;
-              session._busySince = undefined;
-              session.childPid = undefined;
+              resetStuckSession(session, 'Health check: session stuck');
             }
           }
         }
