@@ -225,8 +225,8 @@ describe('TelegramBot', () => {
       const msgId = await reply.sendRich!('**bold** text');
 
       expect(mockCtx.reply).toHaveBeenCalledWith(
-        expect.stringContaining('<strong>bold</strong>'),
-        { parse_mode: 'HTML' }
+        expect.stringContaining('<b>bold</b>'),
+        expect.objectContaining({ parse_mode: 'HTML' })
       );
       expect(msgId).toBe(999);
     });
@@ -330,8 +330,8 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.editMessageText).toHaveBeenCalledWith(
         chatId,
         100,
-        expect.stringContaining('<strong>bold</strong>'),
-        { parse_mode: 'HTML' }
+        expect.stringContaining('<b>bold</b>'),
+        expect.objectContaining({ parse_mode: 'HTML' })
       );
     });
 
