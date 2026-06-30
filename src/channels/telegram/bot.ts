@@ -90,6 +90,9 @@ function prepareTelegramMarkdown(markdown: string): string {
 
 const draftIds = new Map<number, number>();
 
+export function clearDraftIds(): void {
+  draftIds.clear();
+}
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  */
@@ -97,7 +100,35 @@ export function buildChannelReply(
   ctx: Context,
   chatId: number,
   parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'RichText',
+  session?: DaemonSession,
 ): ChannelReply {
+  const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
+  let localDraftsDisabled = false;
+  let localConsecutiveDraftFailures = 0;
+
+  const getDraftsDisabled = (): boolean => {
+    return session ? !!session.draftsDisabled : localDraftsDisabled;
+  };
+
+  const setDraftsDisabled = (val: boolean) => {
+    if (session) {
+      session.draftsDisabled = val;
+    } else {
+      localDraftsDisabled = val;
+    }
+  };
+
+  const getConsecutiveDraftFailures = (): number => {
+    return session ? session.consecutiveDraftFailures ?? 0 : localConsecutiveDraftFailures;
+  };
+
+  const setConsecutiveDraftFailures = (val: number) => {
+    if (session) {
+      session.consecutiveDraftFailures = val;
+    } else {
+      localConsecutiveDraftFailures = val;
+    }
+  };
   const safeEdit = async (messageId: number, text: string, html = true) => {
     try {
       if (html) {
@@ -131,52 +162,56 @@ export function buildChannelReply(
     }
   };
 
-
   const replyObj: ChannelReply = {
     sendRich: async (originalText: string): Promise<number> => {
-      // Option A: Native Rich HTML (Telegram parses this on the server)
       try {
-        const html = markdownToHtml(originalText);
-        const res: any = await (ctx.api.raw as any).sendRichMessage({
-          chat_id: chatId,
-          rich_message: { html },
-        });
-        draftIds.delete(chatId);
-        messageCache.set(res.message_id, originalText);
-        return res.message_id;
-      } catch (err: any) {
-        logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
-      }
+        // Option A: Native Rich HTML (Telegram parses this on the server)
+        try {
+          const html = markdownToHtml(originalText);
+          const res: any = await (ctx.api.raw as any).sendRichMessage({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            rich_message: { html },
+          });
+          messageCache.set(res.message_id, originalText);
+          return res.message_id;
+        } catch (err: any) {
+          logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
+        }
 
-      // Option B: Rich Markdown
-      try {
-        const safeMarkdown = prepareTelegramMarkdown(originalText);
-        const res: any = await (ctx.api.raw as any).sendRichMessage({
-          chat_id: chatId,
-          rich_message: { markdown: safeMarkdown },
-        });
-        draftIds.delete(chatId);
-        messageCache.set(res.message_id, originalText);
-        return res.message_id;
-      } catch (err: any) {
-        logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
-      }
+        // Option B: Rich Markdown
+        try {
+          const safeMarkdown = prepareTelegramMarkdown(originalText);
+          const res: any = await (ctx.api.raw as any).sendRichMessage({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            rich_message: { markdown: safeMarkdown },
+          });
+          messageCache.set(res.message_id, originalText);
+          return res.message_id;
+        } catch (err: any) {
+          logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
+        }
 
-      // Option C: HTML Fallback
-      try {
-        const htmlText = markdownToHtml(originalText);
-        const msg = await ctx.reply(htmlText, {
-          parse_mode: 'HTML',
-        });
+        // Option C: HTML Fallback
+        try {
+          const htmlText = markdownToHtml(originalText);
+          const msg = await ctx.reply(htmlText, {
+            parse_mode: 'HTML',
+            message_thread_id: messageThreadId,
+          });
+          messageCache.set(msg.message_id, originalText);
+          return msg.message_id;
+        } catch (err: any) {
+          logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
+          const msg = await ctx.reply(originalText, {
+            message_thread_id: messageThreadId,
+          });
+          messageCache.set(msg.message_id, originalText);
+          return msg.message_id;
+        }
+      } finally {
         draftIds.delete(chatId);
-        messageCache.set(msg.message_id, originalText);
-        return msg.message_id;
-      } catch (err: any) {
-        logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
-        const msg = await ctx.reply(originalText);
-        draftIds.delete(chatId);
-        messageCache.set(msg.message_id, originalText);
-        return msg.message_id;
       }
     },
 
@@ -192,6 +227,7 @@ export function buildChannelReply(
         const html = markdownToHtml(originalText);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
+          message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { html: `${html}\n<tg-thinking>正在思考...</tg-thinking>` },
         });
@@ -206,6 +242,7 @@ export function buildChannelReply(
         const safeMarkdown = prepareTelegramMarkdown(originalText);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
+          message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { markdown: safeMarkdown },
         });
@@ -218,6 +255,13 @@ export function buildChannelReply(
     },
 
     editRich: async (messageId: number, originalText: string): Promise<void> => {
+      // If we have an active draft for this chat, the messageId is actually a draftId.
+      // We must promote/send the final message as a NEW message instead of editing.
+      if (draftIds.has(chatId)) {
+        await replyObj.sendRich!(originalText);
+        return;
+      }
+
       // Option A: Native Rich HTML
       try {
         const html = markdownToHtml(originalText);
@@ -267,10 +311,22 @@ export function buildChannelReply(
         }
         const msg = await ctx.reply(
           parseMode === 'MarkdownV2' ? markdownToMarkdownV2(replyText) : markdownToHtml(replyText),
-          { parse_mode: parseMode === 'MarkdownV2' ? 'MarkdownV2' : 'HTML' },
+          {
+            parse_mode: parseMode === 'MarkdownV2' ? 'MarkdownV2' : 'HTML',
+            message_thread_id: messageThreadId,
+          },
         );
         messageCache.set(msg.message_id, replyText);
         return msg.message_id;
+      } catch (e: any) {
+        logger.warn(`Failed to send message in ${parseMode} mode: ${e}`);
+        const msg = await ctx.reply(replyText, {
+          message_thread_id: messageThreadId,
+        });
+        messageCache.set(msg.message_id, replyText);
+        return msg.message_id;
+      }
+    },
       } catch (e: any) {
         logger.warn(`Failed to send message in ${parseMode} mode: ${e}`);
         const msg = await ctx.reply(replyText);
@@ -287,25 +343,43 @@ export function buildChannelReply(
       }
       await safeEdit(messageId, newText, true);
     },
-    sendPlain: async (replyText: string): Promise<number> => {
-      if (parseMode === 'RichText' && replyText.trim()) {
+  sendPlain: async (replyText: string): Promise<number> => {
+      if (parseMode === 'RichText' && !getDraftsDisabled() && replyText.trim()) {
         try {
-          return await replyObj.sendRichDraft!(replyText);
+          const res = await replyObj.sendRichDraft!(replyText);
+          setConsecutiveDraftFailures(0);
+          return res;
         } catch (e) {
-          logger.warn(`Failed to send rich draft stream: ${e}`);
+          const failures = getConsecutiveDraftFailures() + 1;
+          setConsecutiveDraftFailures(failures);
+          if (failures >= 2) {
+            setDraftsDisabled(true);
+            logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
+          } else {
+            logger.warn(`Failed to send rich draft stream (attempt ${failures}): ${e}`);
+          }
         }
       }
+      draftIds.delete(chatId);
       const msg = await ctx.reply(replyText);
       messageCache.set(msg.message_id, replyText);
       return msg.message_id;
     },
     editPlain: async (messageId: number, newText: string): Promise<void> => {
-      if (parseMode === 'RichText' && newText.trim()) {
+      if (parseMode === 'RichText' && !getDraftsDisabled() && newText.trim()) {
         try {
           await replyObj.sendRichDraft!(newText);
+          setConsecutiveDraftFailures(0);
           return;
         } catch (e) {
-          logger.warn(`Failed to edit rich draft stream: ${e}`);
+          const failures = getConsecutiveDraftFailures() + 1;
+          setConsecutiveDraftFailures(failures);
+          if (failures >= 2) {
+            setDraftsDisabled(true);
+            logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
+          } else {
+            logger.warn(`Failed to edit rich draft stream (attempt ${failures}): ${e}`);
+          }
         }
       }
       await safeEdit(messageId, newText, false);
@@ -332,6 +406,26 @@ export function buildChannelReply(
 }
 
 /**
+ * Gracefully kill any hung child process and reset the busy state of a stuck session.
+ */
+function resetStuckSession(session: DaemonSession, reason: string): void {
+  logger.warn(`Resetting stuck session (childPid=${session.childPid ?? 'none'}): ${reason}`);
+  if (session.childPid !== undefined) {
+    try {
+      process.kill(session.childPid, 'SIGKILL');
+      logger.info(`Stuck session cleanup: sent SIGKILL to agy pid ${session.childPid}`);
+    } catch (killErr) {
+      logger.warn(`Stuck session cleanup: failed to kill pid ${session.childPid}: ${killErr}`);
+    }
+  }
+  session.abortController.abort(reason);
+  session.abortController = new AbortController();
+  session.busy = false;
+  session._busySince = undefined;
+  session.childPid = undefined;
+}
+
+/**
  * Wrap a handler with session acquisition, typing indicator, and cleanup.
  */
 async function withSession(
@@ -355,13 +449,9 @@ async function withSession(
   // Check if session appears stuck (busy for too long)
   if (session.busy) {
     const now = Date.now();
-    const busySince = (session as { _busySince?: number })._busySince;
+    const busySince = session._busySince;
     if (busySince && now - busySince > MAX_MESSAGE_PROCESSING_MS) {
-      logger.warn(`Session for chat ${chatId} appears stuck (busy for ${now - busySince}ms). Resetting.`);
-      session.abortController.abort('Session timeout (stuck)');
-      session.abortController = new AbortController();
-      session.busy = false;
-      (session as { _busySince?: number })._busySince = undefined;
+      resetStuckSession(session, 'Session timeout (stuck)');
       try {
         await ctx.reply(`${ICONS.warning} Previous operation timed out and was cancelled. Please try again.`);
       } catch { /* ignore */ }
@@ -400,7 +490,7 @@ async function withSession(
 
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
   try {
-    await handler(session, buildChannelReply(ctx, chatId, parseMode));
+    await handler(session, buildChannelReply(ctx, chatId, parseMode, session));
   } catch (e) {
     logger.error(`Error in handler for chat ${chatId}: ${e}`);
     try {
@@ -543,6 +633,7 @@ export class TelegramBot {
     if (options.proxy) {
       this.proxyAgent = new ProxyAgent(options.proxy);
       clientConfig.baseFetchConfig = {
+        dispatcher: this.proxyAgent,
         compress: true,
       };
       clientConfig.fetch = (url: any, init: any) => {
@@ -738,15 +829,11 @@ export class TelegramBot {
 
       const sessions = (this.sessionManager as unknown as { sessions?: Map<number, DaemonSession> }).sessions;
       if (sessions) {
-        for (const [chatId, session] of sessions) {
+        for (const [, session] of sessions) {
           if (session.busy) {
-            const busySince = (session as { _busySince?: number })._busySince;
+            const busySince = session._busySince;
             if (busySince && Date.now() - busySince > MAX_MESSAGE_PROCESSING_MS) {
-              logger.warn(`Health check: resetting stuck session for chat ${chatId}`);
-              session.abortController.abort('Health check: session stuck');
-              session.abortController = new AbortController();
-              session.busy = false;
-              (session as { _busySince?: number })._busySince = undefined;
+              resetStuckSession(session, 'Health check: session stuck');
             }
           }
         }

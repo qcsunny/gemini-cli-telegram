@@ -765,17 +765,6 @@ export function registerCommands(
     const projectManager = sessionManager.getProjectManager();
     let projects = projectManager.getProjects();
 
-    // If no projects saved, scan home directory
-    if (projects.length === 0) {
-      await ctx.reply(`${ICONS.loading} <b>Scanning for projects...</b>`, { parse_mode: 'HTML' });
-      try {
-        projects = await projectManager.scanDirectory(os.homedir(), 3);
-        await projectManager.saveProjects();
-      } catch (e) {
-        logger.error(`Failed to scan projects: ${e}`);
-      }
-    }
-
     if (projects.length === 0) {
       await ctx.reply(`${ICONS.info} <b>No projects found.</b>\n\nUse <code>/project_browse &lt;path&gt;</code> to find and add project directories.`, {
         parse_mode: 'HTML',
@@ -898,7 +887,7 @@ export function registerCommands(
 
     // Handle navigation callbacks
     if (data === '/start') {
-      await ctx.answerCallbackQuery('Main Menu');
+      ctx.answerCallbackQuery('Main Menu').catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(formatWelcome(ctx.from?.first_name), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
@@ -907,7 +896,7 @@ export function registerCommands(
     }
 
     if (data === '/new') {
-      await ctx.answerCallbackQuery('Resetting session...');
+      ctx.answerCallbackQuery('Resetting session...').catch(e => logger.error(`Failed callback: ${e}`));
       try {
         await sessionManager.reset(chatId, {
           ...defaultOptions,
@@ -918,21 +907,15 @@ export function registerCommands(
           { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
         );
       } catch (e) {
-        await ctx.answerCallbackQuery('Failed to reset session');
+        logger.error(`Failed to reset session: ${e}`);
       }
       return;
     }
 
     if (data === '/projects') {
-      await ctx.answerCallbackQuery('Loading workspaces...');
-      // Reuse the projects command logic
+      ctx.answerCallbackQuery('Loading workspaces...').catch(e => logger.error(`Failed callback: ${e}`));
       const projectManager = sessionManager.getProjectManager();
-      let projects = projectManager.getProjects();
-
-      if (projects.length === 0) {
-        projects = await projectManager.scanDirectory(os.homedir(), 3);
-        await projectManager.saveProjects();
-      }
+      const projects = projectManager.getProjects();
 
       if (projects.length === 0) {
         await ctx.editMessageText(`${ICONS.info} <b>No projects found.</b>`, {
@@ -961,7 +944,7 @@ export function registerCommands(
     }
 
     if (data === '/model') {
-      await ctx.answerCallbackQuery('Loading models...');
+      ctx.answerCallbackQuery('Loading models...').catch(e => logger.error(`Failed callback: ${e}`));
       const session = sessionManager.getSession(chatId);
       const currentModel = session?.config.getModel() || 'unknown';
 
@@ -982,13 +965,11 @@ export function registerCommands(
     }
 
     if (data === '/resume') {
-      await ctx.answerCallbackQuery('Loading sessions...');
-      // Reuse resume logic
+      ctx.answerCallbackQuery('Loading sessions...').catch(e => logger.error(`Failed callback: ${e}`));
       let session;
       try {
         session = await sessionManager.getOrCreate(chatId, defaultOptions);
       } catch {
-        await ctx.answerCallbackQuery('Failed to load sessions');
         return;
       }
 
@@ -1015,14 +996,14 @@ export function registerCommands(
             reply_markup: buildResumeKeyboard(sessionItems),
           },
         );
-      } catch {
-        await ctx.answerCallbackQuery('Failed to list sessions');
+      } catch (e) {
+        logger.error(`Failed to load sessions: ${e}`);
       }
       return;
     }
 
     if (data === '/status') {
-      await ctx.answerCallbackQuery('Loading status...');
+      ctx.answerCallbackQuery('Loading status...').catch(e => logger.error(`Failed callback: ${e}`));
       const session = sessionManager.getSession(chatId);
       if (!session) {
         await ctx.editMessageText(`${ICONS.warning} <b>No active session.</b>`, {
@@ -1049,7 +1030,7 @@ export function registerCommands(
     }
 
     if (data === '/help') {
-      await ctx.answerCallbackQuery('Loading Help...');
+      ctx.answerCallbackQuery('Loading Help...').catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(formatHelp(), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
@@ -1058,8 +1039,8 @@ export function registerCommands(
     }
 
     if (data === '/project_browse') {
-      await ctx.answerCallbackQuery('Browsing...');
-      const browsePath = os.homedir();
+      ctx.answerCallbackQuery('Browsing...').catch(e => logger.error(`Failed callback: ${e}`));
+      const browsePath = path.join(os.homedir(), 'Documents');
       
       // Update message to show scanning status
       await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });
@@ -1102,8 +1083,53 @@ export function registerCommands(
       return;
     }
 
+    if (data === '/project_scan_documents') {
+      ctx.answerCallbackQuery('Scanning Documents...').catch(e => logger.error(`Failed callback: ${e}`));
+      const scanPath = path.join(os.homedir(), 'Documents');
+      
+      // Update message to show scanning status
+      await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(scanPath)}</code>`, { parse_mode: 'HTML' });
+
+      try {
+        const projectManager = sessionManager.getProjectManager();
+        const projects = await projectManager.scanDirectory(scanPath, 3);
+        await projectManager.saveProjects();
+
+        if (projects.length === 0) {
+          await ctx.editMessageText(`${ICONS.info} <b>No projects found</b> in <code>${escapeHtml(scanPath)}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
+            parse_mode: 'HTML',
+            reply_markup: buildMainKeyboard(),
+          });
+          return;
+        }
+
+        const session = sessionManager.getSession(chatId);
+        const currentProjectId = session?.currentProject?.id;
+
+        await ctx.editMessageText(
+          `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects in <code>${escapeHtml(scanPath)}</code>. Select one to activate:`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: buildProjectKeyboard(
+              projects.slice(0, PROJECTS_PER_PAGE),
+              projects.length > PROJECTS_PER_PAGE,
+              0,
+              currentProjectId,
+            ),
+          },
+        );
+      } catch (e) {
+        logger.error(`Error scanning Documents: ${e}`);
+        await ctx.editMessageText(`${ICONS.error} <b>Failed to scan Documents.</b>`, {
+          parse_mode: 'HTML',
+          reply_markup: buildMainKeyboard(),
+        });
+      }
+      return;
+    }
+
     if (data === '/schedule') {
-      await ctx.answerCallbackQuery('Loading Scheduler...');
+      ctx.answerCallbackQuery('Loading Scheduler...').catch(e => logger.error(`Failed callback: ${e}`));
       const scheduler = sessionManager.getChatScheduler();
       const tasks = scheduler.getTasksForChat(chatId);
 
@@ -1139,7 +1165,7 @@ export function registerCommands(
     }
 
     if (data === '/autopilot') {
-      await ctx.answerCallbackQuery('Autopilot Mode');
+      ctx.answerCallbackQuery('Autopilot Mode').catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(
         `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until done (max 10 iterations)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately`,
         {
@@ -1159,10 +1185,11 @@ export function registerCommands(
           ? AVAILABLE_MODELS[num - 1]
           : modelArg;
 
+      ctx.answerCallbackQuery(`Brain: ${modelName}`).catch(e => logger.error(`Failed callback: ${e}`));
+
       try {
         const session = await sessionManager.getOrCreate(chatId, defaultOptions);
         session.config.setModel(modelName, false);
-        await ctx.answerCallbackQuery(`Brain: ${modelName}`);
         await ctx.editMessageText(
           `${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${modelName}</code>`,
           {
@@ -1171,7 +1198,7 @@ export function registerCommands(
           },
         );
       } catch {
-        await ctx.answerCallbackQuery('Switch failed');
+        logger.error('Switch failed');
       }
       return;
     }
@@ -1183,9 +1210,11 @@ export function registerCommands(
       const project = projectManager.getProject(projectId);
 
       if (!project) {
-        await ctx.answerCallbackQuery('Project not found');
+        ctx.answerCallbackQuery('Project not found').catch(e => logger.error(`Failed callback: ${e}`));
         return;
       }
+
+      ctx.answerCallbackQuery(`Workspace: ${project.name}`).catch(e => logger.error(`Failed callback: ${e}`));
 
       try {
         await sessionManager.reset(chatId, {
@@ -1193,7 +1222,6 @@ export function registerCommands(
           project,
         });
 
-        await ctx.answerCallbackQuery(`Workspace: ${project.name}`);
         await ctx.editMessageText(
           `${ICONS.success} <b>Workspace Switched</b>\n\n${formatProjectInfo(project)}`,
           {
@@ -1202,7 +1230,7 @@ export function registerCommands(
           },
         );
       } catch {
-        await ctx.answerCallbackQuery('Switch failed');
+        logger.error('Switch failed');
       }
       return;
     }
@@ -1217,7 +1245,7 @@ export function registerCommands(
       const session = sessionManager.getSession(chatId);
       const currentProjectId = session?.currentProject?.id;
 
-      await ctx.answerCallbackQuery(`Page ${page + 1}`);
+      ctx.answerCallbackQuery(`Page ${page + 1}`).catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(
         `${ICONS.project} <b>Workspace Manager</b> (Page ${page + 1})\n\nSelect a project:`,
         {
@@ -1233,6 +1261,6 @@ export function registerCommands(
       return;
     }
 
-    await ctx.answerCallbackQuery();
+    ctx.answerCallbackQuery().catch(e => logger.error(`Failed callback: ${e}`));
   });
 }

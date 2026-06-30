@@ -90,6 +90,7 @@ export async function processMessage(
 
   try {
     session.busy = true;
+    session._busySince = Date.now();
     session.turnCount++;
 
     let modelToUse = session.model;
@@ -111,6 +112,7 @@ export async function processMessage(
           model: modelToUse,
           proxy: session.proxy,
           signal,
+          onSpawn: (pid) => { session.childPid = pid; },
           onChunk: (chunk) => {
             responseText += stripAnsi(chunk);
             updateMessageStream(false).catch(err => {
@@ -273,6 +275,8 @@ export async function processMessage(
     }
   } finally {
     session.busy = false;
+    session._busySince = undefined;
+    session.childPid = undefined;
   }
 }
 

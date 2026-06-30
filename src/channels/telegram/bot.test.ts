@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TelegramBot, buildChannelReply } from './bot.js';
+import { TelegramBot, buildChannelReply, clearDraftIds } from './bot.js';
 import { processMessage } from '../../core/messageLoop.js';
 import * as fs from 'fs/promises';
 
@@ -150,6 +150,7 @@ describe('TelegramBot', () => {
     const chatId = 12345;
 
     beforeEach(() => {
+      clearDraftIds();
       mockCtx = {
         reply: vi.fn().mockResolvedValue({ message_id: 999 }),
         replyWithDocument: vi.fn().mockResolvedValue(undefined),
@@ -176,6 +177,25 @@ describe('TelegramBot', () => {
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
       expect(parsed).toHaveProperty('html');
       expect(msgId).toBe(888);
+    });
+
+    it('should pass message_thread_id if available in the context', async () => {
+      mockCtx.message = { message_thread_id: 42 };
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      
+      await reply.sendRich!('Hello Forum!');
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: chatId,
+        message_thread_id: 42,
+        rich_message: { html: expect.any(String) }
+      }));
+
+      await reply.sendRichDraft!('Hello Draft!');
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: chatId,
+        message_thread_id: 42,
+        rich_message: { html: expect.any(String) }
+      }));
     });
 
     it('should fallback to Option B (Markdown) if Option A (HTML) throws', async () => {
@@ -205,7 +225,7 @@ describe('TelegramBot', () => {
       const msgId = await reply.sendRich!('**bold** text');
 
       expect(mockCtx.reply).toHaveBeenCalledWith(
-        expect.stringContaining('<b>bold</b>'),
+        expect.stringContaining('<strong>bold</strong>'),
         { parse_mode: 'HTML' }
       );
       expect(msgId).toBe(999);
@@ -263,6 +283,26 @@ describe('TelegramBot', () => {
       expect(parsed).toHaveProperty('html');
     });
 
+    it('should promote ephemeral draft preview to a real message when finalization is reached via editRich', async () => {
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      
+      // Simulate draft is active (this sets a draft ID in draftIds map for the chatId)
+      await reply.sendRichDraft!('some draft');
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+
+      // Now call editRich (simulating finalization edit)
+      await reply.editRich!(9999, 'final text');
+
+      // It should NOT call editMessageText since it's a draftId, but rather promote it by calling sendRichMessage
+      expect(mockCtx.api.raw.editMessageText).not.toHaveBeenCalled();
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith({
+        chat_id: chatId,
+        rich_message: expect.objectContaining({
+          html: expect.any(String),
+        }),
+      });
+    });
+
     it('should fallback to edit Option B (Markdown) if Option A throws', async () => {
       mockCtx.api.raw.editMessageText.mockRejectedValueOnce(new Error('HTML edit fail'));
 
@@ -290,7 +330,7 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.editMessageText).toHaveBeenCalledWith(
         chatId,
         100,
-        expect.stringContaining('<b>bold</b>'),
+        expect.stringContaining('<strong>bold</strong>'),
         { parse_mode: 'HTML' }
       );
     });
@@ -308,6 +348,23 @@ describe('TelegramBot', () => {
       await reply.editPlain(100, 'streaming update');
 
       expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+    });
+
+    it('should trigger circuit breaker and fall back to plain editing if sendRichDraft fails twice', async () => {
+      mockCtx.api.raw.sendRichMessageDraft.mockRejectedValue(new Error('Draft rate limit'));
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      
+      // Attempt sending drafts, which fail
+      await reply.sendPlain('stream chunk 1');
+      await reply.editPlain(100, 'stream chunk 2');
+
+      // Verify it handles failures gracefully and does not throw to the caller
+      expect(mockCtx.reply).toHaveBeenCalled();
+      
+      // Verify subsequent calls directly bypass sendRichMessageDraft (it won't be called more times after threshold is hit)
+      mockCtx.api.raw.sendRichMessageDraft.mockClear();
+      await reply.sendPlain('stream chunk 3');
+      expect(mockCtx.api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
     });
   });
 });
