@@ -327,13 +327,6 @@ export function buildChannelReply(
         return msg.message_id;
       }
     },
-      } catch (e: any) {
-        logger.warn(`Failed to send message in ${parseMode} mode: ${e}`);
-        const msg = await ctx.reply(replyText);
-        messageCache.set(msg.message_id, replyText);
-        return msg.message_id;
-      }
-    },
     edit: async (messageId: number, newText: string): Promise<void> => {
       if (parseMode === 'RichText') {
         if (newText.trim()) {
