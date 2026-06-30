@@ -29,6 +29,56 @@ export class ProjectManager {
   async initialize(): Promise<void> {
     await fs.mkdir(this.configDir, { recursive: true });
     await this.loadProjects();
+
+    const solidified = [
+      {
+        id: "c0723167-918e-4a7b-bf0a-53c876398dd4",
+        name: "通用知识专家",
+        path: "/home/qcsunny/Documents/通用知识专家",
+        description: "通用知识专家 - 2.1 基础版"
+      },
+      {
+        id: "d0723167-918e-4a7b-bf0a-53c876398dd4",
+        name: "通用知识专家_MarkdownV2",
+        path: "/home/qcsunny/Documents/通用知识专家_MarkdownV2",
+        description: "通用知识专家 - 2.1 MarkdownV2版"
+      },
+      {
+        id: "b0723167-918e-4a7b-bf0a-53c876398dd4",
+        name: "通用知识专家_RichText",
+        path: "/home/qcsunny/Documents/通用知识专家_RichText",
+        description: "通用知识专家 - 10.1 富文本渲染版"
+      },
+      {
+        id: "2a489922-6c17-420a-9612-f751a64facb8",
+        name: "基于第一性原理的多视角决策分析专家",
+        path: "/home/qcsunny/Documents/基于第一性原理的多视角决策分析专家",
+        description: "多视角决策分析专家 - 遵循第一性原理"
+      },
+      {
+        id: "24483651-746e-43a4-9790-a43fe337b378",
+        name: "Jack Notes",
+        path: "/mnt/pool/1000/jack",
+        description: "个人笔记库 - PARA 结构"
+      }
+    ];
+
+    // Filter projects to only retain solidified ones (preserving their loaded fields like lastUsed)
+    const filteredProjects: Map<string, ProjectInfo> = new Map();
+    for (const s of solidified) {
+      const loaded = this.projects.get(s.id) || Array.from(this.projects.values()).find(p => p.path === s.path);
+      filteredProjects.set(s.id, {
+        ...s,
+        lastUsed: loaded?.lastUsed
+      });
+    }
+
+    // Replace the project map with the clean filtered version
+    this.projects = filteredProjects;
+
+    // Prune projects.json immediately to match
+    await this.saveProjects();
+    logger.info(`Pruned project cache. Retained exactly ${this.projects.size} solidified projects.`);
   }
 
   async loadProjects(): Promise<void> {

@@ -117,7 +117,7 @@ export function buildProjectKeyboard(projects: ProjectInfo[], hasMore = false, p
     keyboard.row();
   }
   
-  keyboard.text(`${ICONS.search} Browse Folders`, '/project_browse').row();
+  keyboard.text(`${ICONS.search} Scan Documents`, '/project_scan_documents').row();
   keyboard.text(`${ICONS.back} Main Menu`, '/start');
   return keyboard;
 }
