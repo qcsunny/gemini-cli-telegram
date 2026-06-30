@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 20 Google LLC
+ * Copyright 2026 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -54,7 +54,7 @@ const DEFAULT_RATES: PricingInfo = { inputRate: 0.075, outputRate: 0.30 };
  * - Return at least 1 token if input text is non-empty.
  */
 export function estimateTokens(text: string): number {
-  if (!text) {
+  if (!text || !text.trim()) {
     return 0;
   }
 

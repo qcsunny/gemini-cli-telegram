@@ -32,6 +32,7 @@ export interface ChannelReply {
   editPlain(messageId: number, text: string): Promise<void>;
   sendDocument(path: string, caption?: string): Promise<void>;
   delete(messageId: number): Promise<void>;
+  // Optional Rich Message API helper methods
   sendRich?(text: string): Promise<number>;
   sendRichDraft?(text: string): Promise<number>;
   editRich?(messageId: number, text: string): Promise<void>;
@@ -115,6 +116,14 @@ export interface DaemonSession {
   /** Compatibility fields for config and geminiClient */
   config?: any;
   geminiClient?: any;
+  /** PID of the currently running agy child process (set by agyCli onSpawn, cleared on close). */
+  childPid?: number;
+  /** Timestamp (ms) when session.busy was set to true — used by health check for stuck detection. */
+  _busySince?: number;
+  /** Circuit breaker for Rich Draft functionality. */
+  draftsDisabled?: boolean;
+  /** Consecutive failures count for sending rich drafts. */
+  consecutiveDraftFailures?: number;
 }
 
 /**
