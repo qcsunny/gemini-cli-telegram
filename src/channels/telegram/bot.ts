@@ -466,6 +466,13 @@ async function withSession(
   session.busy = true;
   (session as { _busySince?: number })._busySince = Date.now();
 
+  // Reset circuit breaker for rich drafts on each new user-initiated session interaction
+  if (session.draftsDisabled || (session.consecutiveDraftFailures && session.consecutiveDraftFailures > 0)) {
+    logger.info(`Resetting drafts circuit breaker for chat ${chatId} as a new user message session has started.`);
+    session.draftsDisabled = false;
+    session.consecutiveDraftFailures = 0;
+  }
+
   session.typingInterval = setInterval(() => {
     ctx.replyWithChatAction('typing').catch(() => {});
   }, TYPING_KEEPALIVE_MS);
