@@ -49,13 +49,10 @@ interface Web2ApiMessage {
 const web2apiHistories = new Map<string, Web2ApiMessage[]>();
 
 /**
- * Generate a stable pseudo-UUID for a Web2API session keyed by the project cwd.
- * Format: "web2api-<first-16-chars-of-base64-cwd>"
+ * Generate a random UUID for a Web2API session.
  */
-function makeWeb2ApiConvId(cwd: string): string {
-  // Simple deterministic ID — not cryptographically secure, just needs to be stable per cwd.
-  const encoded = Buffer.from(cwd).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 16);
-  return `web2api-${encoded}`;
+function makeWeb2ApiConvId(): string {
+  return `web2api-${globalThis.crypto.randomUUID()}`;
 }
 
 /** Clear the Web2API history for a given conversationId (called on /new). */
@@ -69,11 +66,11 @@ export function clearWeb2ApiHistory(conversationId: string): void {
  * Returns AgyRunResult with a stable web2api conversationId.
  */
 export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
-  const { prompt, cwd, conversationId: existingConvId, model = '', onChunk, signal } = opts;
+  const { prompt, conversationId: existingConvId, model = '', onChunk, signal } = opts;
   const modelId = WEB2API_MODEL_MAP[model] ?? 'gemini-3.5-flash';
 
   // Resolve or create the conversation ID
-  const convId = existingConvId || makeWeb2ApiConvId(cwd);
+  const convId = existingConvId || makeWeb2ApiConvId();
 
   // Build message history: retrieve existing turns + append new user message
   const history: Web2ApiMessage[] = web2apiHistories.get(convId) ?? [];
