@@ -79,8 +79,11 @@ export function registerCommands(
     if (!chatId) return;
 
     try {
+      const projectManager = sessionManager.getProjectManager();
+      const defaultProj = projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
       await sessionManager.reset(chatId, {
         ...defaultOptions,
+        project: defaultProj,
         model: 'Gemini 3.1 Pro (High)',
       });
       await ctx.reply(
@@ -898,8 +901,11 @@ export function registerCommands(
     if (data === '/new') {
       ctx.answerCallbackQuery('Resetting session...').catch(e => logger.error(`Failed callback: ${e}`));
       try {
+        const projectManager = sessionManager.getProjectManager();
+        const defaultProj = projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
         await sessionManager.reset(chatId, {
           ...defaultOptions,
+          project: defaultProj,
           model: 'Gemini 3.1 Pro (High)',
         });
         await ctx.editMessageText(

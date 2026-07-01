@@ -12,6 +12,7 @@ import { logger } from '../utils/logger.js';
 import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './types.js';
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation } from '../agy/conversationStore.js';
+import { clearWeb2ApiHistory } from '../agy/agyCli.js';
 
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
 
@@ -324,15 +325,28 @@ export class SessionManager {
 
   async destroy(chatId: number): Promise<void> {
     const session = this.sessions.get(chatId);
+    let convId = session?.conversationId;
+    if (!convId) {
+      try {
+        convId = (await getConversationId(chatId)) || undefined;
+      } catch {
+        // Ignore errors fetching conversationId
+      }
+    }
+
     if (session) {
       session.abortController.abort('Session destroyed');
-      try {
-        await deleteConversation(chatId);
-      } catch (e) {
-        logger.warn(`Error deleting conversation for chat ${chatId}: ${e}`);
-      }
       this.sessions.delete(chatId);
       logger.info(`Session destroyed for chat ${chatId}`);
+    }
+
+    try {
+      await deleteConversation(chatId);
+      if (convId) {
+        clearWeb2ApiHistory(convId);
+      }
+    } catch (e) {
+      logger.warn(`Error deleting conversation for chat ${chatId}: ${e}`);
     }
   }
 
