@@ -177,7 +177,8 @@ node dist/cli.js setup auth
 
 在此，特别鸣谢：
 - 👤 **[ibidathoillah](https://github.com/ibidathoillah)**：感谢其对核心网关最初的灵感碰撞与优秀的开源贡献。
-- 🧠 **Google Gemini & [Gemini CLI](https://github.com/google-gemini/gemini-cli)**：感谢 Google 团队提供的卓越 AI 模型以及出色的底层命令行工具支持，赋予了本项目流畅而强大的编码体验。
+- 🧠 **Google Gemini & [Gemini CLI](https://github.com/google-gemini/gemini-cli)**：感谢 Google 团队提供的卓越 AI 模型以及出色的底层命令行工具支持，赋予了本项目流畅而强大的核心底座。
+- 🤖 **Google Gemini (AI)**：特别鸣谢 Gemini 智能大模型作为本项目开发的核心参与者，在核心代码重构、新功能实现、测试覆盖以及文档交互设计中直接做出了卓越的开发贡献。
 
 ---
 
