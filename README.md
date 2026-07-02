@@ -43,43 +43,54 @@
 
 ---
 
-## 🚀 极速安装
+## 🚀 安装与部署指南
 
-### 方法一：一键极速脚本安装（黄金推荐）
+根据您的需求，您可以选择**本地源码编译部署（推荐本地运行 / 适用于本仓库）**、**NPM 全局一键部署**或 **Docker 容器部署**：
 
-在终端运行以下命令，会自动下载最新脚本并启动交互式安装向导，完成 Node.js 环境、依赖安装及配置引导：
+### 🛠️ 方法一：本地源码编译部署（黄金推荐 / 适用于本项目）
+
+如果您已经克隆了本仓库（或正处于当前本地目录 `~/.gemini-cli-telegram` 下），请按以下步骤安装、编译并启动：
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/ibidathoillah/gemini-cli-telegram/main/setup.sh | bash
-```
+# 1. 确保已进入项目根目录
+cd ~/.gemini-cli-telegram
 
-安装向导将协助您：
-1. **Google 登录** —— 自动检测或引导完成本地 Google OAuth 登录凭证。
-2. **Telegram 令牌** —— 输入从 [@BotFather](https://t.me/BotFather) 获取的机器人 Token。
-3. **白名单配置** —— 向 Bot 发送任意消息自动绑定您的 Telegram ID 并启动。
+# 2. 安装本地项目所有依赖
+npm install
+
+# 3. 执行项目编译（通过 TypeScript 编译器生成最新的 JavaScript 运行包）
+npm run build
+
+# 4. 执行初始化配置向导（配置 Google Auth 登录凭证与 Telegram Bot Token）
+node dist/cli.js setup
+
+# 5. 后台常驻启动 Telegram 机器人
+./start.sh
+# 或者使用 node dist/cli.js start
+```
 
 ---
 
-### 方法二：通过 NPM 全局安装
+### 📦 方法二：NPM 全局一键安装（适用于快速运行）
 
-如果您本地已具备 **Node.js >= 20** 的环境，可直接全局安装并运行：
+如果您不直接参与源码二次开发，仅希望直接在宿主机常驻启动打包好的服务：
 
 ```bash
-# 1. 全局安装
+# 1. 全局一键安装包
 npm install -g gemini-cli-telegram
 
 # 2. 交互式初始化配置
 gemini-cli-telegram setup
 
-# 3. 启动守护进程
+# 3. 启动后台守护进程
 gemini-cli-telegram start
 ```
 
 ---
 
-### 方法三：使用 Docker 部署（适合云服务器）
+### 🐳 方法三：Docker 隔离化部署（无需安装 Node.js）
 
-免去 Node.js 依赖，容器化隔离运行：
+利用 Docker 快速起常驻容器，与宿主机环境实现完美隔离：
 
 ```bash
 docker run -d \
