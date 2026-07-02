@@ -242,6 +242,35 @@ Uses the same auth as Gemini CLI. The setup wizard auto-detects existing credent
 
 ---
 
+## 📚 Official API Documentation
+
+The official development guidelines and technical specifications for Telegram Bot API 10.1 and rich text formatting are located in the [**`telegramBotAPI/`**](file:///home/user/.gemini-cli-telegram/telegramBotAPI) folder:
+
+- **[telegram_bot_api.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/telegram_bot_api.md)**: Telegram Bot API 10.1 core technical specifications, including schemas for outbound and inbound JSON protocols.
+- **[telegram_bot_features.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/telegram_bot_features.md)**: Design guidelines for advanced features and interactive UI styling.
+- **[from_botfather_to_hello_world.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/from_botfather_to_hello_world.md)**: Complete step-by-step practical manual for creating and setting up a bot.
+- **[bots_an_introduction_for_developers.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/bots_an_introduction_for_developers.md)**: Tech overview of the Telegram Bot ecosystem.
+
+---
+
+## 🎨 Rich Messages Engine (Telegram Bot API 10.1)
+
+This project has been upgraded with a high-fidelity **Rich Messages Engine** utilizing **Telegram Bot API 10.1**, enabling premium layouts and high resilience:
+
+### ⚡ 3-Level Resilient Failover Pipeline
+
+To guarantee 100% message delivery under all network conditions, the engine uses a progressive failover strategy:
+1. **Option A (HTML via `sendRichMessage`)**: Transmits a fully formatted HTML block. Telegram renders it into a cloud-parsed native rich block, supporting zebra-striped tables, collapsible detail blocks, and LaTeX formulas. This avoids fragile local AST parsing overhead.
+2. **Option B (Markdown fallback)**: Instantly falls back to native Telegram Markdown formatting with automatic character escaping.
+3. **Option C (Standard HTML fallback)**: Reverts to standard `HTML` parse-mode via traditional `ctx.reply` in case of unexpected API anomalies.
+
+### ✍️ Typewriter Stream with Native `<tg-thinking>` Animation
+
+- **Typewriter Draft Routing**: Streaming plain-text outputs are dynamically routed as active draft messages (`sendRichMessageDraft`) for a smooth typing feel without message duplication.
+- **Premium Thinking State**: During the reasoning phase, the engine appends a **`<tg-thinking>Thinking...</tg-thinking>`** tag. This triggers a highly premium, native thinking-bubble animation on official Telegram clients.
+
+---
+
 ## Recent Changes
 
 - **Setup Improvements:** `setup.sh` now automatically clones the repository if it's not present, making it truly "one-click" for fresh environments.
