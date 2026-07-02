@@ -29,6 +29,7 @@ import type { SessionOptions } from '../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../core/resume.js';
 import { logger } from '../../utils/logger.js';
 import { messageCache } from '../../utils/messageCache.js';
+import { loadUserConfig } from '../../config/userConfig.js';
 import {
   ICONS,
   buildMainKeyboard,
@@ -439,7 +440,9 @@ export function registerCommands(
       const date = String(now.getDate()).padStart(2, '0');
       const dateStr = `${year}${month}${date}`;
 
-      const folderPath = '/mnt/pool/1000/jack/00_输入缓冲_Inbox/外部采集_External';
+      // Resolve notebook path from user config or fallback to a default safe path
+      const userConfig = loadUserConfig();
+      const folderPath = userConfig?.notebookPath || path.join(os.homedir(), '.gemini-cli-telegram', 'notebook');
       const fileName = `${dateStr}_${sanitizedTitle}.md`;
       const filePath = path.join(folderPath, fileName);
 
