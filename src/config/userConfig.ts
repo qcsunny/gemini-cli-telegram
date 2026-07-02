@@ -18,6 +18,7 @@ export interface UserConfig {
   allowedUsers: number[];
   model?: string;
   proxy?: string;
+  notebookPath?: string;
 }
 
 export function configExists(): boolean {
