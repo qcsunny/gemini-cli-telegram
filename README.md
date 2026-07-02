@@ -1,290 +1,192 @@
 <div align="center">
 
-<h1>Telegram for Gemini CLI</h1>
+# 🤖 Telegram for Gemini CLI
 
-<p><strong>Your AI coding assistant, now on Telegram.</strong></p>
+### **您的 AI 随身编程搭档，随时随地开启高效编码新纪元。**
 
 <p>
-  <a href="https://www.npmjs.com/package/gemini-cli-telegram"><img src="https://img.shields.io/npm/v/gemini-cli-telegram?style=flat-square&color=blue" alt="npm version"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen?style=flat-square" alt="Node.js"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
+  <a href="https://www.npmjs.com/package/gemini-cli-telegram"><img src="https://img.shields.io/npm/v/gemini-cli-telegram?style=flat-square&logo=npm&color=007acc" alt="npm version"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20-339933?style=flat-square&logo=node.js" alt="Node.js"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-red?style=flat-square" alt="License"></a>
+  <a href="https://t.me/BotFather"><img src="https://img.shields.io/badge/telegram-API%2010.1-0088cc?style=flat-square&logo=telegram" alt="Telegram"></a>
 </p>
 
 <p>
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#commands">Commands</a> •
-  <a href="#schedule">Schedule</a> •
-  <a href="#autopilot">Autopilot</a> •
-  <a href="#configuration">Configuration</a>
+  <a href="#-核心特性">核心特性</a> •
+  <a href="#-极速安装">安装部署</a> •
+  <a href="#-交互指令">Telegram 指令</a> •
+  <a href="#-消息渲染引擎与-api-101-升级">富文本引擎</a> •
+  <a href="#-全局配置说明">配置指南</a>
 </p>
 
 </div>
 
 ---
 
-## Features
-
-| | Feature | Description |
-|---|---------|-------------|
-| 🤖 | **AI Chat** | Full Gemini CLI experience with streaming responses |
-| 📁 | **Project Switching** | Auto-scan and switch between projects |
-| 🕐 | **Scheduled Messages** | One-time or recurring scheduled tasks |
-| 🚀 | **Autopilot Mode** | AI works autonomously toward a goal |
-| 🖼️ | **Multimodal** | Text, photos, voice, audio, video, documents |
-| 🔧 | **Tool Execution** | Auto-run tools — edit files, run commands, search web |
-| 🎯 | **Model Switching** | Switch Gemini models on the fly |
-| ⌨️ | **Interactive UI** | Inline keyboards, emoji indicators, HTML formatting |
-| 🔒 | **Secure** | Restrict access to specific Telegram user IDs |
+> [!IMPORTANT]
+> **`gemini-cli-telegram`** 是本地 **Google Antigravity CLI (`agy`)** 的 Telegram 适配网关。作为常驻后台的守护进程，它完美连接了 Telegram 交互前端与 Google Gemini 底层核心编码引擎，让您在手机或任意 Telegram 客户端上也能直接修改文件、执行系统命令、查询网络。
 
 ---
 
-## Installation
+## ✨ 核心特性
 
-### 🚀 One-Command Setup (Recommended)
+| 模块 | 功能 | 深度描述 |
+| :---: | :--- | :--- |
+| 🤖 | **AI 全功能对话** | 完整的 Gemini CLI 丝滑体验，支持流式渲染和多轮语境。 |
+| 📁 | **多项目智能切换** | 自动侦测家目录下所有项目（通过 `.git`、`package.json`、`Cargo.toml` 等识别），支持在聊天中一键无缝切换当前工作目录。 |
+| 🕐 | **高阶定时任务** | 支持单次或周期性 cron/定时任务调度（例如每日巡检、定时监控）。 |
+| 🚀 | **Autopilot 自动驾驶** | 设定目标后，AI 自主分解任务、自动纠错并运行，直至达成目标。 |
+| 🖼️ | **全模态输入支持** | 支持文本、高清照片、音频语音（自动转译）、视频、文档等多模态输入。 |
+| 🔧 | **工具链沙盒执行** | AI 可在 Telegram 聊天界面内自动执行系统指令、编辑代码文件、浏览网页。 |
+| 🎯 | **模型一键切换** | 提供包含 Gemini 3.5/3.1/2.5 系列在内的 11 种预置模型以及网页端逆向模型一键切换。 |
+| 🔒 | **双重白名单机制** | 严格限制仅配置的用户 ID 可以连接和操作，保障服务器本地安全。 |
 
-Run this single command to install everything (Node.js, the bot, and dependencies) and start the setup wizard:
+---
+
+## 🚀 极速安装
+
+### 方法一：一键极速脚本安装（黄金推荐）
+
+在终端运行以下命令，会自动下载最新脚本并启动交互式安装向导，完成 Node.js 环境、依赖安装及配置引导：
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ibidathoillah/gemini-cli-telegram/main/setup.sh | bash
 ```
 
-The script will guide you through:
-1. **Google Login** — Authenticate with your Google account.
-2. **Telegram Token** — Input your bot token from [@BotFather](https://t.me/BotFather).
-3. **Whitelist** — Send any message to your bot to automatically whitelist your ID.
+安装向导将协助您：
+1. **Google 登录** —— 自动检测或引导完成本地 Google OAuth 登录凭证。
+2. **Telegram 令牌** —— 输入从 [@BotFather](https://t.me/BotFather) 获取的机器人 Token。
+3. **白名单配置** —— 向 Bot 发送任意消息自动绑定您的 Telegram ID 并启动。
 
 ---
 
-### 📦 Manual Installation (via NPM)
+### 方法二：通过 NPM 全局安装
 
-If you already have Node.js 20+, you can install the bot globally:
+如果您本地已具备 **Node.js >= 20** 的环境，可直接全局安装并运行：
 
 ```bash
-# 1. Install globally
+# 1. 全局安装
 npm install -g gemini-cli-telegram
 
-# 2. Run the setup wizard
+# 2. 交互式初始化配置
 gemini-cli-telegram setup
 
-# 3. Start the bot
+# 3. 启动守护进程
 gemini-cli-telegram start
 ```
 
 ---
 
-### 🐳 Docker (Recommended for Servers)
+### 方法三：使用 Docker 部署（适合云服务器）
 
-Run the bot as a container without installing Node.js:
+免去 Node.js 依赖，容器化隔离运行：
 
 ```bash
 docker run -d \
   --name gemini-bot \
+  --restart always \
   -v ~/.gemini-cli-telegram:/root/.gemini-cli-telegram \
   -v ~/.config/google-gemini-cli:/root/.config/google-gemini-cli \
   ghcr.io/ibidathoillah/gemini-cli-telegram:latest
 ```
 
-### JSR (Modern Registry)
-
-```bash
-npx jsr add @ibidathoillah/gemini-cli-telegram
-```
-
-### Manual Installation
-
-#### Quick Start (via npx)
-
-```bash
-npx gemini-cli-telegram start
-```
-
-#### Global Install
-
-```bash
-npm install -g gemini-cli-telegram
-gemini-cli-telegram start
-```
-
-On first run, an interactive wizard guides you through the setup.
-
 ---
 
-## CLI Commands
+## ⚙️ 运维与服务管理
+
+通过 systemd 脚本，您可以轻松将 Bot 注册为系统级 service，实现开机自启和异常自动恢复（守护进程会自动崩溃重启）：
 
 ```bash
-gemini-cli-telegram <command> [options]
-```
-
-| Command | Description |
-|---------|-------------|
-| `start` | Start daemon in background |
-| `stop` | Stop daemon |
-| `status` | Check daemon status |
-| `logs` | Show recent logs |
-| `setup [step]` | Run setup wizard |
-
----
-
-## Running as a Service (Auto-Restart)
-
-To ensure the bot stays running and automatically restarts on failure, you can install it as a **systemd service**:
-
-```bash
+# 注册为 systemd 服务
 sudo ./scripts/install-service.sh
 ```
 
-This will create a service named `gemini-telegram` that starts on boot and restarts every 10 seconds if it crashes.
+### 常用管理指令
 
-### Management Commands
-
-| Action | Command |
-|--------|---------|
-| Start | `sudo systemctl start gemini-telegram` |
-| Stop | `sudo systemctl stop gemini-telegram` |
-| Restart | `sudo systemctl restart gemini-telegram` |
-| Status | `sudo systemctl status gemini-telegram` |
-| Application Logs | `tail -f ~/.gemini-cli-telegram/daemon.log` |
-| Systemd Logs | `sudo journalctl -u gemini-telegram -f` |
+| 目标 | 对应指令 |
+| :--- | :--- |
+| **启动服务** | `sudo systemctl start gemini-telegram` |
+| **停止服务** | `sudo systemctl stop gemini-telegram` |
+| **重启服务** | `sudo systemctl restart gemini-telegram` |
+| **状态查询** | `sudo systemctl status gemini-telegram` |
+| **守护进程日志** | `tail -f ~/.gemini-cli-telegram/daemon.log` |
+| **系统日志监控** | `sudo journalctl -u gemini-telegram -f` |
 
 ---
 
-## Telegram Commands
+## 🎮 交互指令
 
-| Command | Description |
-|---------|-------------|
-| `/start` | Welcome menu with inline keyboard |
-| `/new` | Start fresh session |
-| `/projects` | Browse and select projects |
-| `/schedule` | Manage scheduled messages |
-| `/autopilot <goal>` | AI auto-works on a goal |
-| `/resume` | Resume previous session |
-| `/model <name>` | Switch AI model |
-| `/compact` | Compress chat history |
-| `/status` | Show session stats |
-| `/help` | Show help |
+向 Telegram Bot 发送以下常用交互指令，实现对 AI 的精确掌控：
 
----
-
-## Schedule
-
-Schedule one-time or recurring messages:
-
-```
-/schedule add in 1h Check server logs
-/schedule recurring 60 Backup database
-/schedule add tomorrow at 09:00 Daily standup
-```
-
-**Time formats:** `now`, `in 5m`, `in 1h`, `tomorrow`, `14:30`, `morning`, `evening`
-
-Tasks persist across restarts in `~/.gemini-cli-telegram/scheduled-tasks.json`.
+| 指令 | 描述说明 |
+| :--- | :--- |
+| `/start` | 唤起精美的主功能键盘与新手引导菜单。 |
+| `/new` | 即刻重置当前聊天，开启全新的原子会话上下文。 |
+| `/projects` | 浏览并直接切换当前活跃的工作目录和项目上下文。 |
+| `/model <name>` | 一键切换当前底层推理模型。 |
+| `/schedule` | 查看和管理当前的定时调度与周期任务。 |
+| `/autopilot <目标>` | 开启 AI 自动驾驶任务。 |
+| `/undo` | 撤销上一次用户和助理的对话交互。 |
+| `/delete_session` | 安全物理删除指定的历史 session。 |
+| `/status` | 实时输出当前的会话统计指标和资源消耗。 |
+| `/help` | 唤起详细的指令指引。 |
 
 ---
 
-## Autopilot
+## 🎨 消息渲染引擎与 API 10.1 升级
 
-Let the AI work autonomously on a goal:
+> [!TIP]
+> 本项目已重构并深度适配 **Telegram Bot API 10.1 原生富文本架构（Rich Messages）**，在 `RichText` 模式下展现无与伦比的交互质感。
 
-```
-/autopilot Refactor auth module to use JWT tokens
-/autopilot Write unit tests for all API endpoints
-/autopilot Fix all ESLint warnings in the project
-```
+### ⚡ 3 级高弹性自动回退渲染链路 (Highly Resilient Pipeline)
+为了确保任何复杂代码与排版 100% 成功发送，系统在 `RichText` 模式下提供以下三重兜底机制：
+1. **Option A (原生云端解析 HTML - 黄金首选)**：调用 `sendRichMessage` 发送由 HTML 转换的富文本块，交由 Telegram 云端自动渲染，完美支持**圆角斑马纹表格**、**折叠 details 容器**以及 **LaTeX 数学公式**，完全消除脆弱的本地 AST 解析崩溃隐患。
+2. **Option B (高兼容性 MarkdownV2 自动重试)**：若 HTML 解析遇到边缘字符异常，系统立刻捕获并自动降级为精准转义的 `MarkdownV2` 格式重新发送。
+3. **Option C (最坏情况传统 HTML 兜底)**：若 API 10.1 传输或 Telegram 官方服务端突发网络灾难，则使用传统 `ctx.reply` (HTML 解析模式) 强制发送，确保消息绝不漏发。
 
-**How it works:**
-1. You set a clear goal
-2. AI processes and responds
-3. AI feeds its own response back as input
-4. Repeats until done (max 10 iterations)
-5. Delivers final result
-
-Stop anytime with `/autopilot stop`.
+### ✍️ 草稿路由与 `<tg-thinking>` 原生思考打字动效
+- **流式草稿渲染**：所有流式文字的中间打字状态均被自动路由至临时草稿箱写信接口 `sendRichDraft`（底层调用 Telegram 的 `sendRichMessageDraft`），打字输出极度丝滑且绝不触发消息重发。
+- **原生思考动画**：AI 在思考和生成阶段，流式输出尾部会自动附带 **`<tg-thinking>Thinking...</tg-thinking>`** 原生标签。这将在 Telegram 手机与桌面端激活官方最高等级的“动态呼吸气泡思考动效”，打造极致灵动的交互体验。
 
 ---
 
-## Project Selection
+## ⚙️ 全局配置说明
 
-```
-/projects
-```
-
-Auto-scans your home directory and detects projects by `package.json`, `.git`, `Cargo.toml`, `pyproject.toml`, etc. Switch working directory instantly with inline keyboard.
-
----
-
-## Configuration
-
-Stored at `~/.gemini-cli-telegram/config.json`:
+配置文件存放于 `~/.gemini-cli-telegram/config.json`：
 
 ```json
 {
   "telegramBotToken": "YOUR_BOT_TOKEN",
-  "allowedUsers": [123456789],
-  "model": "gemini-2.5-pro"
+  "allowedUsers": [
+    8431249190
+  ],
+  "model": "Gemini 3.1 Pro (High)",
+  "proxy": "http://127.0.0.1:7890",
+  "telegram": {
+    "parseMode": "RichText"
+  }
 }
 ```
 
-| Key | Required | Description |
-|-----|----------|-------------|
-| `telegramBotToken` | Yes | Bot token from @BotFather |
-| `allowedUsers` | Yes | Allowed Telegram user IDs |
-| `model` | No | Default model |
+| 参数项 | 是否必填 | 职责描述 |
+| :--- | :--- | :--- |
+| `telegramBotToken` | 是 | 从 @BotFather 申请的官方令牌。 |
+| `allowedUsers` | 是 | 允许私聊调用 Bot 的 Telegram 用户 ID 数字白名单（数组形式）。 |
+| `model` | 否 | 默认使用的 Gemini 模型，支持随时动态切换。 |
+| `proxy` | 否 | 网络代理配置（如本地 Clash 代理 `http://127.0.0.1:7890`），保障 Telegram API 交互稳定性。 |
+| `telegram.parseMode` | 否 | 消息解析渲染模式。推荐使用 `RichText` 开启高阶富文本支持。 |
 
 ---
 
-## Authentication
+## 🔑 账号授权与 Headless 兼容
 
-Uses the same auth as Gemini CLI. The setup wizard auto-detects existing credentials.
+守护进程在 Headless 环境中运行时无法调起浏览器进行 Google 交互登录。
 
-- **OAuth** (recommended) — Browser sign-in with Google
-- **API Key** — Paste your key or set `GEMINI_API_KEY`
-
----
-
-## 📚 Official API Documentation
-
-The official development guidelines and technical specifications for Telegram Bot API 10.1 and rich text formatting are located in the [**`telegramBotAPI/`**](file:///home/user/.gemini-cli-telegram/telegramBotAPI) folder:
-
-- **[telegram_bot_api.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/telegram_bot_api.md)**: Telegram Bot API 10.1 core technical specifications, including schemas for outbound and inbound JSON protocols.
-- **[telegram_bot_features.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/telegram_bot_features.md)**: Design guidelines for advanced features and interactive UI styling.
-- **[from_botfather_to_hello_world.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/from_botfather_to_hello_world.md)**: Complete step-by-step practical manual for creating and setting up a bot.
-- **[bots_an_introduction_for_developers.md](file:///home/user/.gemini-cli-telegram/telegramBotAPI/bots_an_introduction_for_developers.md)**: Tech overview of the Telegram Bot ecosystem.
-
----
-
-## 🎨 Rich Messages Engine (Telegram Bot API 10.1)
-
-This project has been upgraded with a high-fidelity **Rich Messages Engine** utilizing **Telegram Bot API 10.1**, enabling premium layouts and high resilience:
-
-### ⚡ 3-Level Resilient Failover Pipeline
-
-To guarantee 100% message delivery under all network conditions, the engine uses a progressive failover strategy:
-1. **Option A (HTML via `sendRichMessage`)**: Transmits a fully formatted HTML block. Telegram renders it into a cloud-parsed native rich block, supporting zebra-striped tables, collapsible detail blocks, and LaTeX formulas. This avoids fragile local AST parsing overhead.
-2. **Option B (Markdown fallback)**: Instantly falls back to native Telegram Markdown formatting with automatic character escaping.
-3. **Option C (Standard HTML fallback)**: Reverts to standard `HTML` parse-mode via traditional `ctx.reply` in case of unexpected API anomalies.
-
-### ✍️ Typewriter Stream with Native `<tg-thinking>` Animation
-
-- **Typewriter Draft Routing**: Streaming plain-text outputs are dynamically routed as active draft messages (`sendRichMessageDraft`) for a smooth typing feel without message duplication.
-- **Premium Thinking State**: During the reasoning phase, the engine appends a **`<tg-thinking>Thinking...</tg-thinking>`** tag. This triggers a highly premium, native thinking-bubble animation on official Telegram clients.
-
----
-
-## Recent Changes
-
-- **Setup Improvements:** `setup.sh` now automatically clones the repository if it's not present, making it truly "one-click" for fresh environments.
-- **Bug Fixes:** Resolved a build error in the Telegram channel commands related to missing HTML escaping utilities.
-- **Improved Reliability:** Enhanced dependency management and build process.
-
----
-
-## Technical Notes
-
-- Runs `@google/gemini-cli-core` as a daemon via per-message loop
-- Tools execute in YOLO mode (auto-execute, no prompts)
-- Default permissions: read `~/`, write to daemon CWD
-- Markdown streamed as plain text, formatted to HTML at the end
+若凭据过期，用户必须在本地或能够弹出浏览器的交互式终端中执行如下指令：
+```bash
+gemini-cli-telegram setup auth
+```
+该命令会自动生成并存储登录态，供后台服务直接读取。
 
 ---
 
