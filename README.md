@@ -138,7 +138,7 @@ sudo ./scripts/install-service.sh
 {
   "telegramBotToken": "YOUR_BOT_TOKEN",
   "allowedUsers": [
-    8431249190
+    123456789
   ],
   "model": "Gemini 3.1 Pro (High)",
   "proxy": "http://127.0.0.1:7890",
