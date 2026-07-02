@@ -113,4 +113,13 @@ Thanks for reading! 🚀
     const html = markdownToHtml(input);
     expect(html).toContain('<i>🤖 运行模型: <code>Gemini 3.5 Flash (Medium)</code> | 📊 消耗 Token: <code>输入 120 + 输出 250 = 370</code> | 💰 消费金额: <code>$0.000084</code></i>');
   });
+
+  it('should format headers with distinct visual prefixes', () => {
+    const h1Html = markdownToHtml('# Header 1');
+    const h2Html = markdownToHtml('## Header 2');
+    const h3Html = markdownToHtml('### Header 3');
+    expect(h1Html).toContain('📌 <b>Header 1</b>');
+    expect(h2Html).toContain('📍 <b>Header 2</b>');
+    expect(h3Html).toContain('🔹 <b>Header 3</b>');
+  });
 });
