@@ -300,9 +300,22 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case 'paragraph_close':
         appendParagraphSeparator(state);
         break;
-      case 'heading_open':
+      case 'heading_open': {
+        const hLevel = parseInt(token.tag.slice(1), 10) || 1;
+        let prefix = '';
+        if (hLevel === 1) {
+          prefix = '📌 ';
+        } else if (hLevel === 2) {
+          prefix = '📍 ';
+        } else if (hLevel === 3) {
+          prefix = '🔹 ';
+        } else {
+          prefix = '• ';
+        }
+        appendText(state, prefix);
         openStyle(state, 'bold');
         break;
+      }
       case 'heading_close':
         closeStyle(state, 'bold');
         appendParagraphSeparator(state);
