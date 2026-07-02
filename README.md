@@ -5,7 +5,6 @@
 ### **您的 AI 随身编程搭档，随时随地开启高效编码新纪元。**
 
 <p>
-  <a href="https://www.npmjs.com/package/gemini-cli-telegram"><img src="https://img.shields.io/npm/v/gemini-cli-telegram?style=flat-square&logo=npm&color=007acc" alt="npm version"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20-339933?style=flat-square&logo=node.js" alt="Node.js"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-red?style=flat-square" alt="License"></a>
   <a href="https://t.me/BotFather"><img src="https://img.shields.io/badge/telegram-API%2010.1-0088cc?style=flat-square&logo=telegram" alt="Telegram"></a>
@@ -165,7 +164,8 @@ sudo ./scripts/install-service.sh
 
 若凭据过期，用户必须在本地或能够弹出浏览器的交互式终端中执行如下指令：
 ```bash
-gemini-cli-telegram setup auth
+# 确保已进入项目根目录
+node dist/cli.js setup auth
 ```
 该命令会自动生成并存储登录态，供后台服务直接读取。
 
