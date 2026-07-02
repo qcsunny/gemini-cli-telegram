@@ -45,7 +45,7 @@
 
 ## 🚀 安装与部署指南
 
-根据您的需求，您可以选择**本地源码编译部署（推荐本地运行 / 适用于本仓库）**、**NPM 全局一键部署**或 **Docker 容器部署**：
+根据您的需求，您可以选择**本地源码编译部署（推荐本地运行 / 适用于本仓库）**或**NPM 全局一键部署**：
 
 ### 🛠️ 方法一：本地源码编译部署（黄金推荐 / 适用于本项目）
 
@@ -86,22 +86,7 @@ gemini-cli-telegram setup
 gemini-cli-telegram start
 ```
 
----
 
-### 🐳 方法三：Docker 隔离化部署（无需安装 Node.js）
-
-利用 Docker 快速起常驻容器，与宿主机环境实现完美隔离：
-
-```bash
-docker run -d \
-  --name gemini-bot \
-  --restart always \
-  -v ~/.gemini-cli-telegram:/root/.gemini-cli-telegram \
-  -v ~/.config/google-gemini-cli:/root/.config/google-gemini-cli \
-  ghcr.io/ibidathoillah/gemini-cli-telegram:latest
-```
-
----
 
 ## ⚙️ 运维与服务管理
 
