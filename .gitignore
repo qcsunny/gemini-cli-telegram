@@ -22,3 +22,6 @@ run_tests.sh
 scripts/cleanup_sessions.sh
 scripts/mirror_response.sh
 experts/
+.antigravity.md
+.superpowers/
+docs/superpowers/
