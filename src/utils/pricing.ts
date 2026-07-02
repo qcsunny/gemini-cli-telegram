@@ -12,12 +12,12 @@ interface PricingInfo {
 // Pricing matrix based on active models
 const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
-    // Claude Opus 4.6 (Thinking)
+    // Claude Opus (Thinking)
     pattern: /opus/i,
     rates: { inputRate: 15.00, outputRate: 75.00 }
   },
   {
-    // Claude Sonnet 4.6 (Thinking)
+    // Claude Sonnet (Thinking)
     pattern: /sonnet/i,
     rates: { inputRate: 3.00, outputRate: 15.00 }
   },
@@ -27,24 +27,55 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 2.50, outputRate: 10.00 }
   },
   {
-    // Web2API: Gemini Flash Lite
-    pattern: /flash\s*lite/i,
-    rates: { inputRate: 0.0375, outputRate: 0.15 }
+    // Gemini 3.5 Flash
+    pattern: /3\.5\s*flash/i,
+    rates: { inputRate: 1.50, outputRate: 9.00 }
   },
   {
-    // Gemini 3.1 Pro (Low/High) and Web2API: Gemini 3.1 Pro
-    pattern: /3\.1\s*pro|pro/i,
-    rates: { inputRate: 1.25, outputRate: 5.00 }
+    // Gemini 3.1 Pro
+    pattern: /3\.1\s*pro/i,
+    rates: { inputRate: 2.00, outputRate: 12.00 }
   },
   {
-    // Gemini 3.5 Flash and Web2API: Gemini 3.5 Flash / Gemini Auto
-    pattern: /3\.5\s*flash|flash|auto/i,
-    rates: { inputRate: 0.075, outputRate: 0.30 }
+    // Gemini 3.1 Flash-Lite
+    pattern: /3\.1\s*flash-lite/i,
+    rates: { inputRate: 0.25, outputRate: 1.50 }
+  },
+  {
+    // Gemini 3 Flash
+    pattern: /3\s*flash/i,
+    rates: { inputRate: 0.50, outputRate: 3.00 }
+  },
+  {
+    // Gemini 2.5 Pro
+    pattern: /2\.5\s*pro/i,
+    rates: { inputRate: 1.25, outputRate: 10.00 }
+  },
+  {
+    // Gemini 2.5 Flash
+    pattern: /2\.5\s*flash/i,
+    rates: { inputRate: 0.30, outputRate: 2.50 }
+  },
+  {
+    // Gemini 2.5 Flash-Lite
+    pattern: /2\.5\s*flash-lite/i,
+    rates: { inputRate: 0.10, outputRate: 0.40 }
+  },
+  // --- Generics / Fallbacks ---
+  {
+    // General Pro keyword
+    pattern: /pro/i,
+    rates: { inputRate: 2.00, outputRate: 12.00 }
+  },
+  {
+    // General Flash / Auto keyword
+    pattern: /flash|auto/i,
+    rates: { inputRate: 1.50, outputRate: 9.00 }
   }
 ];
 
 // Fallback pricing rates (Gemini 3.5 Flash)
-const DEFAULT_RATES: PricingInfo = { inputRate: 0.075, outputRate: 0.30 };
+const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00 };
 
 /**
  * Heuristically estimate token usage for Gemini/multilingual text.

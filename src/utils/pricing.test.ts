@@ -44,21 +44,21 @@ describe('Pricing and Token Estimation', () => {
 
   describe('calculateCost', () => {
     it('should calculate cost for Gemini 3.5 Flash', () => {
-      // Input: $0.075 / 1M tokens, Output: $0.30 / 1M tokens
+      // Input: $1.50 / 1M tokens, Output: $9.00 / 1M tokens
       // For 1,000,000 input and 2,000,000 output:
-      // inputCost = 0.075, outputCost = 0.60, totalCost = 0.675
+      // inputCost = 1.50, outputCost = 18.00, totalCost = 19.50
       const cost = calculateCost('Gemini 3.5 Flash (High)', 1_000_000, 2_000_000);
-      expect(cost.inputCost).toBeCloseTo(0.075, 8);
-      expect(cost.outputCost).toBeCloseTo(0.60, 8);
-      expect(cost.totalCost).toBeCloseTo(0.675, 8);
+      expect(cost.inputCost).toBeCloseTo(1.50, 8);
+      expect(cost.outputCost).toBeCloseTo(18.00, 8);
+      expect(cost.totalCost).toBeCloseTo(19.50, 8);
     });
 
     it('should handle partial case-insensitive matching for models', () => {
       const cost = calculateCost('gemini 3.1 pro', 1_000_000, 1_000_000);
-      // Input: $1.25 / 1M, Output: $5.00 / 1M
-      expect(cost.inputCost).toBeCloseTo(1.25, 8);
-      expect(cost.outputCost).toBeCloseTo(5.00, 8);
-      expect(cost.totalCost).toBeCloseTo(6.25, 8);
+      // Input: $2.00 / 1M, Output: $12.00 / 1M
+      expect(cost.inputCost).toBeCloseTo(2.00, 8);
+      expect(cost.outputCost).toBeCloseTo(12.00, 8);
+      expect(cost.totalCost).toBeCloseTo(14.00, 8);
     });
   });
 
