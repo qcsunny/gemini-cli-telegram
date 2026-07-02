@@ -171,12 +171,17 @@ node dist/cli.js setup auth
 
 ---
 
-## Acknowledgments
+## ❤️ 鸣谢与致敬 (Acknowledgments)
 
-Built on [Gemini CLI](https://github.com/google-gemini/gemini-cli) by Google. Open-sourced under Apache 2.0.
+本项目基于原作者 [ibidathoillah](https://github.com/ibidathoillah) 的开源杰作 [gemini-cli-telegram](https://github.com/ibidathoillah/gemini-cli-telegram) 基础进行深度重构与功能升级。
+
+在此，特别鸣谢：
+- 👤 **[ibidathoillah](https://github.com/ibidathoillah)**：感谢其对核心网关最初的灵感碰撞与优秀的开源贡献。
+- 🧠 **Google Gemini & [Gemini CLI](https://github.com/google-gemini/gemini-cli)**：感谢 Google 团队提供的卓越 AI 模型以及出色的底层命令行工具支持，赋予了本项目流畅而强大的编码体验。
 
 ---
 
-## License
+## 📄 开源协议 (License)
 
-[Apache 2.0](LICENSE)
+本项目遵循 [Apache 2.0](LICENSE) 开源协议，我们完整保留了原作者及各关联底层库的版权声明。
+
