@@ -19,6 +19,7 @@ import type {
   SessionOptions,
   DaemonSession,
   MultimodalInput,
+  StructuredMessage,
 } from '../../core/types.js';
 import { registerCommands } from './commands.js';
 import { telegramFormatter, markdownToHtml, markdownToMarkdownV2 } from './formatter.js';
@@ -28,8 +29,8 @@ import { messageCache } from '../../utils/messageCache.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
 
-function getHtmlPayload(originalText: string, isStreaming = false): string {
-  if (originalText.startsWith('___RAW_HTML___')) {
+function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = false): string {
+  if (typeof originalText === 'string' && originalText.startsWith('___RAW_HTML___')) {
     return originalText.substring('___RAW_HTML___'.length);
   }
   return markdownToHtml(originalText, isStreaming);
@@ -138,37 +139,44 @@ export function buildChannelReply(
       localConsecutiveDraftFailures = val;
     }
   };
-  const safeEdit = async (messageId: number, text: string, html = true) => {
+  const safeEdit = async (messageId: number, text: string | StructuredMessage, html = true) => {
     try {
+      const cacheMarkdown = typeof text === 'string'
+        ? text
+        : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
+
       if (html) {
-        const finalHtml = text.startsWith('___RAW_HTML___') 
+        const finalHtml = typeof text === 'string' && text.startsWith('___RAW_HTML___') 
           ? text.substring('___RAW_HTML___'.length) 
-          : markdownToHtml(text);
+          : getHtmlPayload(text);
         await ctx.api.editMessageText(chatId, messageId, finalHtml, {
           parse_mode: 'HTML',
         });
       } else {
-        const finalPlain = text.startsWith('___RAW_HTML___') 
+        const finalPlain = typeof text === 'string' && text.startsWith('___RAW_HTML___') 
           ? text.substring('___RAW_HTML___'.length) 
-          : text;
+          : (typeof text === 'string' ? text : text.content);
         await ctx.api.editMessageText(chatId, messageId, finalPlain);
       }
-      messageCache.set(messageId, text);
+      messageCache.set(messageId, cacheMarkdown);
     } catch (e: any) {
+      const cacheMarkdown = typeof text === 'string'
+        ? text
+        : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
       if (e?.description?.includes('message is not modified')) {
-        messageCache.set(messageId, text);
+        messageCache.set(messageId, cacheMarkdown);
         return;
       }
       if (html) {
         // Fallback to plain text if HTML fails
         try {
-          await ctx.api.editMessageText(chatId, messageId, text);
-          messageCache.set(messageId, text);
+          await ctx.api.editMessageText(chatId, messageId, cacheMarkdown);
+          messageCache.set(messageId, cacheMarkdown);
         } catch (e2: any) {
           if (!e2?.description?.includes('message is not modified')) {
             logger.warn(`Failed to edit message ${messageId}: ${e2}`);
           } else {
-            messageCache.set(messageId, text);
+            messageCache.set(messageId, cacheMarkdown);
           }
         }
       } else {
@@ -178,8 +186,16 @@ export function buildChannelReply(
   };
 
   const replyObj: ChannelReply = {
-    sendRich: async (originalText: string): Promise<number> => {
-      logger.info(`[DEBUG] sendRich called: originalTextLen=${originalText.length}`);
+    sendRich: async (originalText: string | StructuredMessage): Promise<number> => {
+      const textLen = typeof originalText === 'string'
+        ? originalText.length
+        : (originalText.content.length + (originalText.thought?.length || 0));
+      logger.info(`[DEBUG] sendRich called: originalTextLen=${textLen}`);
+
+      const safeMarkdown = typeof originalText === 'string'
+        ? originalText
+        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
+
       try {
         // Option A: Native Rich HTML (Telegram parses this on the server)
         try {
@@ -187,13 +203,19 @@ export function buildChannelReply(
           if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
             html = '正在思考...<br><br>' + html;
           }
-          logger.info(`\n[TELEGRAM PAYLOAD] sendRich\noriginalText.length=${originalText.length}\noriginalText_first300="${originalText.slice(0, 300).replace(/\n/g, '\\n')}"\noriginalText_last300="${originalText.slice(-300).replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
+          const firstChunkStr = typeof originalText === 'string'
+            ? originalText.slice(0, 300)
+            : `[Content: ${originalText.content.slice(0, 150)}, Thought: ${originalText.thought?.slice(0, 150)}]`;
+          const lastChunkStr = typeof originalText === 'string'
+            ? originalText.slice(-300)
+            : `[Content: ${originalText.content.slice(-150)}, Thought: ${originalText.thought?.slice(-150)}]`;
+          logger.info(`\n[TELEGRAM PAYLOAD] sendRich\noriginalText.length=${textLen}\noriginalText_first300="${firstChunkStr.replace(/\n/g, '\\n')}"\noriginalText_last300="${lastChunkStr.replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
           const res: any = await (ctx.api.raw as any).sendRichMessage({
             chat_id: chatId,
             message_thread_id: messageThreadId,
             rich_message: { html },
           });
-          messageCache.set(res.message_id, originalText);
+          messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
         } catch (err: any) {
           logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
@@ -201,13 +223,13 @@ export function buildChannelReply(
 
         // Option B: Rich Markdown
         try {
-          const safeMarkdown = prepareTelegramMarkdown(originalText);
+          const preparedMarkdown = prepareTelegramMarkdown(safeMarkdown);
           const res: any = await (ctx.api.raw as any).sendRichMessage({
             chat_id: chatId,
             message_thread_id: messageThreadId,
-            rich_message: { markdown: safeMarkdown },
+            rich_message: { markdown: preparedMarkdown },
           });
-          messageCache.set(res.message_id, originalText);
+          messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
         } catch (err: any) {
           logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
@@ -223,14 +245,14 @@ export function buildChannelReply(
             parse_mode: 'HTML',
             message_thread_id: messageThreadId,
           });
-          messageCache.set(msg.message_id, originalText);
+          messageCache.set(msg.message_id, safeMarkdown);
           return msg.message_id;
         } catch (err: any) {
           logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
-          const msg = await ctx.reply(originalText, {
+          const msg = await ctx.reply(safeMarkdown, {
             message_thread_id: messageThreadId,
           });
-          messageCache.set(msg.message_id, originalText);
+          messageCache.set(msg.message_id, safeMarkdown);
           return msg.message_id;
         }
       } catch (err: any) {
@@ -241,7 +263,7 @@ export function buildChannelReply(
       }
     },
 
-    sendRichDraft: async (originalText: string): Promise<number> => {
+    sendRichDraft: async (originalText: string | StructuredMessage): Promise<number> => {
       let draftId = draftIds.get(chatId);
       if (!draftId) {
         draftId = Math.floor(Math.random() * 2147483647) + 1;
@@ -249,7 +271,13 @@ export function buildChannelReply(
       }
       activeDraftIds.add(draftId);
 
-      logger.info(`[DEBUG-STAGE-8] sendRichDraft called: draftId=${draftId}, originalTextLen=${originalText.length}, first100="${originalText.slice(0, 100).replace(/\n/g, '\\n')}"`);
+      const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
+      const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
+      logger.info(`[DEBUG-STAGE-8] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+
+      const cacheMarkdown = typeof originalText === 'string'
+        ? originalText
+        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
       // Option A: Native Rich HTML with native thinking animation
       try {
@@ -259,7 +287,11 @@ export function buildChannelReply(
         }
         logger.info(`[DEBUG-STAGE-7] markdownToHtml conversion (draft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
-        const suffix = (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+        const hasThought = typeof originalText === 'string'
+          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+          : (!!originalText.thought && originalText.thought.trim().length > 0);
+
+        const suffix = hasThought
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
         
@@ -271,7 +303,7 @@ export function buildChannelReply(
           rich_message: { html: `${html}${suffix}` },
         });
         logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft success. Response payload keys: ${Object.keys(res || {})}`);
-        messageCache.set(draftId, originalText);
+        messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
         logger.warn(`sendRichDraft Option A failed: ${err.message || err}. Trying Option B...`);
@@ -279,7 +311,7 @@ export function buildChannelReply(
 
       // Option B: Rich Markdown
       try {
-        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
         logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B): markdownLen=${safeMarkdown.length}`);
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
@@ -288,15 +320,21 @@ export function buildChannelReply(
           rich_message: { markdown: safeMarkdown },
         });
         logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (Markdown) success. Response payload keys: ${Object.keys(res || {})}`);
-        messageCache.set(draftId, originalText);
+        messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
         logger.warn(`sendRichDraft Option B failed: ${err.message || err}.`);
         throw err;
       }
     },
-    editRichDraft: async (draftId: number, originalText: string): Promise<void> => {
-      logger.info(`[DEBUG-STAGE-8] editRichDraft called: draftId=${draftId}, originalTextLen=${originalText.length}, first100="${originalText.slice(0, 100).replace(/\n/g, '\\n')}"`);
+    editRichDraft: async (draftId: number, originalText: string | StructuredMessage): Promise<void> => {
+      const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
+      const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
+      logger.info(`[DEBUG-STAGE-8] editRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+
+      const cacheMarkdown = typeof originalText === 'string'
+        ? originalText
+        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
       // Per Bot API 10.1: there is no "editRichMessageDraft" method.
       // Updating a draft is done by calling sendRichMessageDraft again with the same draft_id.
@@ -308,7 +346,11 @@ export function buildChannelReply(
         }
         logger.info(`[DEBUG-STAGE-7] markdownToHtml conversion (editDraft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
-        const suffix = (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+        const hasThought = typeof originalText === 'string'
+          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+          : (!!originalText.thought && originalText.thought.trim().length > 0);
+
+        const suffix = hasThought
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
         
@@ -320,7 +362,7 @@ export function buildChannelReply(
           rich_message: { html: `${html}${suffix}` },
         });
         logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (edit) success.`);
-        messageCache.set(draftId, originalText);
+        messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
         logger.warn(`editRichDraft Option A (HTML) failed: ${err.message || err}. Trying Option B (Markdown)...`);
@@ -328,7 +370,7 @@ export function buildChannelReply(
 
       // Option B: Rich Markdown fallback
       try {
-        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
         logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B - edit): markdownLen=${safeMarkdown.length}`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
@@ -337,15 +379,23 @@ export function buildChannelReply(
           rich_message: { markdown: safeMarkdown },
         });
         logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (edit Markdown) success.`);
-        messageCache.set(draftId, originalText);
+        messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
         logger.warn(`editRichDraft Option B (Markdown) failed: ${err.message || err}.`);
         throw err;
       }
     },
-    editRich: async (messageId: number, originalText: string): Promise<void> => {
-      logger.info(`[DEBUG] editRich called: messageId=${messageId}, originalTextLen=${originalText.length}`);
+    editRich: async (messageId: number, originalText: string | StructuredMessage): Promise<void> => {
+      const textLen = typeof originalText === 'string'
+        ? originalText.length
+        : (originalText.content.length + (originalText.thought?.length || 0));
+      logger.info(`[DEBUG] editRich called: messageId=${messageId}, originalTextLen=${textLen}`);
+
+      const cacheMarkdown = typeof originalText === 'string'
+        ? originalText
+        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
+
       // If we have an active draft, the messageId is actually a draftId.
       // We must promote/send the final message as a NEW message instead of editing.
       if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
@@ -362,7 +412,13 @@ export function buildChannelReply(
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
           html = '正在思考...<br><br>' + html;
         }
-        logger.info(`\n[TELEGRAM PAYLOAD] editRich\noriginalText.length=${originalText.length}\noriginalText_first300="${originalText.slice(0, 300).replace(/\n/g, '\\n')}"\noriginalText_last300="${originalText.slice(-300).replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
+        const firstChunkStr = typeof originalText === 'string'
+          ? originalText.slice(0, 300)
+          : `[Content: ${originalText.content.slice(0, 150)}, Thought: ${originalText.thought?.slice(0, 150)}]`;
+        const lastChunkStr = typeof originalText === 'string'
+          ? originalText.slice(-300)
+          : `[Content: ${originalText.content.slice(-150)}, Thought: ${originalText.thought?.slice(-150)}]`;
+        logger.info(`\n[TELEGRAM PAYLOAD] editRich\noriginalText.length=${textLen}\noriginalText_first300="${firstChunkStr.replace(/\n/g, '\\n')}"\noriginalText_last300="${lastChunkStr.replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
         logger.info(`[DEBUG] editMessageText (Option A) called: messageId=${messageId}`);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
@@ -370,11 +426,11 @@ export function buildChannelReply(
           rich_message: { html },
         });
         logger.info(`[DEBUG] editMessageText (Option A) success: messageId=${messageId}`);
-        messageCache.set(messageId, originalText);
+        messageCache.set(messageId, cacheMarkdown);
         return;
       } catch (err: any) {
         if (err?.description?.includes('message is not modified')) {
-          messageCache.set(messageId, originalText);
+          messageCache.set(messageId, cacheMarkdown);
           return;
         }
         logger.warn(`editRich Option A failed: ${err.message || err}. Trying Option B...`);
@@ -382,7 +438,7 @@ export function buildChannelReply(
 
       // Option B: Rich Markdown
       try {
-        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
         logger.info(`[DEBUG] editMessageText (Option B) called: messageId=${messageId}`);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
@@ -390,11 +446,11 @@ export function buildChannelReply(
           rich_message: { markdown: safeMarkdown },
         });
         logger.info(`[DEBUG] editMessageText (Option B) success: messageId=${messageId}`);
-        messageCache.set(messageId, originalText);
+        messageCache.set(messageId, cacheMarkdown);
         return;
       } catch (err: any) {
         if (err?.description?.includes('message is not modified')) {
-          messageCache.set(messageId, originalText);
+          messageCache.set(messageId, cacheMarkdown);
           return;
         }
         logger.warn(`editRich Option B failed: ${err.message || err}. Trying Option C...`);
@@ -821,17 +877,17 @@ export class TelegramBot {
           delete: async (messageId: number): Promise<void> => {
             await this.bot.api.deleteMessage(chatId, messageId);
           },
-          sendRich: async (text: string): Promise<number> => {
-            return await scheduledReply.send(text);
+          sendRich: async (text: string | StructuredMessage): Promise<number> => {
+            return await scheduledReply.send(typeof text === 'string' ? text : getHtmlPayload(text));
           },
-          sendRichDraft: async (text: string): Promise<number> => {
-            return await scheduledReply.send(text);
+          sendRichDraft: async (text: string | StructuredMessage): Promise<number> => {
+            return await scheduledReply.send(typeof text === 'string' ? text : getHtmlPayload(text));
           },
-          editRich: async (messageId: number, newText: string): Promise<void> => {
-            await scheduledReply.edit(messageId, newText);
+          editRich: async (messageId: number, newText: string | StructuredMessage): Promise<void> => {
+            await scheduledReply.edit(messageId, typeof newText === 'string' ? newText : getHtmlPayload(newText));
           },
-          editRichDraft: async (draftId: number, newText: string): Promise<void> => {
-            await scheduledReply.edit(draftId, newText);
+          editRichDraft: async (draftId: number, newText: string | StructuredMessage): Promise<void> => {
+            await scheduledReply.edit(draftId, typeof newText === 'string' ? newText : getHtmlPayload(newText));
           },
         };
 
