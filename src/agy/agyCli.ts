@@ -787,8 +787,18 @@ function getEndTagLength(type: ParsedBlock['type']): number {
   }
 }
 
+function startsWithIgnoreCase(str: string, index: number, prefix: string): boolean {
+  if (index + prefix.length > str.length) return false;
+  for (let k = 0; k < prefix.length; k++) {
+    if (str[index + k].toLowerCase() !== prefix[k].toLowerCase()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function matchTag(str: string, index: number, prefix: string): boolean {
-  if (!str.slice(index).toLowerCase().startsWith(prefix)) return false;
+  if (!startsWithIgnoreCase(str, index, prefix)) return false;
   const nextCharIdx = index + prefix.length;
   if (nextCharIdx >= str.length) return true;
   const nextChar = str[nextCharIdx];
@@ -844,7 +854,7 @@ export function extractThoughtBlocksAndSegments(text: string): {
       matchedPrefix = '<thought-gemini';
       endTagStr = '</thought-gemini>';
     } else if (matchTag(text, i, '<thought')) {
-      if (!text.toLowerCase().startsWith('<thought-gemini', i)) {
+      if (!startsWithIgnoreCase(text, i, '<thought-gemini')) {
         matchedType = 'thought';
         matchedPrefix = '<thought';
         endTagStr = '</thought>';
@@ -853,104 +863,89 @@ export function extractThoughtBlocksAndSegments(text: string): {
       matchedType = 'thinking';
       matchedPrefix = '<thinking';
       endTagStr = '</thinking>';
-    } else if (text.slice(i).toLowerCase().startsWith('[thought:')) {
+    } else if (startsWithIgnoreCase(text, i, '[thought:')) {
       matchedType = 'bracket';
       matchedPrefix = '[thought:';
       endTagStr = ']';
     }
 
     if (matchedType) {
-      let isValidStart = false;
-      const nextCharIdx = i + matchedPrefix.length;
-      if (nextCharIdx >= text.length) {
-        isValidStart = true;
+      let startTagEnd = -1;
+      let contentStart = -1;
+      let time: string | undefined;
+      let tokens: string | undefined;
+
+      if (matchedType === 'bracket') {
+        startTagEnd = i + matchedPrefix.length;
+        contentStart = startTagEnd;
       } else {
-        const nextChar = text[nextCharIdx];
-        if (nextChar === '>' || nextChar === ' ' || nextChar === '\n' || nextChar === '\r' || nextChar === '\t') {
-          isValidStart = true;
+        const gtIdx = text.indexOf('>', i);
+        if (gtIdx !== -1) {
+          startTagEnd = gtIdx + 1;
+          contentStart = startTagEnd;
+
+          if (matchedType === 'thought-gemini') {
+            const startTagContent = text.slice(i + matchedPrefix.length, gtIdx);
+            const timeMatch = startTagContent.match(/time=(?:"|')([^"']*?)(?:"|')/i);
+            const tokensMatch = startTagContent.match(/tokens=(?:"|')([^"']*?)(?:"|')/i);
+            if (timeMatch) time = timeMatch[1];
+            if (tokensMatch) tokens = tokensMatch[1];
+          }
+        } else {
+          startTagEnd = text.length;
+          contentStart = text.length;
         }
       }
-      if (matchedType === 'bracket') isValidStart = true;
 
-      if (isValidStart) {
-        let startTagEnd = -1;
-        let contentStart = -1;
-        let time: string | undefined;
-        let tokens: string | undefined;
-
-        if (matchedType === 'bracket') {
-          startTagEnd = i + matchedPrefix.length;
-          contentStart = startTagEnd;
-        } else {
-          const gtIdx = text.indexOf('>', i);
-          if (gtIdx !== -1) {
-            startTagEnd = gtIdx + 1;
-            contentStart = startTagEnd;
-
-            if (matchedType === 'thought-gemini') {
-              const startTagContent = text.slice(i + matchedPrefix.length, gtIdx);
-              const timeMatch = startTagContent.match(/time=(?:"|')([^"']*?)(?:"|')/i);
-              const tokensMatch = startTagContent.match(/tokens=(?:"|')([^"']*?)(?:"|')/i);
-              if (timeMatch) time = timeMatch[1];
-              if (tokensMatch) tokens = tokensMatch[1];
-            }
-          } else {
-            startTagEnd = text.length;
-            contentStart = text.length;
+      let endTagIdx = -1;
+      if (startTagEnd < text.length) {
+        let tempCodeBlock = false;
+        let tempInlineCode = false;
+        let j = startTagEnd;
+        while (j < text.length) {
+          if (text[j] === '\n') {
+            tempInlineCode = false;
           }
-        }
-
-        let endTagIdx = -1;
-        if (startTagEnd < text.length) {
-          let tempCodeBlock = false;
-          let tempInlineCode = false;
-          let j = startTagEnd;
-          const lowerEndTag = endTagStr.toLowerCase();
-          while (j < text.length) {
-            if (text[j] === '\n') {
-              tempInlineCode = false;
-            }
-            if (text.startsWith('```', j)) {
-              tempCodeBlock = !tempCodeBlock;
-              j += 3;
-              continue;
-            }
-            if (text[j] === '`' && !tempCodeBlock) {
-              tempInlineCode = !tempInlineCode;
-              j++;
-              continue;
-            }
-            if (tempCodeBlock || tempInlineCode) {
-              j++;
-              continue;
-            }
-            if (text.slice(j).toLowerCase().startsWith(lowerEndTag)) {
-              endTagIdx = j;
-              break;
-            }
+          if (text.startsWith('```', j)) {
+            tempCodeBlock = !tempCodeBlock;
+            j += 3;
+            continue;
+          }
+          if (text[j] === '`' && !tempCodeBlock) {
+            tempInlineCode = !tempInlineCode;
             j++;
+            continue;
           }
+          if (tempCodeBlock || tempInlineCode) {
+            j++;
+            continue;
+          }
+          if (startsWithIgnoreCase(text, j, endTagStr)) {
+            endTagIdx = j;
+            break;
+          }
+          j++;
         }
+      }
 
-        const isClosed = endTagIdx !== -1;
+      const isClosed = endTagIdx !== -1;
 
-        if (isClosed || !hasSeenNonWhitespaceContent) {
-          const contentEnd = isClosed ? endTagIdx : text.length;
-          const endIndex = isClosed ? endTagIdx + endTagStr.length : text.length;
-          blocks.push({
-            type: matchedType,
-            startTagIndex: i,
-            contentStartIndex: contentStart,
-            contentEndIndex: contentEnd,
-            endTagIndex: endTagIdx,
-            isClosed,
-            time,
-            tokens,
-          });
+      if (isClosed || !hasSeenNonWhitespaceContent) {
+        const contentEnd = isClosed ? endTagIdx : text.length;
+        const endIndex = isClosed ? endTagIdx + endTagStr.length : text.length;
+        blocks.push({
+          type: matchedType,
+          startTagIndex: i,
+          contentStartIndex: contentStart,
+          contentEndIndex: contentEnd,
+          endTagIndex: endTagIdx,
+          isClosed,
+          time,
+          tokens,
+        });
 
-          i = endIndex;
-          continue;
-        }
+        i = endIndex;
+        continue;
       }
     }
 

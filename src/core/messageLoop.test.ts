@@ -231,6 +231,15 @@ describe('processMessage', () => {
       });
     });
 
+    it('should ignore thought tags in inline code', () => {
+      const input = 'Here is inline code: `<thought>nested</thought>` outside tag <thought>real thought</thought>';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: 'real thought',
+        content: 'Here is inline code: `<thought>nested</thought>` outside tag ',
+      });
+    });
+
     it('should ignore unclosed thought tags after content', () => {
       const input = 'Pre-text <thought> unclosed';
       const result = extractThoughtAndContent(input);
