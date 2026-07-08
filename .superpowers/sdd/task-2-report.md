@@ -80,6 +80,7 @@ We resolved the following issues in the formatter:
    - Updated `safeHtmlSlice` to recognize `br`, `hr`, and `img` as HTML self-closing tags. This prevents them from being pushed to the tag stack and producing invalid trailing tags like `</br>`, `</hr>`, or `</img>`.
 3. **Improved Boundary Cleanup in `normalizeSpacingAroundDetails`:**
    - Cleaned up `<br/>` and `<br />` at document boundaries in addition to standard `<br>` tags.
+   - Optimized the boundary cleanup by trimming the string before the cleanup loops and trimming after each strip step inside the loops. This cleanly strips combinations of leading/trailing whitespace and `<br>` tags.
 4. **Added Focused Tests:**
    - Added `should prevent infinite loop and enforce minimum slice in splitTextWithOpenTags` to ensure loop safety.
    - Added `should support self-closing tags (br, hr, img) in safeHtmlSlice without producing closed tag artifacts` to verify correct output formatting.
