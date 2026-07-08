@@ -190,7 +190,7 @@ export function buildChannelReply(
       const textLen = typeof originalText === 'string'
         ? originalText.length
         : (originalText.content.length + (originalText.thought?.length || 0));
-      logger.info(`[DEBUG] sendRich called: originalTextLen=${textLen}`);
+      logger.debug(`[DEBUG] sendRich called: originalTextLen=${textLen}`);
 
       const safeMarkdown = typeof originalText === 'string'
         ? originalText
@@ -203,13 +203,7 @@ export function buildChannelReply(
           if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
             html = '正在思考...<br><br>' + html;
           }
-          const firstChunkStr = typeof originalText === 'string'
-            ? originalText.slice(0, 300)
-            : `[Content: ${originalText.content.slice(0, 150)}, Thought: ${originalText.thought?.slice(0, 150)}]`;
-          const lastChunkStr = typeof originalText === 'string'
-            ? originalText.slice(-300)
-            : `[Content: ${originalText.content.slice(-150)}, Thought: ${originalText.thought?.slice(-150)}]`;
-          logger.info(`\n[TELEGRAM PAYLOAD] sendRich\noriginalText.length=${textLen}\noriginalText_first300="${firstChunkStr.replace(/\n/g, '\\n')}"\noriginalText_last300="${lastChunkStr.replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
+          logger.debug(`[TELEGRAM PAYLOAD] sendRich originalText.length=${textLen} html.length=${html.length} containsDetails=${html.includes('<details')} containsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')} containsBodyTitle=${html.includes('证明') || html.includes('Proof')}`);
           const res: any = await (ctx.api.raw as any).sendRichMessage({
             chat_id: chatId,
             message_thread_id: messageThreadId,
@@ -273,7 +267,7 @@ export function buildChannelReply(
 
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
-      logger.info(`[DEBUG-STAGE-8] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      logger.debug(`[DEBUG-STAGE-8] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = typeof originalText === 'string'
         ? originalText
@@ -285,7 +279,7 @@ export function buildChannelReply(
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
           html = '正在思考...<br><br>' + html;
         }
-        logger.info(`[DEBUG-STAGE-7] markdownToHtml conversion (draft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
+        logger.debug(`[DEBUG-STAGE-7] markdownToHtml conversion (draft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
         const hasThought = typeof originalText === 'string'
           ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
@@ -295,14 +289,14 @@ export function buildChannelReply(
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
         
-        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
+        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { html: `${html}${suffix}` },
         });
-        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft success. Response payload keys: ${Object.keys(res || {})}`);
+        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft success. Response payload keys: ${Object.keys(res || {})}`);
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
@@ -312,14 +306,14 @@ export function buildChannelReply(
       // Option B: Rich Markdown
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B): markdownLen=${safeMarkdown.length}`);
+        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B): markdownLen=${safeMarkdown.length}`);
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { markdown: safeMarkdown },
         });
-        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (Markdown) success. Response payload keys: ${Object.keys(res || {})}`);
+        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft (Markdown) success. Response payload keys: ${Object.keys(res || {})}`);
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
@@ -330,7 +324,7 @@ export function buildChannelReply(
     editRichDraft: async (draftId: number, originalText: string | StructuredMessage): Promise<void> => {
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
-      logger.info(`[DEBUG-STAGE-8] editRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      logger.debug(`[DEBUG-STAGE-8] editRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = typeof originalText === 'string'
         ? originalText
@@ -344,7 +338,7 @@ export function buildChannelReply(
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
           html = '正在思考...<br><br>' + html;
         }
-        logger.info(`[DEBUG-STAGE-7] markdownToHtml conversion (editDraft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
+        logger.debug(`[DEBUG-STAGE-7] markdownToHtml conversion (editDraft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
         const hasThought = typeof originalText === 'string'
           ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
@@ -354,14 +348,14 @@ export function buildChannelReply(
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
         
-        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
+        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { html: `${html}${suffix}` },
         });
-        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (edit) success.`);
+        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft (edit) success.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
@@ -371,14 +365,14 @@ export function buildChannelReply(
       // Option B: Rich Markdown fallback
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B - edit): markdownLen=${safeMarkdown.length}`);
+        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B - edit): markdownLen=${safeMarkdown.length}`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { markdown: safeMarkdown },
         });
-        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (edit Markdown) success.`);
+        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft (edit Markdown) success.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
@@ -390,7 +384,7 @@ export function buildChannelReply(
       const textLen = typeof originalText === 'string'
         ? originalText.length
         : (originalText.content.length + (originalText.thought?.length || 0));
-      logger.info(`[DEBUG] editRich called: messageId=${messageId}, originalTextLen=${textLen}`);
+      logger.debug(`[DEBUG] editRich called: messageId=${messageId}, originalTextLen=${textLen}`);
 
       const cacheMarkdown = typeof originalText === 'string'
         ? originalText
@@ -399,7 +393,7 @@ export function buildChannelReply(
       // If we have an active draft, the messageId is actually a draftId.
       // We must promote/send the final message as a NEW message instead of editing.
       if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
-        logger.info(`[DEBUG] Promoting draft to messageId=${messageId} via sendRich`);
+        logger.debug(`[DEBUG] Promoting draft to messageId=${messageId} via sendRich`);
         activeDraftIds.delete(messageId);
         draftIds.delete(chatId);
         await replyObj.sendRich!(originalText);
@@ -412,20 +406,15 @@ export function buildChannelReply(
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
           html = '正在思考...<br><br>' + html;
         }
-        const firstChunkStr = typeof originalText === 'string'
-          ? originalText.slice(0, 300)
-          : `[Content: ${originalText.content.slice(0, 150)}, Thought: ${originalText.thought?.slice(0, 150)}]`;
-        const lastChunkStr = typeof originalText === 'string'
-          ? originalText.slice(-300)
-          : `[Content: ${originalText.content.slice(-150)}, Thought: ${originalText.thought?.slice(-150)}]`;
-        logger.info(`\n[TELEGRAM PAYLOAD] editRich\noriginalText.length=${textLen}\noriginalText_first300="${firstChunkStr.replace(/\n/g, '\\n')}"\noriginalText_last300="${lastChunkStr.replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
-        logger.info(`[DEBUG] editMessageText (Option A) called: messageId=${messageId}`);
+        logger.debug(`[TELEGRAM PAYLOAD] editRich originalText.length=${textLen} html.length=${html.length} containsDetails=${html.includes('<details')} containsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')} containsBodyTitle=${html.includes('证明') || html.includes('Proof')}`);
+
+        logger.debug(`[DEBUG] editMessageText (Option A) called: messageId=${messageId}`);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
           message_id: messageId,
           rich_message: { html },
         });
-        logger.info(`[DEBUG] editMessageText (Option A) success: messageId=${messageId}`);
+        logger.debug(`[DEBUG] editMessageText (Option A) success: messageId=${messageId}`);
         messageCache.set(messageId, cacheMarkdown);
         return;
       } catch (err: any) {
@@ -439,13 +428,13 @@ export function buildChannelReply(
       // Option B: Rich Markdown
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[DEBUG] editMessageText (Option B) called: messageId=${messageId}`);
+        logger.debug(`[DEBUG] editMessageText (Option B) called: messageId=${messageId}`);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
           message_id: messageId,
           rich_message: { markdown: safeMarkdown },
         });
-        logger.info(`[DEBUG] editMessageText (Option B) success: messageId=${messageId}`);
+        logger.debug(`[DEBUG] editMessageText (Option B) success: messageId=${messageId}`);
         messageCache.set(messageId, cacheMarkdown);
         return;
       } catch (err: any) {

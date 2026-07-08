@@ -38,8 +38,7 @@ const WEB2API_MODEL_MAP: Record<string, string> = {
 
 /** Returns true if the model name should be routed to web2api */
 export function isWeb2ApiModel(model: string): boolean {
-  // SYSTEM-LEVEL TEMPORARY DISABLE of Web2API: Force routing to local agy CLI
-  return false;
+  return model in WEB2API_MODEL_MAP;
 }
 
 // ── Web2API in-memory conversation history ───────────────────────────────────
@@ -50,6 +49,10 @@ interface Web2ApiMessage {
   content: string;
 }
 const web2apiHistories = new Map<string, Web2ApiMessage[]>();
+
+// ── Gemini Direct in-memory conversation history ─────────────────────────────
+// Separate from web2apiHistories to avoid cross-contamination between routing paths.
+const geminiDirectHistories = new Map<string, any[]>();
 
 /**
  * Generate a random UUID for a Web2API session.
@@ -239,7 +242,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
   const convId = existingConvId || `gemini-direct-${globalThis.crypto.randomUUID()}`;
 
   // Build history in memory
-  const history: any[] = web2apiHistories.get(convId) ?? [];
+  const history: any[] = geminiDirectHistories.get(convId) ?? [];
   history.push({ role: 'user', parts: [{ text: prompt }] });
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?alt=sse&key=${apiKey}`;
@@ -379,7 +382,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
     history.push({ role: 'model', parts: [{ text: outputBuf }] });
     const MAX_MESSAGES = 40;
     const trimmed = history.length > MAX_MESSAGES ? history.slice(history.length - MAX_MESSAGES) : history;
-    web2apiHistories.set(convId, trimmed);
+    geminiDirectHistories.set(convId, trimmed);
 
     const finalResult: AgyRunResult = {
       conversationId: convId,
@@ -623,8 +626,6 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     const stderrDecoder = new StringDecoder('utf-8');
 
     let accumulatedText = '';
-    let lastThoughtLen = 0;
-    let lastContentLen = 0;
 
     let chunkIndex = 0;
     child.stdout.on('data', (chunk: Buffer) => {
@@ -635,22 +636,9 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       chunkIndex++;
 
       const containsT = text.includes('<thought') || text.includes('</thought>') || text.includes('<thinking') || text.includes('</thinking>');
-      logger.info(`\n[STDOUT]\nchunk=${chunkIndex}\nlen=${text.length}\ncontainsThought=${containsT}\npreview="${text.slice(0, 200).replace(/\n/g, '\\n')}"\n`);
+      logger.debug(`[STDOUT] chunk=${chunkIndex} len=${text.length} containsThought=${containsT} preview="${text.slice(0, 200).replace(/\n/g, '\\n')}"`);
 
       if (onChunk) onChunk(text);
-
-      const { thought, content } = extractThoughtAndContent(accumulatedText);
-
-      if (thought.length > lastThoughtLen) {
-        const diff = thought.slice(lastThoughtLen);
-        opts.onEvent?.({ type: 'thought', content: diff });
-        lastThoughtLen = thought.length;
-      }
-      if (content.length > lastContentLen) {
-        const diff = content.slice(lastContentLen);
-        opts.onEvent?.({ type: 'text', content: diff });
-        lastContentLen = content.length;
-      }
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
@@ -675,23 +663,18 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         accumulatedText += finalStdout;
         outputBuf += finalStdout;
         if (onChunk) onChunk(finalStdout);
-
-        const { thought, content } = extractThoughtAndContent(accumulatedText);
-        
-        logger.info(`[DEBUG-STAGE-1-2-CLOSE] Final flush. Thought extracted: exists=${!!thought}, length=${thought.length}`);
-        
-        if (thought.length > lastThoughtLen) {
-          const diff = thought.slice(lastThoughtLen);
-          logger.info(`[DEBUG-STAGE-4-CLOSE] final thought diff: ${diff.length}`);
-          opts.onEvent?.({ type: 'thought', content: diff });
-        }
-        if (content.length > lastContentLen) {
-          const diff = content.slice(lastContentLen);
-          logger.info(`[DEBUG-STAGE-4-CLOSE] final text diff: ${diff.length}`);
-          opts.onEvent?.({ type: 'text', content: diff });
-        }
       }
-      logger.info(`[DEBUG-STAGE-4-CLOSE] opts.onEvent({ type: 'done' })`);
+
+      // Single parse of the complete accumulated output
+      const { thought, content } = extractThoughtAndContent(accumulatedText);
+      logger.debug(`[STDOUT-CLOSE] Final parse: thought.length=${thought.length}, content.length=${content.length}`);
+
+      if (thought) {
+        opts.onEvent?.({ type: 'thought', content: thought });
+      }
+      if (content) {
+        opts.onEvent?.({ type: 'text', content: content });
+      }
       opts.onEvent?.({ type: 'done' });
       errBuf += stderrDecoder.end();
 
@@ -854,11 +837,9 @@ export function extractThoughtBlocksAndSegments(text: string): {
       matchedPrefix = '<thought-gemini';
       endTagStr = '</thought-gemini>';
     } else if (matchTag(text, i, '<thought')) {
-      if (!startsWithIgnoreCase(text, i, '<thought-gemini')) {
-        matchedType = 'thought';
-        matchedPrefix = '<thought';
-        endTagStr = '</thought>';
-      }
+      matchedType = 'thought';
+      matchedPrefix = '<thought';
+      endTagStr = '</thought>';
     } else if (matchTag(text, i, '<thinking')) {
       matchedType = 'thinking';
       matchedPrefix = '<thinking';
