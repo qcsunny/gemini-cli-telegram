@@ -87,3 +87,22 @@ We resolved the following issues in the formatter:
    - Added `should clean up all variations of break tags at boundaries in normalizeSpacingAroundDetails` to verify correct spacing.
    
 All 97 tests passed successfully.
+
+## Fix Subagent compatibility and type-safety (bot.ts)
+
+We successfully updated the channel reply wrapper in `/home/user/.gemini-cli-telegram/src/channels/telegram/bot.ts` to fully support `StructuredMessage` objects:
+
+1. **Updated `getHtmlPayload` helper:**
+   - Adjusted parameter type to `string | StructuredMessage`.
+   - Added type guards to perform `startsWith()` operations safely only on string inputs.
+2. **Updated ChannelReply methods in `buildChannelReply`:**
+   - Modified `sendRich`, `sendRichDraft`, `editRich`, and `editRichDraft` to accept `originalText: string | StructuredMessage`.
+   - Used type guards for length calculation, log message slicing, and `<thought>` tags checks.
+   - Replaced direct string manipulation on `originalText` with a `safeMarkdown` string fallback containing `<thought>` blocks when `StructuredMessage` objects are received.
+   - Updated `safeEdit` to support `StructuredMessage` and cleanly cache the reconstructed markdown.
+3. **Updated internal routing helper signatures in `scheduledReply`:**
+   - Changed optional methods signature inside `setupScheduler()`'s `scheduledReply` to accept `text: string | StructuredMessage`.
+   - Formatted incoming `StructuredMessage` objects to HTML payloads dynamically when forwarding scheduled messages.
+4. **Validation:**
+   - Verified that everything compiles cleanly via `npm run build`.
+   - Ran `npm run test` to confirm that all 97 tests pass successfully.
