@@ -248,6 +248,24 @@ describe('processMessage', () => {
         content: '<thoughtful>something',
       });
     });
+
+    it('should not corrupt Chinese characters at the beginning of thoughts', () => {
+      const input = '<thought>我a</thought>';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: '我a',
+        content: '',
+      });
+    });
+
+    it('should not lock parser with unclosed inline backtick on a line', () => {
+      const input = '`\n<thought>subsequent thought</thought>Some text';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: 'subsequent thought',
+        content: '`\nSome text',
+      });
+    });
   });
 
   it('should send separate messages for thought and formal reply', async () => {

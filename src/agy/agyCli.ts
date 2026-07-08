@@ -766,9 +766,13 @@ interface ParsedBlock {
 
 function cleanInnerText(rawText: string): string {
   let cleanedText = rawText;
-  if (cleanedText.charCodeAt(0) > 127 && cleanedText.charCodeAt(1) > 127 && cleanedText.charCodeAt(2) <= 127) {
-    cleanedText = cleanedText.slice(2);
-  } else if (cleanedText.charCodeAt(0) > 127 && cleanedText.charCodeAt(1) <= 127) {
+  while (cleanedText && (
+    cleanedText.startsWith('\ufeff') ||
+    (cleanedText.charCodeAt(0) < 32 && 
+     cleanedText.charCodeAt(0) !== 9 && 
+     cleanedText.charCodeAt(0) !== 10 && 
+     cleanedText.charCodeAt(0) !== 13)
+  )) {
     cleanedText = cleanedText.slice(1);
   }
   return cleanedText;
@@ -803,13 +807,18 @@ export function extractThoughtBlocksAndSegments(text: string): {
   let i = 0;
 
   while (i < text.length) {
+    const char = text[i];
+    if (char === '\n') {
+      inInlineCode = false;
+    }
+
     if (text.startsWith('```', i)) {
       inCodeBlock = !inCodeBlock;
       i += 3;
       hasSeenNonWhitespaceContent = true;
       continue;
     }
-    if (text[i] === '`' && !inCodeBlock) {
+    if (char === '`' && !inCodeBlock) {
       inInlineCode = !inInlineCode;
       i++;
       hasSeenNonWhitespaceContent = true;
@@ -821,7 +830,6 @@ export function extractThoughtBlocksAndSegments(text: string): {
       continue;
     }
 
-    const char = text[i];
     if (char === ' ' || char === '\n' || char === '\r' || char === '\t') {
       i++;
       continue;
@@ -899,6 +907,9 @@ export function extractThoughtBlocksAndSegments(text: string): {
           let j = startTagEnd;
           const lowerEndTag = endTagStr.toLowerCase();
           while (j < text.length) {
+            if (text[j] === '\n') {
+              tempInlineCode = false;
+            }
             if (text.startsWith('```', j)) {
               tempCodeBlock = !tempCodeBlock;
               j += 3;
