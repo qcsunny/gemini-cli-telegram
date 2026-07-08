@@ -1074,7 +1074,7 @@ export function safeHtmlSlice(html: string, maxLength: number): { sliced: string
       if (endIdx !== -1 && endIdx - i < 10) {
         const entity = html.slice(i, endIdx + 1);
         result += entity;
-        count++;
+        count += entity.length;
         i = endIdx + 1;
         continue;
       }

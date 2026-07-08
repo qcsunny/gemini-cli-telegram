@@ -28,7 +28,8 @@ function normalizeText(text: string): string {
 
 async function readThoughtFromTranscript(
   conversationId: string,
-  answerBuffer: string
+  answerBuffer: string,
+  turnStartTime: number
 ): Promise<{ thought: string; source: string } | null> {
   const startTime = Date.now();
   const baseDir =
@@ -66,12 +67,11 @@ async function readThoughtFromTranscript(
         try {
           const parsed = JSON.parse(line);
           if (parsed.type === 'PLANNER_RESPONSE' && parsed.status === 'DONE') {
-            // Check 1: Recency verification to ensure we don't recover a stale previous turn's thought (within 30s)
+            // Check 1: Recency verification — skip entries that predate this turn
             const createdAtTime = new Date(parsed.created_at).getTime();
             if (!isNaN(createdAtTime)) {
-              const diffMs = Math.abs(Date.now() - createdAtTime);
-              if (diffMs > 30000) {
-                matchedReason = `Stale entry skipped: age=${diffMs}ms`;
+              if (createdAtTime < turnStartTime) {
+                matchedReason = 'Entry predates turn start';
                 continue;
               }
             }
@@ -196,7 +196,7 @@ export async function processMessage(
           };
 
           if (!structuredMsg.content.trim() && !structuredMsg.thought?.trim()) {
-            logger.info(`[DEBUG-STAGE-6] structuredMsg is empty, skipping update.`);
+            logger.debug(`[DEBUG-STAGE-6] structuredMsg is empty, skipping update.`);
             return;
           }
 
@@ -209,15 +209,15 @@ export async function processMessage(
           };
 
           if (!currentMessageId) {
-            logger.info(`[DEBUG-STAGE-6] Sending first draft with structuredMsg`);
+            logger.debug(`[DEBUG-STAGE-6] Sending first draft with structuredMsg`);
             currentMessageId = await reply.sendRichDraft!(structuredTruncMsg);
-            logger.info(`[DEBUG-STAGE-6] First draft sent, currentMessageId=${currentMessageId}`);
+            logger.debug(`[DEBUG-STAGE-6] First draft sent, currentMessageId=${currentMessageId}`);
           } else {
             if (reply.editRichDraft) {
-              logger.info(`[DEBUG-STAGE-6] Editing active draft ${currentMessageId} with structuredMsg`);
+              logger.debug(`[DEBUG-STAGE-6] Editing active draft ${currentMessageId} with structuredMsg`);
               await reply.editRichDraft(currentMessageId, structuredTruncMsg);
             } else {
-              logger.info(`[DEBUG-STAGE-6] editRichDraft missing!`);
+              logger.debug(`[DEBUG-STAGE-6] editRichDraft missing!`);
             }
           }
         } else {
@@ -272,6 +272,8 @@ export async function processMessage(
       let thoughtEventCount = 0;
       let textEventCount = 0;
 
+      let turnStartTime = 0;
+
       while (attempts < maxAttempts && !success) {
         attempts++;
         thoughtBuffer = '';
@@ -282,6 +284,7 @@ export async function processMessage(
 
         try {
           logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
+          turnStartTime = Date.now();
           const result = await runAgyPrint({
             prompt: finalPrompt,
             cwd,
@@ -297,7 +300,8 @@ export async function processMessage(
                 textEventCount++;
               }
 
-              logger.info(`\n[EVENT] type="${event.type}"\ncontent.length=${event.content?.length || 0}\ncontent_preview="${(event.content || '').slice(0, 100).replace(/\n/g, '\\n')}"\n`);
+              logger.debug(`[EVENT] type="${event.type}" content.length=${event.content?.length || 0} content_preview="${(event.content || '').slice(0, 100).replace(/\n/g, '\\n')}"`);
+
 
               if (event.type === 'thought') {
                 thoughtBuffer += event.content || '';
@@ -305,10 +309,10 @@ export async function processMessage(
                 answerBuffer += event.content || '';
               } else if (event.type === 'done') {
                 isDone = true;
-                logger.info(`\n[EVENT STATS] thought event count=${thoughtEventCount}\ntext event count=${textEventCount}\n`);
+                logger.debug(`[EVENT STATS] thought event count=${thoughtEventCount} text event count=${textEventCount}`);
               }
 
-              logger.info(`\n[BUFFER]\nthoughtBuffer.length=${thoughtBuffer.length}\nanswerBuffer.length=${answerBuffer.length}\n`);
+              logger.debug(`[BUFFER] thoughtBuffer.length=${thoughtBuffer.length} answerBuffer.length=${answerBuffer.length}`);
 
               updateMessageStream(isDone).catch(err => {
                 logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
@@ -382,7 +386,7 @@ export async function processMessage(
       }
 
       if (thoughtBuffer.length === 0 && session.conversationId) {
-        const result = await readThoughtFromTranscript(session.conversationId, answerBuffer);
+        const result = await readThoughtFromTranscript(session.conversationId, answerBuffer, turnStartTime);
         if (result && result.thought) {
           thoughtBuffer = result.thought;
           // Strip the recovered thought block from answerBuffer to prevent double rendering!
