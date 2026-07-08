@@ -290,13 +290,13 @@ export function splitTextWithOpenTags(htmlText: string, maxLength: number): stri
         const openTagsHtml = openTags.map(t => t.fullTag).join('');
         
         const budget = maxLength - currentChunk.length - closeTagsHtml.length;
-        if (budget <= 5 && currentChunk.length > 0) {
+        if (budget <= 5 && currentChunk.length > openTagsHtml.length) {
           chunks.push(currentChunk + closeTagsHtml);
           currentChunk = openTagsHtml;
           continue;
         }
         
-        const take = Math.min(budget, textVal.length - textIdx);
+        const take = Math.max(1, Math.min(budget, textVal.length - textIdx));
         let slice = textVal.substring(textIdx, textIdx + take);
         
         if (textIdx + take < textVal.length) {
@@ -1030,7 +1030,7 @@ function formatSummaryWithMetadata(time?: string, tokens?: string, isStreaming?:
   return parts.join(' · ');
 }
 
-function safeHtmlSlice(html: string, maxLength: number): { sliced: string; wasTruncated: boolean } {
+export function safeHtmlSlice(html: string, maxLength: number): { sliced: string; wasTruncated: boolean } {
   if (html.length <= maxLength) {
     return { sliced: html, wasTruncated: false };
   }
@@ -1054,12 +1054,15 @@ function safeHtmlSlice(html: string, maxLength: number): { sliced: string; wasTr
           const match = tag.match(/^<\/?([a-zA-Z0-9-]+)/);
           if (match) {
             const tagName = match[1].toLowerCase();
-            if (isCloseTag) {
-              if (tagStack[tagStack.length - 1] === tagName) {
-                tagStack.pop();
+            const isSelfClosingHtml = tagName === 'br' || tagName === 'hr' || tagName === 'img';
+            if (!isSelfClosingHtml) {
+              if (isCloseTag) {
+                if (tagStack[tagStack.length - 1] === tagName) {
+                  tagStack.pop();
+                }
+              } else {
+                tagStack.push(tagName);
               }
-            } else {
-              tagStack.push(tagName);
             }
           }
         }
@@ -1179,18 +1182,23 @@ function renderThoughtBlockToHtml(
   return `${detailsTag}<summary>${summary}</summary>${infoBlock}<i>${innerHtml}</i></details>`;
 }
 
-function normalizeSpacingAroundDetails(html: string): string {
+export function normalizeSpacingAroundDetails(html: string): string {
   let processed = html.replace(/(?:(?:\s|<br\s*\/?>|<p>|<\/p>)*)(<details(?:\s+open)?>)/gi, (match, details) => {
     return `<br><br>${details}`;
   });
   processed = processed.replace(/(<\/details>)(?:(?:\s|<br\s*\/?>|<p>|<\/p>)*)/gi, (match, details) => {
     return `${details}<br><br>`;
   });
-  while (processed.startsWith('<br>')) {
-    processed = processed.substring(4);
+  // Clean up boundaries
+  while (processed.startsWith('<br>') || processed.startsWith('<br/>') || processed.startsWith('<br />')) {
+    if (processed.startsWith('<br>')) processed = processed.substring(4);
+    else if (processed.startsWith('<br/>')) processed = processed.substring(5);
+    else if (processed.startsWith('<br />')) processed = processed.substring(6);
   }
-  while (processed.endsWith('<br>')) {
-    processed = processed.substring(0, processed.length - 4);
+  while (processed.endsWith('<br>') || processed.endsWith('<br/>') || processed.endsWith('<br />')) {
+    if (processed.endsWith('<br>')) processed = processed.substring(0, processed.length - 4);
+    else if (processed.endsWith('<br/>')) processed = processed.substring(0, processed.length - 5);
+    else if (processed.endsWith('<br />')) processed = processed.substring(0, processed.length - 6);
   }
   return processed.trim();
 }

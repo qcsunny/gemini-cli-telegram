@@ -27,6 +27,13 @@ import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
+
+function getHtmlPayload(originalText: string, isStreaming = false): string {
+  if (originalText.startsWith('___RAW_HTML___')) {
+    return originalText.substring('___RAW_HTML___'.length);
+  }
+  return markdownToHtml(originalText, isStreaming);
+}
 const TYPING_TTL_MS = 3_600_000; // Safety: auto-stop typing after 1 hour
 const DOWNLOAD_MAX_RETRIES = 3;
 const DOWNLOAD_RETRY_BASE_MS = 1000;
@@ -89,9 +96,11 @@ function prepareTelegramMarkdown(markdown: string): string {
 }
 
 const draftIds = new Map<number, number>();
+const activeDraftIds = new Set<number>();
 
 export function clearDraftIds(): void {
   draftIds.clear();
+  activeDraftIds.clear();
 }
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
@@ -132,11 +141,17 @@ export function buildChannelReply(
   const safeEdit = async (messageId: number, text: string, html = true) => {
     try {
       if (html) {
-        await ctx.api.editMessageText(chatId, messageId, markdownToHtml(text), {
+        const finalHtml = text.startsWith('___RAW_HTML___') 
+          ? text.substring('___RAW_HTML___'.length) 
+          : markdownToHtml(text);
+        await ctx.api.editMessageText(chatId, messageId, finalHtml, {
           parse_mode: 'HTML',
         });
       } else {
-        await ctx.api.editMessageText(chatId, messageId, text);
+        const finalPlain = text.startsWith('___RAW_HTML___') 
+          ? text.substring('___RAW_HTML___'.length) 
+          : text;
+        await ctx.api.editMessageText(chatId, messageId, finalPlain);
       }
       messageCache.set(messageId, text);
     } catch (e: any) {
@@ -164,10 +179,15 @@ export function buildChannelReply(
 
   const replyObj: ChannelReply = {
     sendRich: async (originalText: string): Promise<number> => {
+      logger.info(`[DEBUG] sendRich called: originalTextLen=${originalText.length}`);
       try {
         // Option A: Native Rich HTML (Telegram parses this on the server)
         try {
-          const html = markdownToHtml(originalText);
+          let html = getHtmlPayload(originalText);
+          if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
+            html = '正在思考...<br><br>' + html;
+          }
+          logger.info(`\n[TELEGRAM PAYLOAD] sendRich\noriginalText.length=${originalText.length}\noriginalText_first300="${originalText.slice(0, 300).replace(/\n/g, '\\n')}"\noriginalText_last300="${originalText.slice(-300).replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
           const res: any = await (ctx.api.raw as any).sendRichMessage({
             chat_id: chatId,
             message_thread_id: messageThreadId,
@@ -195,7 +215,10 @@ export function buildChannelReply(
 
         // Option C: HTML Fallback
         try {
-          const htmlText = markdownToHtml(originalText);
+          let htmlText = getHtmlPayload(originalText);
+          if (htmlText.includes('<details') && !htmlText.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
+            htmlText = '正在思考...<br><br>' + htmlText;
+          }
           const msg = await ctx.reply(htmlText, {
             parse_mode: 'HTML',
             message_thread_id: messageThreadId,
@@ -210,6 +233,9 @@ export function buildChannelReply(
           messageCache.set(msg.message_id, originalText);
           return msg.message_id;
         }
+      } catch (err: any) {
+        logger.error(`sendRich failed entirely: ${err}`);
+        throw err;
       } finally {
         draftIds.delete(chatId);
       }
@@ -221,16 +247,30 @@ export function buildChannelReply(
         draftId = Math.floor(Math.random() * 2147483647) + 1;
         draftIds.set(chatId, draftId);
       }
+      activeDraftIds.add(draftId);
+
+      logger.info(`[DEBUG-STAGE-8] sendRichDraft called: draftId=${draftId}, originalTextLen=${originalText.length}, first100="${originalText.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
       // Option A: Native Rich HTML with native thinking animation
       try {
-        const html = markdownToHtml(originalText);
-        await (ctx.api.raw as any).sendRichMessageDraft({
+        let html = getHtmlPayload(originalText, true);
+        if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
+          html = '正在思考...<br><br>' + html;
+        }
+        logger.info(`[DEBUG-STAGE-7] markdownToHtml conversion (draft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
+
+        const suffix = (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+          ? ''
+          : '\n<tg-thinking>正在思考...</tg-thinking>';
+        
+        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
+        const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
-          rich_message: { html: `${html}\n<tg-thinking>正在思考...</tg-thinking>` },
+          rich_message: { html: `${html}${suffix}` },
         });
+        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft success. Response payload keys: ${Object.keys(res || {})}`);
         messageCache.set(draftId, originalText);
         return draftId;
       } catch (err: any) {
@@ -240,12 +280,14 @@ export function buildChannelReply(
       // Option B: Rich Markdown
       try {
         const safeMarkdown = prepareTelegramMarkdown(originalText);
-        await (ctx.api.raw as any).sendRichMessageDraft({
+        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B): markdownLen=${safeMarkdown.length}`);
+        const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { markdown: safeMarkdown },
         });
+        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (Markdown) success. Response payload keys: ${Object.keys(res || {})}`);
         messageCache.set(draftId, originalText);
         return draftId;
       } catch (err: any) {
@@ -253,23 +295,81 @@ export function buildChannelReply(
         throw err;
       }
     },
+    editRichDraft: async (draftId: number, originalText: string): Promise<void> => {
+      logger.info(`[DEBUG-STAGE-8] editRichDraft called: draftId=${draftId}, originalTextLen=${originalText.length}, first100="${originalText.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
+      // Per Bot API 10.1: there is no "editRichMessageDraft" method.
+      // Updating a draft is done by calling sendRichMessageDraft again with the same draft_id.
+      // Option A: Rich HTML
+      try {
+        let html = getHtmlPayload(originalText, true);
+        if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
+          html = '正在思考...<br><br>' + html;
+        }
+        logger.info(`[DEBUG-STAGE-7] markdownToHtml conversion (editDraft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
+
+        const suffix = (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+          ? ''
+          : '\n<tg-thinking>正在思考...</tg-thinking>';
+        
+        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
+        await (ctx.api.raw as any).sendRichMessageDraft({
+          chat_id: chatId,
+          message_thread_id: messageThreadId,
+          draft_id: draftId,
+          rich_message: { html: `${html}${suffix}` },
+        });
+        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (edit) success.`);
+        messageCache.set(draftId, originalText);
+        return;
+      } catch (err: any) {
+        logger.warn(`editRichDraft Option A (HTML) failed: ${err.message || err}. Trying Option B (Markdown)...`);
+      }
+
+      // Option B: Rich Markdown fallback
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(originalText);
+        logger.info(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B - edit): markdownLen=${safeMarkdown.length}`);
+        await (ctx.api.raw as any).sendRichMessageDraft({
+          chat_id: chatId,
+          message_thread_id: messageThreadId,
+          draft_id: draftId,
+          rich_message: { markdown: safeMarkdown },
+        });
+        logger.info(`[DEBUG-STAGE-9] sendRichMessageDraft (edit Markdown) success.`);
+        messageCache.set(draftId, originalText);
+        return;
+      } catch (err: any) {
+        logger.warn(`editRichDraft Option B (Markdown) failed: ${err.message || err}.`);
+        throw err;
+      }
+    },
     editRich: async (messageId: number, originalText: string): Promise<void> => {
-      // If we have an active draft for this chat, the messageId is actually a draftId.
+      logger.info(`[DEBUG] editRich called: messageId=${messageId}, originalTextLen=${originalText.length}`);
+      // If we have an active draft, the messageId is actually a draftId.
       // We must promote/send the final message as a NEW message instead of editing.
-      if (draftIds.has(chatId)) {
+      if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
+        logger.info(`[DEBUG] Promoting draft to messageId=${messageId} via sendRich`);
+        activeDraftIds.delete(messageId);
+        draftIds.delete(chatId);
         await replyObj.sendRich!(originalText);
         return;
       }
 
       // Option A: Native Rich HTML
       try {
-        const html = markdownToHtml(originalText);
+        let html = getHtmlPayload(originalText);
+        if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
+          html = '正在思考...<br><br>' + html;
+        }
+        logger.info(`\n[TELEGRAM PAYLOAD] editRich\noriginalText.length=${originalText.length}\noriginalText_first300="${originalText.slice(0, 300).replace(/\n/g, '\\n')}"\noriginalText_last300="${originalText.slice(-300).replace(/\n/g, '\\n')}"\nhtml.length=${html.length}\nhtml_first300="${html.slice(0, 300).replace(/\n/g, '\\n')}"\nhtml_last300="${html.slice(-300).replace(/\n/g, '\\n')}"\ncontainsDetails=${html.includes('<details')}\ncontainsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')}\ncontainsBodyTitle=${html.includes('证明') || html.includes('Proof')}\n`);
+        logger.info(`[DEBUG] editMessageText (Option A) called: messageId=${messageId}`);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
           message_id: messageId,
           rich_message: { html },
         });
+        logger.info(`[DEBUG] editMessageText (Option A) success: messageId=${messageId}`);
         messageCache.set(messageId, originalText);
         return;
       } catch (err: any) {
@@ -283,11 +383,13 @@ export function buildChannelReply(
       // Option B: Rich Markdown
       try {
         const safeMarkdown = prepareTelegramMarkdown(originalText);
+        logger.info(`[DEBUG] editMessageText (Option B) called: messageId=${messageId}`);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
           message_id: messageId,
           rich_message: { markdown: safeMarkdown },
         });
+        logger.info(`[DEBUG] editMessageText (Option B) success: messageId=${messageId}`);
         messageCache.set(messageId, originalText);
         return;
       } catch (err: any) {
@@ -309,10 +411,14 @@ export function buildChannelReply(
             return await replyObj.sendRich!(replyText);
           }
         }
+        const isRawHtml = replyText.startsWith('___RAW_HTML___');
+        const finalHtml = isRawHtml 
+          ? replyText.substring('___RAW_HTML___'.length) 
+          : (parseMode === 'MarkdownV2' ? markdownToMarkdownV2(replyText) : markdownToHtml(replyText));
         const msg = await ctx.reply(
-          parseMode === 'MarkdownV2' ? markdownToMarkdownV2(replyText) : markdownToHtml(replyText),
+          finalHtml,
           {
-            parse_mode: parseMode === 'MarkdownV2' ? 'MarkdownV2' : 'HTML',
+            parse_mode: isRawHtml ? 'HTML' : (parseMode === 'MarkdownV2' ? 'MarkdownV2' : 'HTML'),
             message_thread_id: messageThreadId,
           },
         );
@@ -353,7 +459,6 @@ export function buildChannelReply(
           }
         }
       }
-      draftIds.delete(chatId);
       const msg = await ctx.reply(replyText);
       messageCache.set(msg.message_id, replyText);
       return msg.message_id;
@@ -361,7 +466,11 @@ export function buildChannelReply(
     editPlain: async (messageId: number, newText: string): Promise<void> => {
       if (parseMode === 'RichText' && !getDraftsDisabled() && newText.trim()) {
         try {
-          await replyObj.sendRichDraft!(newText);
+          if (replyObj.editRichDraft) {
+            await replyObj.editRichDraft(messageId, newText);
+          } else {
+            await replyObj.sendRichDraft!(newText);
+          }
           setConsecutiveDraftFailures(0);
           return;
         } catch (e) {
@@ -681,7 +790,8 @@ export class TelegramBot {
       try {
         const safeEdit = async (messageId: number, text: string, html = true) => {
           try {
-            await this.bot.api.editMessageText(chatId, messageId, text, html ? { parse_mode: 'HTML' } : {});
+            const final = text.startsWith('___RAW_HTML___') ? text.substring('___RAW_HTML___'.length) : text;
+            await this.bot.api.editMessageText(chatId, messageId, final, html ? { parse_mode: 'HTML' } : {});
           } catch (e: any) {
             if (!e?.description?.includes('message is not modified')) {
               logger.warn(`Scheduler failed to edit message ${messageId}: ${e}`);
@@ -719,6 +829,9 @@ export class TelegramBot {
           },
           editRich: async (messageId: number, newText: string): Promise<void> => {
             await scheduledReply.edit(messageId, newText);
+          },
+          editRichDraft: async (draftId: number, newText: string): Promise<void> => {
+            await scheduledReply.edit(draftId, newText);
           },
         };
 

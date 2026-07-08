@@ -4,15 +4,143 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import stripAnsi from 'strip-ansi';
+
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
+
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
-import { runAgyPrint } from '../agy/agyCli.js';
+import { markdownToHtml } from '../channels/telegram/formatter.js';
+import { runAgyPrint, getModelCapabilities } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker } from '../utils/pricing.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
+
+function normalizeText(text: string): string {
+  // 1. Strip thought blocks completely to isolate the actual answer body
+  let clean = text.replace(/<(thought|thought-gemini|thinking)(?:\s+[^>]*)?>([\s\S]*?)<\/\1>/gi, '');
+  
+  // 2. Unify CRLF to LF
+  clean = clean.replace(/\r\n/g, '\n');
+  
+  // 3. Strip Markdown formatting symbols to avoid syntax-driven mismatches
+  clean = clean.replace(/[*_`#>\-+=()[\]]/g, '');
+  
+  // 4. Unify all continuous spaces/tabs/newlines to a single space
+  clean = clean.replace(/\s+/g, ' ');
+  
+  // 5. Trim and lowercase for uniform comparison
+  return clean.trim().toLowerCase();
+}
+
+async function readThoughtFromTranscript(
+  conversationId: string,
+  answerBuffer: string
+): Promise<{ thought: string; source: string } | null> {
+  const startTime = Date.now();
+  const baseDir =
+    process.env['ANTIGRAVITY_USER_DIR'] ||
+    path.join(os.homedir(), '.gemini', 'antigravity-cli');
+
+  const filePath = path.join(
+    baseDir,
+    'brain',
+    conversationId,
+    '.system_generated',
+    'logs',
+    'transcript.jsonl'
+  );
+
+  let attempts = 0;
+  const maxAttempts = 20; // 20 * 100ms = 2 seconds total
+
+  // Normalize the expected answer buffer for accurate validation
+  const normAnswer = normalizeText(answerBuffer);
+  const answerPrefix = normAnswer.slice(0, 100);
+
+  while (attempts < maxAttempts) {
+    attempts++;
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8');
+      const lines = raw.trim().split('\n');
+      
+      let foundStep: any = null;
+      let matchedReason = '';
+
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.type === 'PLANNER_RESPONSE' && parsed.status === 'DONE') {
+            // Check 1: Recency verification to ensure we don't recover a stale previous turn's thought (within 30s)
+            const createdAtTime = new Date(parsed.created_at).getTime();
+            if (!isNaN(createdAtTime)) {
+              const diffMs = Math.abs(Date.now() - createdAtTime);
+              if (diffMs > 30000) {
+                matchedReason = `Stale entry skipped: age=${diffMs}ms`;
+                continue;
+              }
+            }
+
+            // Check 2: Content consistency validation on isolated answer body
+            if (answerPrefix) {
+              const normContent = normalizeText(parsed.content || '');
+              if (!normContent.includes(answerPrefix)) {
+                matchedReason = `Content mismatch: prefix "${answerPrefix.slice(0, 20)}..." not in content`;
+                continue;
+              }
+            }
+
+            foundStep = parsed;
+            matchedReason = 'Matched successfully';
+            break;
+          }
+        } catch {
+          // ignore corrupted/partially written lines during poll
+        }
+      }
+
+      if (foundStep) {
+        const stats = await fs.stat(filePath);
+        const latency = Date.now() - startTime;
+        
+        // Priority 1: parsed.thinking (native Gemini reasoning tokens)
+        if (foundStep.thinking && typeof foundStep.thinking === 'string' && foundStep.thinking.trim()) {
+          const thought = foundStep.thinking.trim();
+          logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=thinking, length=${thought.length}, hasNewlines=${thought.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
+          return { thought, source: 'thinking' };
+        }
+
+        // Priority 2, 3, 4: parsed.content custom XML tags
+        if (foundStep.content && typeof foundStep.content === 'string') {
+          const tags = ['thought', 'thought-gemini', 'thinking'];
+          for (const tag of tags) {
+            const regex = new RegExp(`<(${tag})(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/\\1>`, 'i');
+            const match = foundStep.content.match(regex);
+            if (match && match[2].trim()) {
+              const thought = match[2].trim();
+              logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=content:${tag}, length=${thought.length}, hasNewlines=${thought.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
+              return { thought, source: `content:${tag}` };
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        logger.debug(`[messageLoop] Error polling transcript: ${err.message || err}`);
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  const latency = Date.now() - startTime;
+  logger.warn(`[messageLoop] [TRANSCRIPT] Timeout waiting for transcript: conversationId=${conversationId}, filePath=${filePath}, waitCount=${attempts}, latency=${latency}ms`);
+  return null;
+}
 
 /**
  * Channel-agnostic message processing loop using local agy CLI wrapper.
@@ -51,32 +179,97 @@ export async function processMessage(
   logger.debug(`[messageLoop] Prompt prepared: "${finalPrompt.slice(0, 100)}..."`);
 
   // 2. Local variables for streaming response
-  let responseText = '';
+  let thoughtBuffer = '';
+  let answerBuffer = '';
+  let thinkingMessageId: number | null = null;
   let currentMessageId: number | null = null;
   let lastEditTime = 0;
   let isFinished = false;
+  let isDone = false;
   let activeUpdatePromise: Promise<any> = Promise.resolve();
+
+  const capabilities = getModelCapabilities(session.model);
+  const isRichSingleMessage = capabilities.supportsThinkingSummary;
 
   // Stream editing helper
   const updateMessageStream = async (isFinal = false) => {
     if (isFinished && !isFinal) return;
-    if (!responseText.trim()) return;
     const now = Date.now();
     if (!isFinal && now - lastEditTime < DEBOUNCE_INTERVAL_MS) {
       return;
     }
     lastEditTime = now;
 
-    const truncated = formatter.truncateForEdit(responseText);
-    if (!truncated.trim()) return;
-
     activeUpdatePromise = activeUpdatePromise.then(async () => {
       if (isFinished && !isFinal) return;
       try {
-        if (!currentMessageId) {
-          currentMessageId = await reply.sendPlain(truncated);
+        if (isRichSingleMessage) {
+          let unifiedText = '';
+          const thoughtTrimmed = thoughtBuffer.trim();
+
+          if (answerBuffer) {
+            unifiedText = answerBuffer;
+            if (thoughtTrimmed) {
+              const closingTag = isFinal ? '</thought>' : '';
+              unifiedText += `\n\n<thought>${thoughtTrimmed}${closingTag}`;
+            }
+          } else if (thoughtTrimmed) {
+            const closingTag = isFinal ? '</thought>' : '';
+            unifiedText = `<thought>${thoughtTrimmed}${closingTag}`;
+          }
+
+          logger.info(`[DEBUG-STAGE-6] Unified rich message constructed: isFinal=${isFinal}, thoughtTrimmedLen=${thoughtTrimmed.length}, answerBufferLen=${answerBuffer.length}, unifiedTextLen=${unifiedText.length}`);
+
+          if (!unifiedText.trim()) {
+            logger.info(`[DEBUG-STAGE-6] unifiedText is empty, skipping update.`);
+            return;
+          }
+
+          const truncated = formatter.truncateForEdit(unifiedText);
+          if (truncated.trim()) {
+            if (!currentMessageId) {
+              logger.info(`[DEBUG-STAGE-6] Sending first draft with unifiedText: first100="${truncated.slice(0, 100).replace(/\n/g, '\\n')}"`);
+              currentMessageId = await reply.sendPlain(truncated);
+              logger.info(`[DEBUG-STAGE-6] First draft sent, currentMessageId=${currentMessageId}`);
+            } else {
+              if (reply.editRichDraft) {
+                logger.info(`[DEBUG-STAGE-6] Editing active draft ${currentMessageId} with unifiedText: first100="${truncated.slice(0, 100).replace(/\n/g, '\\n')}"`);
+                await reply.editRichDraft(currentMessageId, truncated);
+              } else {
+                logger.info(`[DEBUG-STAGE-6] editRichDraft missing! Falling back to editPlain with unifiedText: first100="${truncated.slice(0, 100).replace(/\n/g, '\\n')}"`);
+                await reply.editPlain(currentMessageId, truncated);
+              }
+            }
+          } else {
+            logger.info(`[DEBUG-STAGE-6] truncated unifiedText is empty!`);
+          }
         } else {
-          await reply.editPlain(currentMessageId, truncated);
+          const thoughtTrimmed = thoughtBuffer.trim();
+          if (thoughtTrimmed) {
+            const prefix = isFinal
+              ? '🧠 思考过程 (Thinking Process)\n\n'
+              : '🧠 正在思考... (Thinking...)\n\n';
+            const formattedThought = prefix + thoughtTrimmed;
+            const truncatedThought = formatter.truncateForEdit(formattedThought);
+            if (truncatedThought.trim()) {
+              if (!thinkingMessageId) {
+                thinkingMessageId = await reply.sendPlain(truncatedThought);
+              } else {
+                await reply.editPlain(thinkingMessageId, truncatedThought);
+              }
+            }
+          }
+
+          if (answerBuffer.trim()) {
+            const truncatedContent = formatter.truncateForEdit(answerBuffer);
+            if (truncatedContent.trim()) {
+              if (!currentMessageId) {
+                currentMessageId = await reply.sendPlain(truncatedContent);
+              } else {
+                await reply.editPlain(currentMessageId, truncatedContent);
+              }
+            }
+          }
         }
       } catch (e) {
         logger.warn(`[messageLoop] Failed to update streaming message: ${e}`);
@@ -86,142 +279,205 @@ export async function processMessage(
     await activeUpdatePromise;
   };
 
-  const cwd = session.currentProject?.path || process.cwd();
+    const cwd = session.currentProject?.path || process.cwd();
 
-  try {
-    session.busy = true;
-    session._busySince = Date.now();
-    session.turnCount++;
-
-    let modelToUse = session.model;
-    let attempts = 0;
-    const maxAttempts = 3;
-    let success = false;
-    let lastResult: any = null;
-
-    while (attempts < maxAttempts && !success) {
-      attempts++;
-      responseText = ''; // Reset buffer for this attempt
-
-      try {
-        logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
-        const result = await runAgyPrint({
-          prompt: finalPrompt,
-          cwd,
-          conversationId: session.conversationId,
-          model: modelToUse,
-          proxy: session.proxy,
-          signal,
-          onSpawn: (pid) => { session.childPid = pid; },
-          onChunk: (chunk) => {
-            responseText += stripAnsi(chunk);
-            updateMessageStream(false).catch(err => {
-              logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
-            });
-          }
-        });
-
-        lastResult = result;
-
-        if (result.exitCode === 0) {
-          success = true;
-          // If we had to fall back, persist the change to disk and update session
-          if (modelToUse && modelToUse !== session.model) {
-            logger.info(`[messageLoop] Successfully downgraded to model "${modelToUse}". Updating session.`);
-            session.model = modelToUse;
-            await setConversation(chatId, result.conversationId || session.conversationId || '', cwd, modelToUse);
-          }
-          break;
-        }
-
-        const stderr = result.stderr || '';
-        const output = result.output || responseText;
-
-        if (isRateLimitOrUnavailableError(stderr, output)) {
-          const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
-          if (nextModel && attempts < maxAttempts) {
-            logger.warn(`[messageLoop] Model "${modelToUse}" hit rate limit/unavailable. Stderr: "${stderr}". Output: "${output}". Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
-            
-            await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 遭遇频控或不可用，正在自动降级至 \`${nextModel}\` 重试...`);
-            
-            currentMessageId = null; // Fresh message for next model stream
-            modelToUse = nextModel;
-            continue;
-          }
-        }
-
-        break; // Non-fallback error, or max attempts reached
-      } catch (e: any) {
-        logger.error(`[messageLoop] Attempt ${attempts} error: ${e?.message || e}`);
-        if (signal.aborted) throw e;
-
-        const errMsg = e?.message || String(e);
-        if (isRateLimitOrUnavailableError(errMsg, '')) {
-          const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
-          if (nextModel && attempts < maxAttempts) {
-            logger.warn(`[messageLoop] Model "${modelToUse}" threw rate-limit/unavailable error. Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
-            await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 出现调用异常，正在自动降级至 \`${nextModel}\` 重试...`);
-            currentMessageId = null;
-            modelToUse = nextModel;
-            continue;
-          }
-        }
-        throw e;
-      }
-    }
-
-    const finalResult = lastResult || { conversationId: '', output: responseText, exitCode: 1 };
-
-    // 4. Save and persist the updated conversation ID
-    if (finalResult.conversationId) {
-      session.conversationId = finalResult.conversationId;
-      await setConversation(chatId, finalResult.conversationId, cwd, session.model);
-    }
-
-    // Wait for any pending stream updates to completely finish before rendering final message
-    isFinished = true;
     try {
-      await activeUpdatePromise;
-    } catch (e) {
-      logger.warn(`[messageLoop] Error waiting for active update promise: ${e}`);
-    }
+      session.busy = true;
+      session._busySince = Date.now();
+      session.turnCount++;
 
-    // 5. Final full rendering of response text (supports RichText and multi-chunk partitioning)
-    let finalCleanText = stripAnsi(finalResult.output || responseText);
-    if (finalCleanText.trim()) {
-      // Append the footer marker containing Model name, token counts, and cost
+      let modelToUse = session.model;
+      let attempts = 0;
+      const maxAttempts = 3;
+      let success = false;
+      let lastResult: any = null;
+
+      let thoughtEventCount = 0;
+      let textEventCount = 0;
+
+      while (attempts < maxAttempts && !success) {
+        attempts++;
+        thoughtBuffer = '';
+        answerBuffer = '';
+        isDone = false;
+        thoughtEventCount = 0;
+        textEventCount = 0;
+
+        try {
+          logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
+          const result = await runAgyPrint({
+            prompt: finalPrompt,
+            cwd,
+            conversationId: session.conversationId,
+            model: modelToUse,
+            proxy: session.proxy,
+            signal,
+            onSpawn: (pid) => { session.childPid = pid; },
+            onEvent: (event) => {
+              if (event.type === 'thought') {
+                thoughtEventCount++;
+              } else if (event.type === 'text') {
+                textEventCount++;
+              }
+
+              logger.info(`\n[EVENT] type="${event.type}"\ncontent.length=${event.content?.length || 0}\ncontent_preview="${(event.content || '').slice(0, 100).replace(/\n/g, '\\n')}"\n`);
+
+              if (event.type === 'thought') {
+                thoughtBuffer += event.content || '';
+              } else if (event.type === 'text') {
+                answerBuffer += event.content || '';
+              } else if (event.type === 'done') {
+                isDone = true;
+                logger.info(`\n[EVENT STATS] thought event count=${thoughtEventCount}\ntext event count=${textEventCount}\n`);
+              }
+
+              logger.info(`\n[BUFFER]\nthoughtBuffer.length=${thoughtBuffer.length}\nanswerBuffer.length=${answerBuffer.length}\n`);
+
+              updateMessageStream(isDone).catch(err => {
+                logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
+              });
+            }
+          });
+
+          lastResult = result;
+
+          if (result.exitCode === 0) {
+            success = true;
+            // If we had to fall back, persist the change to disk and update session
+            if (modelToUse && modelToUse !== session.model) {
+              logger.info(`[messageLoop] Successfully downgraded to model "${modelToUse}". Updating session.`);
+              session.model = modelToUse;
+              await setConversation(chatId, result.conversationId || session.conversationId || '', cwd, modelToUse);
+            }
+            break;
+          }
+
+          const stderr = result.stderr || '';
+          const output = result.output || answerBuffer;
+
+          if (isRateLimitOrUnavailableError(stderr, output)) {
+            const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
+            if (nextModel && attempts < maxAttempts) {
+              logger.warn(`[messageLoop] Model "${modelToUse}" hit rate limit/unavailable. Stderr: "${stderr}". Output: "${output}". Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
+              
+              await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 遭遇频控或不可用，正在自动降级至 \`${nextModel}\` 重试...`);
+              
+              currentMessageId = null; // Fresh message for next model stream
+              modelToUse = nextModel;
+              continue;
+            }
+          }
+
+          break; // Non-fallback error, or max attempts reached
+        } catch (e: any) {
+          logger.error(`[messageLoop] Attempt ${attempts} error: ${e?.message || e}`);
+          if (signal.aborted) throw e;
+
+          const errMsg = e?.message || String(e);
+          if (isRateLimitOrUnavailableError(errMsg, '')) {
+            const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
+            if (nextModel && attempts < maxAttempts) {
+              logger.warn(`[messageLoop] Model "${modelToUse}" threw rate-limit/unavailable error. Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
+              await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 出现调用异常，正在自动降级至 \`${nextModel}\` 重试...`);
+              currentMessageId = null;
+              modelToUse = nextModel;
+              continue;
+            }
+          }
+          throw e;
+        }
+      }
+
+      const finalResult = lastResult || { conversationId: '', output: answerBuffer, exitCode: 1 };
+
+      // 4. Save and persist the updated conversation ID
+      if (finalResult.conversationId) {
+        session.conversationId = finalResult.conversationId;
+        await setConversation(chatId, finalResult.conversationId, cwd, session.model);
+      }
+
+      // Wait for any pending stream updates to completely finish before rendering final message
+      isFinished = true;
+      try {
+        await activeUpdatePromise;
+      } catch (e) {
+        logger.warn(`[messageLoop] Error waiting for active update promise: ${e}`);
+      }
+
+      if (thoughtBuffer.length === 0 && session.conversationId) {
+        const result = await readThoughtFromTranscript(session.conversationId, answerBuffer);
+        if (result && result.thought) {
+          thoughtBuffer = result.thought;
+          logger.info(`[messageLoop] Successfully recovered thought from transcript: source=${result.source}, length=${thoughtBuffer.length}`);
+        } else {
+          logger.info(`[messageLoop] No thought recovered from transcript for conversation ${session.conversationId}`);
+        }
+      } else if (thoughtBuffer.length > 0) {
+        logger.info(`[messageLoop] Skipping transcript thought recovery since thoughtBuffer already contains real-time thought: length=${thoughtBuffer.length}`);
+      }
+
+      // 5. Final full rendering of response text (supports RichText and structure-aware multi-chunk partitioning)
+      if (thinkingMessageId) {
+        try {
+          await reply.delete(thinkingMessageId);
+        } catch (e) {
+          logger.warn(`[messageLoop] Failed to delete temporary thinking message: ${e}`);
+        }
+      }
+
+      const bodyHtmlChunks: string[] = [];
+
+      if (answerBuffer.trim()) {
+        const parts = answerBuffer.split(/\s*---(?:split|spilt)---\s*/gi).filter(p => p.trim());
+        for (const part of parts) {
+          const partHtml = markdownToHtml(part);
+          const chunks = formatter.chunkText('___RAW_HTML___' + partHtml);
+          bodyHtmlChunks.push(...chunks);
+        }
+      }
+
+      const thoughtAndStatsHtmlChunks: string[] = [];
       const footerMarker = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
         finalPrompt,
-        finalCleanText
+        answerBuffer
       );
-      finalCleanText = `${finalCleanText}\n\n${footerMarker}`;
+      const footerHtml = markdownToHtml(footerMarker);
 
-      const chunks = formatter.chunkText(finalCleanText);
-      if (currentMessageId) {
-        try {
-          const firstChunk = chunks[0];
-          if (firstChunk) {
-            await reply.edit(currentMessageId, firstChunk);
-          }
-        } catch {
-          // ignore editing errors
-        }
-        // Send subsequent chunks if output exceeds telegram message size limits
-        for (let i = 1; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          if (chunk) {
-            await reply.send(chunk);
-          }
-        }
+      if (thoughtBuffer.trim()) {
+        const rawThoughtText = `<thought>\n${thoughtBuffer.trim()}\n</thought>`;
+        const thoughtHtml = markdownToHtml(rawThoughtText);
+        const combinedHtml = thoughtHtml + '\n\n' + footerHtml;
+        const chunks = formatter.chunkText('___RAW_HTML___' + combinedHtml);
+        thoughtAndStatsHtmlChunks.push(...chunks);
       } else {
-        for (const chunk of chunks) {
-          await reply.send(chunk);
-        }
+        const chunks = formatter.chunkText('___RAW_HTML___' + footerHtml);
+        thoughtAndStatsHtmlChunks.push(...chunks);
       }
-    } else if (finalResult.exitCode !== 0) {
-      await reply.send(`${ICONS.error} 执行失败（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录。`);
-    }
+
+      const finalHtmlMessages = [
+        ...bodyHtmlChunks,
+        ...thoughtAndStatsHtmlChunks
+      ];
+
+      if (finalHtmlMessages.length > 0) {
+        if (currentMessageId) {
+          try {
+            await reply.edit(currentMessageId, finalHtmlMessages[0]);
+          } catch (e) {
+            logger.warn(`[messageLoop] Failed to edit first chunk: ${e}`);
+          }
+          for (let i = 1; i < finalHtmlMessages.length; i++) {
+            await reply.send(finalHtmlMessages[i]);
+          }
+        } else {
+          for (const msgText of finalHtmlMessages) {
+            await reply.send(msgText);
+          }
+        }
+      } else if (!thoughtBuffer.trim() && finalResult.exitCode !== 0) {
+        await reply.send(`${ICONS.error} 执行失败（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录。`);
+      }
 
     // 6. Handle Autopilot autonomous loops
     if (session.autopilot?.active) {
@@ -235,7 +491,7 @@ export async function processMessage(
       }
 
       // Check for stop keywords in AI response
-      const lowercaseOutput = finalCleanText.toLowerCase();
+      const lowercaseOutput = answerBuffer.toLowerCase();
       const triggeredStop = config.stopKeywords.find(kw => lowercaseOutput.includes(kw.toLowerCase()));
       if (triggeredStop) {
         session.autopilot.active = false;

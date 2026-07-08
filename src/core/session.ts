@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
 import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './types.js';
 import { ChatScheduler } from './scheduler.js';
-import { getConversationId, deleteConversation, getStoredModel, setConversation } from '../agy/conversationStore.js';
+import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd } from '../agy/conversationStore.js';
 import { clearWeb2ApiHistory } from '../agy/agyCli.js';
 
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
@@ -374,7 +374,16 @@ export class SessionManager {
     logger.info(`Creating session ${sessionId} for chat ${chatId}`);
 
     let project = options.project;
-    if (!project) {
+    const savedCwd = await getCwd(chatId);
+
+    if (!project && savedCwd) {
+      project = this.projectManager.getProjects().find(p => p.path === savedCwd);
+      if (project) {
+        logger.info(`[SessionManager] Restored project from saved cwd: ${project.name} (${project.path})`);
+      }
+    }
+
+    if (!project && !savedCwd) {
       let found = this.projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
       if (!found) {
         const hardcodedPath = '/home/user/Documents/通用知识专家_RichText';
@@ -396,7 +405,7 @@ export class SessionManager {
       }
     }
 
-    const cwd = project?.path || options.cwd || process.cwd();
+    const cwd = project?.path || savedCwd || options.cwd || process.cwd();
     
     // Check for write access to the workspace directory
     try {

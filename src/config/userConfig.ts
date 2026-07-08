@@ -19,6 +19,7 @@ export interface UserConfig {
   model?: string;
   proxy?: string;
   notebookPath?: string;
+  geminiApiKey?: string;
 }
 
 export function configExists(): boolean {

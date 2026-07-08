@@ -14,7 +14,9 @@ import {
   splitCodeBlock,
   splitTable,
   splitDetails,
-  tokenizeHtml
+  tokenizeHtml,
+  safeHtmlSlice,
+  normalizeSpacingAroundDetails
 } from './formatter.js';
 
 describe('Formatter Rich Message Showcase', () => {
@@ -295,6 +297,32 @@ Thanks for reading! 🚀
       // Use telegramFormatter.chunkText with RAW_HTML prefix
       const chunks = telegramFormatter.chunkText('___RAW_HTML___' + htmlText);
       expect(chunks[0]).toBe('___RAW_HTML___<details><summary>Test Details</summary>Content here</details>');
+    });
+
+    it('should prevent infinite loop and enforce minimum slice in splitTextWithOpenTags', () => {
+      const text = '<b>Hello World</b>';
+      const chunks = splitTextWithOpenTags(text, 5);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks[0]).toBe('<b>H</b>');
+    });
+
+    it('should support self-closing tags (br, hr, img) in safeHtmlSlice without producing closed tag artifacts', () => {
+      const htmlText = 'Hello<br>world<hr/>img:<img src="test.jpg"/>!';
+      const result = safeHtmlSlice(htmlText, 25);
+      expect(result.sliced).not.toContain('</br>');
+      expect(result.sliced).not.toContain('</hr>');
+      expect(result.sliced).not.toContain('</img>');
+    });
+
+    it('should clean up all variations of break tags at boundaries in normalizeSpacingAroundDetails', () => {
+      const htmlText = '<br/><b>Test</b><br><details><summary>Test</summary>Content</details><br /><br/>';
+      const result = normalizeSpacingAroundDetails(htmlText);
+      expect(result.startsWith('<br>')).toBe(false);
+      expect(result.startsWith('<br/>')).toBe(false);
+      expect(result.startsWith('<br />')).toBe(false);
+      expect(result.endsWith('<br>')).toBe(false);
+      expect(result.endsWith('<br/>')).toBe(false);
+      expect(result.endsWith('<br />')).toBe(false);
     });
   });
 });
