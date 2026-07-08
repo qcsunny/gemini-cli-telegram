@@ -1208,27 +1208,29 @@ export function normalizeSpacingAroundDetails(html: string): string {
 }
 
 export function markdownToHtml(input: string | StructuredMessage, isStreaming = false): string {
-  let html = '';
-  if (typeof input === 'object') {
+  if (input && typeof input === 'object') {
     const contentHtml = markdownToHtmlSnippet(input.content);
+    let html = contentHtml;
     if (input.thought && input.thought.trim()) {
       const thoughtHtml = renderThoughtBlockToHtml(
         input.thought.trim(),
-        true, // isClosed
+        !isStreaming,
         isStreaming,
         input.geminiTime,
-        input.geminiTokens,
-        contentHtml.length
+        input.geminiTokens
       );
       if (contentHtml.trim()) {
         html = `${contentHtml.trim()}<br><br>${thoughtHtml}`;
       } else {
         html = thoughtHtml;
       }
-    } else {
-      html = contentHtml;
     }
+    html = normalizeSpacingAroundDetails(html);
+    html = convertMath(html);
+    html = convertNewlines(html);
+    return html;
   } else {
+    let html = '';
     const parseResult = extractThoughtBlocksAndSegments(input);
     
     let nonThoughtHtmlLength = 0;
@@ -1256,11 +1258,10 @@ export function markdownToHtml(input: string | StructuredMessage, isStreaming = 
     }
 
     html = normalizeSpacingAroundDetails(html);
+    html = convertMath(html);
+    html = convertNewlines(html);
+    return html;
   }
-
-  html = convertMath(html);
-  html = convertNewlines(html);
-  return html;
 }
 
 // ── IR → Telegram MarkdownV2 ──

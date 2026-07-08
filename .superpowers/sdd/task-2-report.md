@@ -106,3 +106,24 @@ We successfully updated the channel reply wrapper in `/home/user/.gemini-cli-tel
 4. **Validation:**
    - Verified that everything compiles cleanly via `npm run build`.
    - Ran `npm run test` to confirm that all 97 tests pass successfully.
+
+## End-to-End Integration and Single Source of Truth Alignment (Task 2 & 3 Integration)
+
+We completed the final end-to-end integration and single source of truth parser alignment for Tasks 2 and 3:
+
+1. **Fixed Null Check in `formatter.ts`:**
+   - Modified `markdownToHtml` in [formatter.ts](file:///home/user/.gemini-cli-telegram/src/channels/telegram/formatter.ts) to correctly check `input && typeof input === 'object'`.
+   - Updated the structured block parameters passed to `renderThoughtBlockToHtml` to align with its signature: `renderThoughtBlockToHtml(input.thought.trim(), !isStreaming, isStreaming, input.geminiTime, input.geminiTokens)`.
+   - Resolved scoping of `html` variables between the object and string parsing blocks.
+
+2. **Integrate Single Source of Truth Parser in `messageLoop.ts`:**
+   - Updated [messageLoop.ts](file:///home/user/.gemini-cli-telegram/src/core/messageLoop.ts) to import `extractThoughtAndContent` and `StructuredMessage`.
+   - Refactored `normalizeText` to use the unified parser `extractThoughtAndContent` instead of duplicating custom regular expressions.
+   - Refactored `readThoughtFromTranscript` to extract thoughts via `extractThoughtAndContent` to eliminate custom regexp logic.
+   - Refactored `updateMessageStream` for the `isRichSingleMessage` flow to build, truncate, and send `StructuredMessage` objects through `reply.sendRichDraft` and `reply.editRichDraft` instead of raw `<thought>` tags.
+   - Integrated logic in `processMessage` to strip recovered thought blocks from `answerBuffer` using the parser before final rendering to prevent double rendering.
+   - Refactored the final rendering code in `processMessage` to pass structured objects to `markdownToHtml` for `bodyHtmlChunks` and `thoughtAndStatsHtmlChunks` instead of reconstructing strings with raw `<thought>` tags.
+
+3. **Validation and Build:**
+   - Ran `npm run build` to confirm compilation is 100% successful.
+   - Ran `npm run test` to confirm that all 97 vitest tests pass successfully.
