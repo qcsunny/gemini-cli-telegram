@@ -5,8 +5,9 @@
  */
 
 import MarkdownIt from 'markdown-it';
-import type { MessageFormatter } from '../../core/types.js';
+import type { MessageFormatter, StructuredMessage } from '../../core/types.js';
 import type { RichBlock, RichText } from './richMessage.js';
+import { extractThoughtBlocksAndSegments } from '../../agy/agyCli.js';
 
 const TELEGRAM_MAX_LENGTH = 4096;
 
@@ -67,8 +68,322 @@ function getAlignAttr(token: MarkdownToken): string | null {
 
 // ── Telegram formatter (message chunking) ──
 
+type HtmlToken = {
+  type: 'details' | 'pre' | 'table' | 'math_block' | 'blockquote' | 'text' | 'break';
+  value: string;
+};
+
+export function tokenizeHtml(htmlText: string): HtmlToken[] {
+  const blockRegex = /(<details[\s>][\s\S]*?<\/details>|<pre[\s>][\s\S]*?<\/pre>|<table[\s>][\s\S]*?<\/table>|<tg-math-block>[\s\S]*?<\/tg-math-block>|<blockquote>[\s\S]*?<\/blockquote>)/gi;
+  const parts = htmlText.split(blockRegex);
+  const tokens: HtmlToken[] = [];
+  
+  for (const part of parts) {
+    if (!part) continue;
+    
+    if (part.toLowerCase().startsWith('<details')) {
+      tokens.push({ type: 'details', value: part });
+    } else if (part.toLowerCase().startsWith('<pre')) {
+      tokens.push({ type: 'pre', value: part });
+    } else if (part.toLowerCase().startsWith('<table')) {
+      tokens.push({ type: 'table', value: part });
+    } else if (part.toLowerCase().startsWith('<tg-math-block')) {
+      tokens.push({ type: 'math_block', value: part });
+    } else if (part.toLowerCase().startsWith('<blockquote')) {
+      tokens.push({ type: 'blockquote', value: part });
+    } else {
+      const subParts = part.split(/(<br\s*\/?>\s*<br\s*\/?>|<br\s*\/?>)/gi);
+      for (const subPart of subParts) {
+        if (!subPart) continue;
+        if (subPart.toLowerCase().startsWith('<br')) {
+          tokens.push({ type: 'break', value: subPart });
+        } else {
+          tokens.push({ type: 'text', value: subPart });
+        }
+      }
+    }
+  }
+  
+  return tokens;
+}
+
+export function splitDetails(detailsHtml: string, maxLength: number): string[] {
+  const match = detailsHtml.match(/<details([^>]*)>([\s\S]*?)<\/details>/i);
+  if (!match) return [detailsHtml];
+  
+  const attrs = match[1];
+  const innerContent = match[2];
+  
+  const summaryMatch = innerContent.match(/<summary>([\s\S]*?)<\/summary>/i);
+  const summaryText = summaryMatch ? summaryMatch[1] : '点击展开';
+  
+  const bodyStartIdx = summaryMatch ? innerContent.indexOf(summaryMatch[0]) + summaryMatch[0].length : 0;
+  const bodyContent = innerContent.substring(bodyStartIdx);
+  
+  const detailsStartBase = `<details${attrs}><summary>${summaryText}</summary>`;
+  const detailsEnd = '</details>';
+  const baseLen = detailsStartBase.length + detailsEnd.length;
+  
+  const subMaxLength = maxLength - baseLen - 5;
+  if (subMaxLength <= 10) {
+    return splitTextWithOpenTags(detailsHtml, maxLength);
+  }
+  
+  const bodyChunks = chunkAnswerBody(bodyContent, subMaxLength);
+  return bodyChunks.map((chunk, idx) => {
+    const suffix = idx > 0 ? ' (续)' : '';
+    const newSummary = `<summary>${summaryText}${suffix}</summary>`;
+    return `<details${attrs}>${newSummary}${chunk}${detailsEnd}`;
+  });
+}
+
+export function splitCodeBlock(codeBlockHtml: string, maxLength: number): string[] {
+  const match = codeBlockHtml.match(/<pre><code([^>]*)>([\s\S]*?)<\/code><\/pre>/i);
+  if (!match) return [codeBlockHtml];
+  
+  const attrs = match[1];
+  const content = match[2];
+  
+  const preStart = `<pre><code${attrs}>`;
+  const preEnd = '</code></pre>';
+  
+  const lines = content.split('\n');
+  const chunks: string[] = [];
+  let currentLines: string[] = [];
+  
+  for (const line of lines) {
+    const currentChunkHtml = preStart + [...currentLines, line].join('\n') + preEnd;
+    if (currentChunkHtml.length > maxLength && currentLines.length > 0) {
+      chunks.push(preStart + currentLines.join('\n') + preEnd);
+      currentLines = [line];
+    } else {
+      currentLines.push(line);
+    }
+  }
+  
+  if (currentLines.length > 0) {
+    chunks.push(preStart + currentLines.join('\n') + preEnd);
+  }
+  
+  return chunks;
+}
+
+export function splitTable(tableHtml: string, maxLength: number): string[] {
+  const theadMatch = tableHtml.match(/<thead>([\s\S]*?)<\/thead>/i);
+  const tbodyMatch = tableHtml.match(/<tbody>([\s\S]*?)<\/tbody>/i);
+  
+  const thead = theadMatch ? theadMatch[0] : '';
+  const tbodyContent = tbodyMatch ? tbodyMatch[1] : '';
+  
+  const rows: string[] = [];
+  const trRegex = /<tr>[\s\S]*?<\/tr>/gi;
+  let match;
+  while ((match = trRegex.exec(tbodyContent)) !== null) {
+    rows.push(match[0]);
+  }
+  
+  if (rows.length === 0) {
+    return [tableHtml];
+  }
+  
+  const chunks: string[] = [];
+  let currentRows: string[] = [];
+  
+  const tableStart = '<table bordered striped>';
+  const tableEnd = '</table>';
+  
+  for (const row of rows) {
+    const currentChunkHtml = tableStart + thead + '<tbody>' + [...currentRows, row].join('') + '</tbody>' + tableEnd;
+    if (currentChunkHtml.length > maxLength && currentRows.length > 0) {
+      chunks.push(tableStart + thead + '<tbody>' + currentRows.join('') + '</tbody>' + tableEnd);
+      currentRows = [row];
+    } else {
+      currentRows.push(row);
+    }
+  }
+  
+  if (currentRows.length > 0) {
+    chunks.push(tableStart + thead + '<tbody>' + currentRows.join('') + '</tbody>' + tableEnd);
+  }
+  
+  return chunks;
+}
+
+export function splitMathBlock(mathBlockHtml: string, maxLength: number): string[] {
+  const match = mathBlockHtml.match(/<tg-math-block>([\s\S]*?)<\/tg-math-block>/i);
+  if (!match) return [mathBlockHtml];
+  const content = match[1];
+  
+  const chunks: string[] = [];
+  const startTag = '<tg-math-block>';
+  const endTag = '</tg-math-block>';
+  
+  const parts = content.split(/(\\\\|\n)/);
+  let currentParts: string[] = [];
+  
+  for (const part of parts) {
+    const currentChunkHtml = startTag + [...currentParts, part].join('') + endTag;
+    if (currentChunkHtml.length > maxLength && currentParts.length > 0) {
+      chunks.push(startTag + currentParts.join('') + endTag);
+      currentParts = [part];
+    } else {
+      currentParts.push(part);
+    }
+  }
+  if (currentParts.length > 0) {
+    chunks.push(startTag + currentParts.join('') + endTag);
+  }
+  return chunks;
+}
+
+export function splitTextWithOpenTags(htmlText: string, maxLength: number): string[] {
+  const tagRegex = /<[^>]+>/g;
+  let match;
+  const elements: { type: 'tag' | 'text'; value: string }[] = [];
+  let lastIdx = 0;
+  
+  while ((match = tagRegex.exec(htmlText)) !== null) {
+    if (match.index > lastIdx) {
+      elements.push({ type: 'text', value: htmlText.substring(lastIdx, match.index) });
+    }
+    elements.push({ type: 'tag', value: match[0] });
+    lastIdx = tagRegex.lastIndex;
+  }
+  if (lastIdx < htmlText.length) {
+    elements.push({ type: 'text', value: htmlText.substring(lastIdx) });
+  }
+  
+  const chunks: string[] = [];
+  let currentChunk = '';
+  const openTags: { tagName: string; fullTag: string }[] = [];
+  
+  for (const el of elements) {
+    if (el.type === 'tag') {
+      const tag = el.value;
+      const isClosing = tag.startsWith('</');
+      const isSelfClosing = tag.endsWith('/>') || tag.toLowerCase().startsWith('<br');
+      
+      if (isClosing) {
+        openTags.pop();
+      } else if (!isSelfClosing) {
+        const tagNameMatch = tag.match(/<([a-zA-Z0-9-]+)/);
+        if (tagNameMatch) {
+          openTags.push({ tagName: tagNameMatch[1], fullTag: tag });
+        }
+      }
+      
+      const closeTagsHtml = openTags.map(t => `</${t.tagName}>`).reverse().join('');
+      const openTagsHtml = openTags.map(t => t.fullTag).join('');
+      
+      if (currentChunk.length + tag.length + closeTagsHtml.length > maxLength && currentChunk.length > 0) {
+        chunks.push(currentChunk + closeTagsHtml);
+        currentChunk = openTagsHtml + tag;
+      } else {
+        currentChunk += tag;
+      }
+    } else {
+      const textVal = el.value;
+      let textIdx = 0;
+      
+      while (textIdx < textVal.length) {
+        const closeTagsHtml = openTags.map(t => `</${t.tagName}>`).reverse().join('');
+        const openTagsHtml = openTags.map(t => t.fullTag).join('');
+        
+        const budget = maxLength - currentChunk.length - closeTagsHtml.length;
+        if (budget <= 5 && currentChunk.length > 0) {
+          chunks.push(currentChunk + closeTagsHtml);
+          currentChunk = openTagsHtml;
+          continue;
+        }
+        
+        const take = Math.min(budget, textVal.length - textIdx);
+        let slice = textVal.substring(textIdx, textIdx + take);
+        
+        if (textIdx + take < textVal.length) {
+          const lastSpace = slice.lastIndexOf(' ');
+          if (lastSpace > 0) {
+            slice = slice.substring(0, lastSpace);
+          }
+        }
+        
+        currentChunk += slice;
+        textIdx += slice.length;
+        
+        if (textIdx < textVal.length) {
+          chunks.push(currentChunk + closeTagsHtml);
+          currentChunk = openTagsHtml;
+        }
+      }
+    }
+  }
+  
+  if (currentChunk.trim().length > 0) {
+    const closeTagsHtml = openTags.map(t => `</${t.tagName}>`).reverse().join('');
+    chunks.push(currentChunk + closeTagsHtml);
+  }
+  
+  return chunks.map(c => c.trim()).filter(Boolean);
+}
+
+export function chunkAnswerBody(htmlText: string, maxLength: number): string[] {
+  if (htmlText.length <= maxLength) {
+    return [htmlText];
+  }
+  
+  const tokens = tokenizeHtml(htmlText);
+  const chunks: string[] = [];
+  let currentChunk = '';
+  
+  for (const token of tokens) {
+    const val = token.value;
+    
+    if (val.length > maxLength) {
+      if (currentChunk.trim().length > 0) {
+        chunks.push(currentChunk);
+        currentChunk = '';
+      }
+      
+      let subChunks: string[] = [];
+      if (token.type === 'details') {
+        subChunks = splitDetails(val, maxLength);
+      } else if (token.type === 'pre') {
+        subChunks = splitCodeBlock(val, maxLength);
+      } else if (token.type === 'table') {
+        subChunks = splitTable(val, maxLength);
+      } else if (token.type === 'math_block') {
+        subChunks = splitMathBlock(val, maxLength);
+      } else {
+        subChunks = splitTextWithOpenTags(val, maxLength);
+      }
+      
+      for (const subChunk of subChunks) {
+        chunks.push(subChunk);
+      }
+    } else {
+      if (currentChunk.length + val.length > maxLength) {
+        if (currentChunk.trim().length > 0) {
+          chunks.push(currentChunk);
+        }
+        currentChunk = val;
+      } else {
+        currentChunk += val;
+      }
+    }
+  }
+  
+  if (currentChunk.trim().length > 0) {
+    chunks.push(currentChunk);
+  }
+  
+  return chunks.map(c => c.trim()).filter(Boolean);
+}
+
 export const telegramFormatter: MessageFormatter = {
   chunkText(text: string): string[] {
+    if (text.startsWith('___RAW_HTML___')) {
+      const htmlText = text.substring('___RAW_HTML___'.length);
+      return chunkAnswerBody(htmlText, TELEGRAM_MAX_LENGTH).map(c => '___RAW_HTML___' + c);
+    }
     if (text.length <= TELEGRAM_MAX_LENGTH) {
       return [text];
     }
@@ -686,7 +1001,116 @@ function renderIRToHtml(ir: MarkdownIR): string {
   return out;
 }
 
-export function markdownToHtml(markdown: string): string {
+function formatTokenCount(count: string | number): string {
+  const num = Number(count);
+  if (isNaN(num)) return String(count);
+  if (num >= 1000) {
+    return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+  }
+  return String(num);
+}
+
+function formatSummaryWithMetadata(time?: string, tokens?: string, isStreaming?: boolean): string {
+  const parts: string[] = ['🧠 Gemini Thinking'];
+  if (time) {
+    const formattedTime = /^\d+(\.\d+)?$/.test(time) ? `${time}s` : time;
+    parts.push(formattedTime);
+  }
+  if (tokens) {
+    const formattedTokens = formatTokenCount(tokens);
+    parts.push(formattedTokens);
+  }
+  if (!time && !tokens) {
+    if (isStreaming) {
+      parts.push('正在思考...');
+    } else {
+      parts.push('(点击展开)');
+    }
+  }
+  return parts.join(' · ');
+}
+
+function safeHtmlSlice(html: string, maxLength: number): { sliced: string; wasTruncated: boolean } {
+  if (html.length <= maxLength) {
+    return { sliced: html, wasTruncated: false };
+  }
+
+  let result = '';
+  let count = 0;
+  const tagStack: string[] = [];
+  let i = 0;
+
+  while (i < html.length && count < maxLength) {
+    const char = html[i];
+    if (char === '<') {
+      const endIdx = html.indexOf('>', i);
+      if (endIdx !== -1) {
+        const tag = html.slice(i, endIdx + 1);
+        result += tag;
+        
+        const isCloseTag = tag.startsWith('</');
+        const isSelfClosing = tag.endsWith('/>');
+        if (!isSelfClosing) {
+          const match = tag.match(/^<\/?([a-zA-Z0-9-]+)/);
+          if (match) {
+            const tagName = match[1].toLowerCase();
+            if (isCloseTag) {
+              if (tagStack[tagStack.length - 1] === tagName) {
+                tagStack.pop();
+              }
+            } else {
+              tagStack.push(tagName);
+            }
+          }
+        }
+        i = endIdx + 1;
+        continue;
+      }
+    } else if (char === '&') {
+      const endIdx = html.indexOf(';', i);
+      if (endIdx !== -1 && endIdx - i < 10) {
+        const entity = html.slice(i, endIdx + 1);
+        result += entity;
+        count++;
+        i = endIdx + 1;
+        continue;
+      }
+    }
+    
+    result += char;
+    count++;
+    i++;
+  }
+
+  while (tagStack.length > 0) {
+    const tag = tagStack.pop();
+    result += `</${tag}>`;
+  }
+
+  return {
+    sliced: result,
+    wasTruncated: i < html.length,
+  };
+}
+
+function trimHtmlBr(html: string): string {
+  let result = html.trim();
+  while (result.startsWith('<br>') || result.startsWith('<br/>') || result.startsWith('<br />')) {
+    if (result.startsWith('<br>')) result = result.slice(4);
+    else if (result.startsWith('<br/>')) result = result.slice(5);
+    else if (result.startsWith('<br />')) result = result.slice(6);
+    result = result.trim();
+  }
+  while (result.endsWith('<br>') || result.endsWith('<br/>') || result.endsWith('<br />')) {
+    if (result.endsWith('<br>')) result = result.slice(0, -4);
+    else if (result.endsWith('<br/>')) result = result.slice(0, -5);
+    else if (result.endsWith('<br />')) result = result.slice(0, -6);
+    result = result.trim();
+  }
+  return result;
+}
+
+function markdownToHtmlSnippet(markdown: string): string {
   const ir = markdownToIR(markdown, true);
   let html = renderIRToHtml(ir);
 
@@ -696,8 +1120,7 @@ export function markdownToHtml(markdown: string): string {
     }
   }
 
-  // Convert blockquotes with [details] marker into collapsible details block, stripping the marker
-  html = html.replace(/<blockquote>([\s\S]*?)\[details\]\s*([^\n<]*?)(?:<br\s*\/?>|\n)?([\s\S]*?)<\/blockquote>/gi, (match, p1, p2, p3) => {
+  html = html.replace(/<blockquote>([\s\S]*?)\[details\]\s*([^\n<]*)(?:<br\s*\/?>|\n)?([\s\S]*?)<\/blockquote>/gi, (match, p1, p2, p3) => {
     const summary = p2.trim() || '点击展开';
     return `<details><summary>${summary}</summary>${p3}</details>`;
   });
@@ -707,13 +1130,124 @@ export function markdownToHtml(markdown: string): string {
     const i = inputTokens.trim();
     const o = outputTokens.trim();
     const c = cost.trim();
-    const totalTokens = Number(i) + Number(o);
-    return `\n\n<i>🤖 运行模型: <code>${m}</code> | 📊 消耗 Token: <code>输入 ${i} + 输出 ${o} = ${totalTokens}</code> | 💰 消费金额: <code>${c}</code></i>`;
+    return `<a href="tg://btn_info_footer|${m}|${i}|${o}|${c}">⚙️ ${m} · In: ${i} · Out: ${o} · Cost: ${c}</a>`;
   });
+
+  return html;
+}
+
+function renderThoughtBlockToHtml(
+  content: string,
+  isClosed: boolean,
+  isStreaming: boolean,
+  time?: string,
+  tokens?: string,
+  nonThoughtHtmlLength = 0
+): string {
+  const isOpen = isStreaming || !isClosed;
+  const detailsTag = isOpen ? '<details open>' : '<details>';
+  
+  let finalContent = trimHtmlBr(markdownToHtmlSnippet(content));
+  const maxThoughtLength = Math.max(200, 3900 - nonThoughtHtmlLength);
+  const { sliced, wasTruncated } = safeHtmlSlice(finalContent, maxThoughtLength);
+  finalContent = sliced;
+  if (wasTruncated) {
+    finalContent += '\n\n……（已省略后续内容，超长思考摘要已被截断）';
+  }
+
+  const innerHtml = finalContent;
+
+  let summary = '🧠 思考过程 (Thinking Process)';
+  let infoBlock = '';
+
+  if (time !== undefined || tokens !== undefined) {
+    summary = formatSummaryWithMetadata(time, tokens, isOpen && !isClosed);
+    const infoLines: string[] = [];
+    if (time && Number(time) > 0) {
+      infoLines.push(`Thinking Time: ${time} s`);
+    }
+    if (tokens && Number(tokens) > 0) {
+      infoLines.push(`Thinking Tokens: ${tokens}`);
+    }
+    if (infoLines.length > 0) {
+      infoBlock = `<i>${infoLines.join('\n')}</i>\n\n`;
+    }
+  } else {
+    summary = isClosed ? '🧠 思考过程 (Thinking Process)' : '🧠 正在思考... (Thinking...)';
+  }
+
+  return `${detailsTag}<summary>${summary}</summary>${infoBlock}<i>${innerHtml}</i></details>`;
+}
+
+function normalizeSpacingAroundDetails(html: string): string {
+  let processed = html.replace(/(?:(?:\s|<br\s*\/?>|<p>|<\/p>)*)(<details(?:\s+open)?>)/gi, (match, details) => {
+    return `<br><br>${details}`;
+  });
+  processed = processed.replace(/(<\/details>)(?:(?:\s|<br\s*\/?>|<p>|<\/p>)*)/gi, (match, details) => {
+    return `${details}<br><br>`;
+  });
+  while (processed.startsWith('<br>')) {
+    processed = processed.substring(4);
+  }
+  while (processed.endsWith('<br>')) {
+    processed = processed.substring(0, processed.length - 4);
+  }
+  return processed.trim();
+}
+
+export function markdownToHtml(input: string | StructuredMessage, isStreaming = false): string {
+  let html = '';
+  if (typeof input === 'object') {
+    const contentHtml = markdownToHtmlSnippet(input.content);
+    if (input.thought && input.thought.trim()) {
+      const thoughtHtml = renderThoughtBlockToHtml(
+        input.thought.trim(),
+        true, // isClosed
+        isStreaming,
+        input.geminiTime,
+        input.geminiTokens,
+        contentHtml.length
+      );
+      if (contentHtml.trim()) {
+        html = `${contentHtml.trim()}<br><br>${thoughtHtml}`;
+      } else {
+        html = thoughtHtml;
+      }
+    } else {
+      html = contentHtml;
+    }
+  } else {
+    const parseResult = extractThoughtBlocksAndSegments(input);
+    
+    let nonThoughtHtmlLength = 0;
+    for (const segment of parseResult.segments) {
+      if (segment.type === 'text') {
+        nonThoughtHtmlLength += markdownToHtmlSnippet(segment.value).length;
+      }
+    }
+
+    for (const segment of parseResult.segments) {
+      if (segment.type === 'text') {
+        html += markdownToHtmlSnippet(segment.value);
+      } else {
+        const block = segment.block!;
+        const blockHtml = renderThoughtBlockToHtml(
+          segment.value,
+          block.isClosed,
+          isStreaming,
+          block.time,
+          block.tokens,
+          nonThoughtHtmlLength
+        );
+        html += blockHtml;
+      }
+    }
+
+    html = normalizeSpacingAroundDetails(html);
+  }
 
   html = convertMath(html);
   html = convertNewlines(html);
-
   return html;
 }
 

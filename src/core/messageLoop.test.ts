@@ -347,6 +347,6 @@ describe('processMessage', () => {
 
     // Second message should contain both thinking process AND footer (since they are combined)
     expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('thinking process'));
-    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('🤖 运行模型'));
+    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('btn_info_footer'));
   });
 });

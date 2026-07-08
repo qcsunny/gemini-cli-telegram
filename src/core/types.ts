@@ -20,6 +20,13 @@ export interface MediaPart {
   fileName?: string; // Original file name (for documents)
 }
 
+export interface StructuredMessage {
+  content: string;
+  thought?: string;
+  geminiTime?: string;
+  geminiTokens?: string;
+}
+
 /**
  * Channel-agnostic reply interface.
  * Each channel (Telegram, Discord, etc.) implements this to bridge
@@ -33,9 +40,10 @@ export interface ChannelReply {
   sendDocument(path: string, caption?: string): Promise<void>;
   delete(messageId: number): Promise<void>;
   // Optional Rich Message API helper methods
-  sendRich?(text: string): Promise<number>;
-  sendRichDraft?(text: string): Promise<number>;
-  editRich?(messageId: number, text: string): Promise<void>;
+  sendRich?(text: string | StructuredMessage): Promise<number>;
+  sendRichDraft?(text: string | StructuredMessage): Promise<number>;
+  editRich?(messageId: number, text: string | StructuredMessage): Promise<void>;
+  editRichDraft?(draftId: number, text: string | StructuredMessage): Promise<void>;
 }
 
 /**
