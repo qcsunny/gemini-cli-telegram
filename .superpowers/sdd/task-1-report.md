@@ -86,3 +86,9 @@ Both tests pass successfully. Output:
      ✓ should not corrupt Chinese characters at the beginning of thoughts
      ✓ should not lock parser with unclosed inline backtick on a line
 ```
+
+### 4. Parser Performance & Nesting Optimization
+- **Optimization to O(N):** Implemented `startsWithIgnoreCase` helper function to perform character comparisons at a given index. This avoids slicing and lowercasing the remainder of the string during `matchTag` checks and close-tag scan loops.
+- **Redundant Check Removal:** Removed redundant `isValidStart` checks since `matchTag` already guarantees boundary matching, making the parser code cleaner and faster.
+- **Nested Inline Code Test Case:** Added a new test `should ignore thought tags in inline code` in `src/core/messageLoop.test.ts` to verify that thought tags nested inside inline code backticks are ignored and remain part of the content.
+- **Verification:** Ran `npm test -- --run` and confirmed all 92 tests pass successfully.
