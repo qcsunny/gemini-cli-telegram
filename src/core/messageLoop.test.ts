@@ -6,12 +6,23 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processMessage } from './messageLoop.js';
+import { extractThoughtAndContent } from '../agy/agyCli.js';
 import type { MultimodalInput } from './types.js';
 
 // Mock agyCli module
-vi.mock('../agy/agyCli.js', () => ({
-  runAgyPrint: vi.fn(),
-}));
+vi.mock('../agy/agyCli.js', async (importOriginal) => {
+  const actual = await importOriginal() as any;
+  return {
+    ...actual,
+    runAgyPrint: vi.fn(),
+    getModelCapabilities: vi.fn((model) => {
+      const isGemini = model && (model.toLowerCase().includes('gemini') || model === 'test-model-rich');
+      return {
+        supportsThinkingSummary: !!isGemini,
+      };
+    }),
+  };
+});
 
 // Mock conversationStore module
 vi.mock('../agy/conversationStore.js', () => ({
@@ -59,10 +70,11 @@ describe('processMessage', () => {
     const input: MultimodalInput = { text: 'hello' };
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
-      // Simulate onChunk callback being triggered
-      if (options.onChunk) {
-        options.onChunk('Hi ');
-        options.onChunk('there!');
+      // Simulate onEvent callback being triggered
+      if (options.onEvent) {
+        options.onEvent({ type: 'text', content: 'Hi ' });
+        options.onEvent({ type: 'text', content: 'there!' });
+        options.onEvent({ type: 'done' });
       }
       return {
         output: 'Hi there!',
@@ -83,7 +95,7 @@ describe('processMessage', () => {
     );
 
     // During streaming
-    expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi ');
+    expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi there!');
 
     // After completion (final rendering)
     expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('Hi there!'));
@@ -106,8 +118,9 @@ describe('processMessage', () => {
           exitCode: 1,
         };
       } else {
-        if (options.onChunk) {
-          options.onChunk('Hi fallback!');
+        if (options.onEvent) {
+          options.onEvent({ type: 'text', content: 'Hi fallback!' });
+          options.onEvent({ type: 'done' });
         }
         return {
           output: 'Hi fallback!',
@@ -179,5 +192,134 @@ describe('processMessage', () => {
         prompt: expectedPrompt,
       })
     );
+  });
+
+  describe('extractThoughtAndContent', () => {
+    it('should extract closed thought blocks', () => {
+      const input = '<thought>thinking hard</thought>Actual answer';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: 'thinking hard',
+        content: 'Actual answer',
+      });
+    });
+
+    it('should extract unclosed thought blocks at start', () => {
+      const input = '<thought>still thinking...';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: 'still thinking...',
+        content: '',
+      });
+    });
+
+    it('should handle text with no thought block', () => {
+      const input = 'Just normal text';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: '',
+        content: 'Just normal text',
+      });
+    });
+
+    it('should ignore thought tags in code blocks', () => {
+      const input = '<thought>real thought</thought>Here is code:\n```xml\n<thought>code example</thought>\n```';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: 'real thought',
+        content: 'Here is code:\n```xml\n<thought>code example</thought>\n```',
+      });
+    });
+
+    it('should ignore unclosed thought tags after content', () => {
+      const input = 'Pre-text <thought> unclosed';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: '',
+        content: 'Pre-text <thought> unclosed',
+      });
+    });
+
+    it('should ignore partial match words like thoughtful', () => {
+      const input = '<thoughtful>something';
+      const result = extractThoughtAndContent(input);
+      expect(result).toEqual({
+        thought: '',
+        content: '<thoughtful>something',
+      });
+    });
+  });
+
+  it('should send separate messages for thought and formal reply', async () => {
+    const input: MultimodalInput = { text: 'tell me a joke' };
+
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      if (options.onEvent) {
+        options.onEvent({ type: 'thought', content: 'Let me think' });
+        options.onEvent({ type: 'text', content: 'Haha!' });
+        options.onEvent({ type: 'done' });
+      }
+      return {
+        output: '<thought>Let me think</thought>Haha!',
+        conversationId: 'conv-1',
+        exitCode: 0,
+      };
+    });
+
+    await processMessage(mockSession, input, mockReply, mockFormatter);
+
+    // During stream or final render, separate message targets should be sent
+    expect(mockReply.sendPlain).toHaveBeenCalledWith(expect.stringContaining('Let me think'));
+    expect(mockReply.sendPlain).toHaveBeenCalledWith(expect.stringContaining('Haha!'));
+  });
+
+  it('should split messages when split delimiters like ---split--- or ---spilt--- are present', async () => {
+    const input: MultimodalInput = { text: 'split test' };
+
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      if (options.onEvent) {
+        options.onEvent({ type: 'text', content: 'Intro part\n---split---\nMain content part' });
+        options.onEvent({ type: 'done' });
+      }
+      return {
+        output: 'Intro part\n---split---\nMain content part',
+        conversationId: 'conv-split',
+        exitCode: 0,
+      };
+    });
+
+    await processMessage(mockSession, input, mockReply, mockFormatter);
+
+    // It should edit the streaming message with the first part
+    expect(mockReply.edit).toHaveBeenCalledWith(456, '___RAW_HTML___Intro part');
+
+    // And send subsequent parts as separate messages (with footer markers)
+    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('___RAW_HTML___Main content part'));
+  });
+
+  it('should combine thought and stats into a single message at the end', async () => {
+    const input: MultimodalInput = { text: 'test combination' };
+
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      if (options.onEvent) {
+        options.onEvent({ type: 'thought', content: 'thinking process' });
+        options.onEvent({ type: 'text', content: 'final reply text' });
+        options.onEvent({ type: 'done' });
+      }
+      return {
+        output: '<thought>thinking process</thought>final reply text',
+        conversationId: 'conv-combine',
+        exitCode: 0,
+      };
+    });
+
+    await processMessage(mockSession, input, mockReply, mockFormatter);
+
+    // First message should be the final reply text (bodyHtmlChunks[0])
+    expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('final reply text'));
+
+    // Second message should contain both thinking process AND footer (since they are combined)
+    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('thinking process'));
+    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('🤖 运行模型'));
   });
 });

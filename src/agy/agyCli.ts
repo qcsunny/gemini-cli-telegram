@@ -19,6 +19,8 @@ import * as os from 'node:os';
 import * as http from 'node:http';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
+import { loadUserConfig } from '../config/userConfig.js';
+
 
 // ─── Web2API (local Gemini via gemini-web2api) ────────────────────────────────
 const WEB2API_BASE_URL = 'http://127.0.0.1:8081/v1';
@@ -36,7 +38,8 @@ const WEB2API_MODEL_MAP: Record<string, string> = {
 
 /** Returns true if the model name should be routed to web2api */
 export function isWeb2ApiModel(model: string): boolean {
-  return model in WEB2API_MODEL_MAP;
+  // SYSTEM-LEVEL TEMPORARY DISABLE of Web2API: Force routing to local agy CLI
+  return false;
 }
 
 // ── Web2API in-memory conversation history ───────────────────────────────────
@@ -97,6 +100,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   return new Promise((resolve, reject) => {
     let outputBuf = '';
+    let inReasoning = false;
     const req = http.request(reqOptions, (res) => {
       const decoder = new StringDecoder('utf-8');
       let buf = '';
@@ -112,9 +116,30 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
           try {
             const parsed = JSON.parse(data);
             const delta = parsed?.choices?.[0]?.delta?.content ?? '';
+            const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? '';
+
+            if (reasoning) {
+              if (!inReasoning) {
+                inReasoning = true;
+                const startTag = '<thought>';
+                outputBuf += startTag;
+                if (onChunk) onChunk(startTag);
+              }
+              outputBuf += reasoning;
+              if (onChunk) onChunk(reasoning);
+              opts.onEvent?.({ type: 'thought', content: reasoning });
+            }
+
             if (delta) {
+              if (inReasoning) {
+                inReasoning = false;
+                const endTag = '</thought>\n\n';
+                outputBuf += endTag;
+                if (onChunk) onChunk(endTag);
+              }
               outputBuf += delta;
               if (onChunk) onChunk(delta);
+              opts.onEvent?.({ type: 'text', content: delta });
             }
           } catch {
             // ignore malformed SSE lines
@@ -123,6 +148,13 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
       });
 
       res.on('end', () => {
+        if (inReasoning) {
+          inReasoning = false;
+          const endTag = '</thought>';
+          outputBuf += endTag;
+          if (onChunk) onChunk(endTag);
+        }
+        opts.onEvent?.({ type: 'done' });
         // Persist the assistant reply in history for next turn
         if (outputBuf) {
           history.push({ role: 'assistant', content: outputBuf });
@@ -150,6 +182,231 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
   });
 }
 
+// ── Model Capabilities & Direct Gemini API ─────────────────────────────────────
+
+export interface ModelCapabilities {
+  supportsThinkingSummary: boolean;
+}
+
+const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
+  'Gemini 3.5 Flash (Medium)': { supportsThinkingSummary: true },
+  'Gemini 3.5 Flash (High)': { supportsThinkingSummary: true },
+  'Gemini 3.5 Flash (Low)': { supportsThinkingSummary: true },
+  'Gemini 3.1 Pro (Low)': { supportsThinkingSummary: true },
+  'Gemini 3.1 Pro (High)': { supportsThinkingSummary: true },
+  'Web2API: Gemini 3.5 Flash Thinking': { supportsThinkingSummary: true },
+  'Web2API: Gemini 3.5 Flash Thinking Lite': { supportsThinkingSummary: true },
+  'Web2API: Gemini 3.1 Pro': { supportsThinkingSummary: true },
+  'Web2API: Gemini 3.5 Flash': { supportsThinkingSummary: true },
+};
+
+export function getModelCapabilities(modelName?: string): ModelCapabilities {
+  if (!modelName) {
+    return { supportsThinkingSummary: false };
+  }
+  if (MODEL_CAPABILITIES[modelName]) {
+    return MODEL_CAPABILITIES[modelName];
+  }
+  // Heuristic: Any model containing 'gemini' in its name is treated as supporting thinking summary.
+  // This allows extensibility so future models require no Telegram layer modifications.
+  const lower = modelName.toLowerCase();
+  if (lower.includes('gemini')) {
+    return { supportsThinkingSummary: true };
+  }
+  return { supportsThinkingSummary: false };
+}
+
+export function mapModelToGeminiId(model: string): string {
+  const lower = model.toLowerCase();
+  if (lower.includes('gemini 3.5 flash') || lower.includes('gemini-2.5-flash') || lower.includes('gemini-2.0-flash')) {
+    if (lower.includes('thinking')) {
+      return 'gemini-2.0-flash-thinking-exp-01-21';
+    }
+    return 'gemini-2.0-flash';
+  }
+  if (lower.includes('gemini 3.1 pro') || lower.includes('gemini-2.5-pro') || lower.includes('gemini-2.0-pro')) {
+    return 'gemini-2.0-pro-exp-02-05';
+  }
+  if (model.startsWith('gemini-')) {
+    return model;
+  }
+  return 'gemini-2.0-flash';
+}
+
+export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Promise<AgyRunResult> {
+  const { prompt, conversationId: existingConvId, model = '', onChunk, signal, proxy } = opts;
+  const modelId = mapModelToGeminiId(model);
+  const convId = existingConvId || `gemini-direct-${globalThis.crypto.randomUUID()}`;
+
+  // Build history in memory
+  const history: any[] = web2apiHistories.get(convId) ?? [];
+  history.push({ role: 'user', parts: [{ text: prompt }] });
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+  const body = JSON.stringify({
+    contents: history,
+    generationConfig: {
+      thinkingConfig: {
+        includeThoughts: true
+      }
+    }
+  });
+
+  const fetchOptions: RequestInit = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body,
+    signal,
+  };
+
+  if (proxy) {
+    const { ProxyAgent } = await import('undici');
+    const dispatcher = new ProxyAgent(proxy);
+    (fetchOptions as any).dispatcher = dispatcher;
+  }
+
+  let outputBuf = '';
+  let thoughtBuf = '';
+  let contentBuf = '';
+  let inThoughts = false;
+  let thinkingTokens = 0;
+  let thoughtStartTime = 0;
+  let thoughtEndTime = 0;
+
+  try {
+    const response = await fetch(url, fetchOptions);
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Gemini API returned ${response.status}: ${errText || response.statusText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Gemini API response body is not readable');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data: ')) continue;
+        const dataStr = trimmed.slice(6).trim();
+        if (!dataStr) continue;
+
+          try {
+            const parsed = JSON.parse(dataStr);
+
+            // Extract usage metadata if returned
+            const usage = parsed?.usageMetadata;
+            if (usage && usage.thinkingTokenCount) {
+              thinkingTokens = usage.thinkingTokenCount;
+            }
+
+            const parts = parsed?.candidates?.[0]?.content?.parts;
+            if (parts && Array.isArray(parts)) {
+              for (const part of parts) {
+                const isThought = part.thought === true;
+                const text = part.text || '';
+                if (!text) continue;
+
+                if (isThought) {
+                  if (!thoughtStartTime) {
+                    thoughtStartTime = Date.now();
+                  }
+                  if (!inThoughts) {
+                    inThoughts = true;
+                    const timeAttr = ' time="0.0"'; // updated when thoughts finish or generation finishes
+                    const tokensAttr = thinkingTokens ? ` tokens="${thinkingTokens}"` : '';
+                    onChunk?.(`<thought-gemini${timeAttr}${tokensAttr}>`);
+                  }
+                  thoughtBuf += text;
+                  outputBuf += text;
+                  onChunk?.(text);
+                  opts.onEvent?.({ type: 'thought', content: text });
+                } else {
+                  if (thoughtStartTime && !thoughtEndTime) {
+                    thoughtEndTime = Date.now();
+                  }
+                  if (inThoughts) {
+                    inThoughts = false;
+                    onChunk?.('</thought-gemini>\n\n');
+                  }
+                  contentBuf += text;
+                  outputBuf += text;
+                  onChunk?.(text);
+                  opts.onEvent?.({ type: 'text', content: text });
+                }
+              }
+            }
+          } catch {
+            // ignore incomplete SSE chunk lines
+          }
+      }
+    }
+
+    if (inThoughts) {
+      inThoughts = false;
+      onChunk?.('</thought-gemini>');
+    }
+    opts.onEvent?.({ type: 'done' });
+
+    if (thoughtStartTime) {
+      if (!thoughtEndTime) {
+        thoughtEndTime = Date.now();
+      }
+      const durationSec = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
+      const timeAttr = `time="${durationSec}"`;
+      const tokensAttr = thinkingTokens ? ` tokens="${thinkingTokens}"` : '';
+      
+      outputBuf = `<thought-gemini ${timeAttr}${tokensAttr}>${thoughtBuf}</thought-gemini>\n\n${contentBuf}`;
+    } else {
+      outputBuf = contentBuf;
+    }
+
+    // Save history in memory
+    history.push({ role: 'model', parts: [{ text: outputBuf }] });
+    const MAX_MESSAGES = 40;
+    const trimmed = history.length > MAX_MESSAGES ? history.slice(history.length - MAX_MESSAGES) : history;
+    web2apiHistories.set(convId, trimmed);
+
+    const finalResult: AgyRunResult = {
+      conversationId: convId,
+      output: outputBuf,
+      exitCode: 0,
+      stderr: '',
+    };
+
+    if (thoughtStartTime) {
+      (finalResult as any).thinkingTime = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
+      (finalResult as any).thinkingTokens = thinkingTokens;
+    }
+
+    return finalResult;
+
+  } catch (err: any) {
+    logger.error(`[runGeminiDirect] Error: ${err.message || err}`);
+    return {
+      conversationId: convId,
+      output: outputBuf,
+      exitCode: 1,
+      stderr: err.message || String(err),
+    };
+  }
+}
+
+
 /** Path to the agy binary — prefer explicit env var, then search PATH, then common fallbacks. */
 export function getAgyPath(): string {
   if (process.env['AGY_PATH']) {
@@ -168,21 +425,64 @@ export function getAgyPath(): string {
     '/usr/local/bin/agy',
     '/usr/bin/agy',
   ];
-  for (const candidate of candidates) {
-    try {
-      fssync.accessSync(candidate, fssync.constants.X_OK);
-      return candidate;
-    } catch {
-      // not found or not executable — try next
-    }
+  for (const p of candidates) {
+    if (fssync.existsSync(p)) return p;
   }
   // Last resort — rely on PATH resolution at spawn time
   return 'agy';
 }
 
+/**
+ * Find the Antigravity project ID corresponding to a given folder path
+ * by reading registered project configurations in global config (~/.gemini/config/projects/*.json).
+ */
+async function findAntigravityProjectId(projectPath: string): Promise<string | null> {
+  try {
+    const projectsDir = path.join(os.homedir(), '.gemini', 'config', 'projects');
+    const files = await fs.readdir(projectsDir).catch(() => [] as string[]);
+    const targetPath = path.resolve(projectPath);
+    
+    for (const file of files) {
+      if (!file.endsWith('.json') || file === 'default-cli-project.json') continue;
+      try {
+        const filePath = path.join(projectsDir, file);
+        const content = await fs.readFile(filePath, 'utf-8');
+        const parsed = JSON.parse(content);
+        
+        if (parsed.id) {
+          // 1. Direct path check
+          if (parsed.name && path.resolve(parsed.name) === targetPath) {
+            return parsed.id;
+          }
+          // 2. Folder URI check
+          const resources = parsed.projectResources?.resources ?? [];
+          for (const res of resources) {
+            if (res.folderUri) {
+              const cleanedUri = res.folderUri.replace(/^file:\/\//, '');
+              if (path.resolve(cleanedUri) === targetPath) {
+                return parsed.id;
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore parsing/reading errors for individual projects
+      }
+    }
+  } catch (e) {
+    logger.warn(`[agyCli] Error finding Antigravity project ID: ${e}`);
+  }
+  return null;
+}
+
 /** Directory where agy stores conversation SQLite files. */
 export function getConversationsDir(): string {
   return path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
+}
+
+export interface AgyStreamEvent {
+  type: 'thought' | 'text' | 'done';
+  content?: string;
 }
 
 export interface AgyRunOptions {
@@ -194,6 +494,8 @@ export interface AgyRunOptions {
   conversationId?: string;
   /** Called with each incremental chunk of output text. */
   onChunk?: (chunk: string) => void;
+  /** Called with structured streaming events */
+  onEvent?: (event: AgyStreamEvent) => void;
   /** Called when the agy child process is successfully spawned. */
   onSpawn?: (pid: number) => void;
   /** AbortSignal — kills the agy process when aborted. */
@@ -246,6 +548,14 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     return runWeb2Api(opts);
   }
 
+  // Route direct Gemini requests to Gemini API if geminiApiKey is present
+  const config = loadUserConfig();
+  if (config?.geminiApiKey && opts.model && (opts.model.toLowerCase().includes('gemini') || opts.model.startsWith('gemini-'))) {
+    logger.info(`[agyCli] Routing directly to Gemini API: model=${opts.model}`);
+    return runGeminiDirect(opts, config.geminiApiKey);
+  }
+
+
   const { prompt, cwd, conversationId, onChunk, signal, extraDirs, model, proxy } = opts;
   const agy = getAgyPath();
 
@@ -267,6 +577,13 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   // Snapshot conversations before the call so we can detect the new one
   const before = conversationId ? new Set<string>() : await snapshotConversations();
 
+  // Resolve and inject the correct Antigravity Project ID for the workspace
+  const agProjectId = await findAntigravityProjectId(cwd);
+
+  if (agProjectId) {
+    args.push('--project', agProjectId);
+  }
+
   logger.debug(`[agyCli] Spawning: ${agy} ${args.slice(0, 3).join(' ')} … (cwd=${cwd})`);
 
   return new Promise((resolve, reject) => {
@@ -276,6 +593,11 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     delete cleanEnv['ANTIGRAVITY_CONVERSATION_ID'];
     delete cleanEnv['ANTIGRAVITY_PROJECT_ID'];
     delete cleanEnv['ANTIGRAVITY_TRAJECTORY_ID'];
+
+    if (agProjectId) {
+      logger.info(`[agyCli] Injecting ANTIGRAVITY_PROJECT_ID=${agProjectId} for cwd=${cwd}`);
+      cleanEnv['ANTIGRAVITY_PROJECT_ID'] = agProjectId;
+    }
 
     if (proxy) {
       cleanEnv['HTTP_PROXY'] = proxy;
@@ -300,11 +622,34 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     const stdoutDecoder = new StringDecoder('utf-8');
     const stderrDecoder = new StringDecoder('utf-8');
 
+    let accumulatedText = '';
+    let lastThoughtLen = 0;
+    let lastContentLen = 0;
+
+    let chunkIndex = 0;
     child.stdout.on('data', (chunk: Buffer) => {
       const text = stdoutDecoder.write(chunk);
-      if (text) {
-        outputBuf += text;
-        if (onChunk) onChunk(text);
+      if (!text) return;
+      accumulatedText += text;
+      outputBuf += text;
+      chunkIndex++;
+
+      const containsT = text.includes('<thought') || text.includes('</thought>') || text.includes('<thinking') || text.includes('</thinking>');
+      logger.info(`\n[STDOUT]\nchunk=${chunkIndex}\nlen=${text.length}\ncontainsThought=${containsT}\npreview="${text.slice(0, 200).replace(/\n/g, '\\n')}"\n`);
+
+      if (onChunk) onChunk(text);
+
+      const { thought, content } = extractThoughtAndContent(accumulatedText);
+
+      if (thought.length > lastThoughtLen) {
+        const diff = thought.slice(lastThoughtLen);
+        opts.onEvent?.({ type: 'thought', content: diff });
+        lastThoughtLen = thought.length;
+      }
+      if (content.length > lastContentLen) {
+        const diff = content.slice(lastContentLen);
+        opts.onEvent?.({ type: 'text', content: diff });
+        lastContentLen = content.length;
       }
     });
 
@@ -327,9 +672,27 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       // Flush decoders
       const finalStdout = stdoutDecoder.end();
       if (finalStdout) {
+        accumulatedText += finalStdout;
         outputBuf += finalStdout;
         if (onChunk) onChunk(finalStdout);
+
+        const { thought, content } = extractThoughtAndContent(accumulatedText);
+        
+        logger.info(`[DEBUG-STAGE-1-2-CLOSE] Final flush. Thought extracted: exists=${!!thought}, length=${thought.length}`);
+        
+        if (thought.length > lastThoughtLen) {
+          const diff = thought.slice(lastThoughtLen);
+          logger.info(`[DEBUG-STAGE-4-CLOSE] final thought diff: ${diff.length}`);
+          opts.onEvent?.({ type: 'thought', content: diff });
+        }
+        if (content.length > lastContentLen) {
+          const diff = content.slice(lastContentLen);
+          logger.info(`[DEBUG-STAGE-4-CLOSE] final text diff: ${diff.length}`);
+          opts.onEvent?.({ type: 'text', content: diff });
+        }
       }
+      logger.info(`[DEBUG-STAGE-4-CLOSE] opts.onEvent({ type: 'done' })`);
+      opts.onEvent?.({ type: 'done' });
       errBuf += stderrDecoder.end();
 
       const exitCode = code ?? 1;
@@ -388,5 +751,260 @@ export const AVAILABLE_MODELS = [
 
 export async function getAvailableModels(): Promise<string[]> {
   return AVAILABLE_MODELS;
+}
+
+interface ParsedBlock {
+  type: 'thought' | 'thought-gemini' | 'thinking' | 'bracket';
+  startTagIndex: number;
+  contentStartIndex: number;
+  contentEndIndex: number;
+  endTagIndex: number;
+  isClosed: boolean;
+  time?: string;
+  tokens?: string;
+}
+
+function cleanInnerText(rawText: string): string {
+  let cleanedText = rawText;
+  if (cleanedText.charCodeAt(0) > 127 && cleanedText.charCodeAt(1) > 127 && cleanedText.charCodeAt(2) <= 127) {
+    cleanedText = cleanedText.slice(2);
+  } else if (cleanedText.charCodeAt(0) > 127 && cleanedText.charCodeAt(1) <= 127) {
+    cleanedText = cleanedText.slice(1);
+  }
+  return cleanedText;
+}
+
+function getEndTagLength(type: ParsedBlock['type']): number {
+  switch (type) {
+    case 'thought-gemini': return 17; // '</thought-gemini>'
+    case 'thought': return 10;        // '</thought>'
+    case 'thinking': return 11;       // '</thinking>'
+    case 'bracket': return 1;          // ']'
+  }
+}
+
+function matchTag(str: string, index: number, prefix: string): boolean {
+  if (!str.slice(index).toLowerCase().startsWith(prefix)) return false;
+  const nextCharIdx = index + prefix.length;
+  if (nextCharIdx >= str.length) return true;
+  const nextChar = str[nextCharIdx];
+  return nextChar === '>' || nextChar === ' ' || nextChar === '\n' || nextChar === '\r' || nextChar === '\t';
+}
+
+export function extractThoughtBlocksAndSegments(text: string): {
+  segments: { type: 'text' | 'thought'; value: string; block?: ParsedBlock }[];
+  thought: string;
+  content: string;
+} {
+  const blocks: ParsedBlock[] = [];
+  let inCodeBlock = false;
+  let inInlineCode = false;
+  let hasSeenNonWhitespaceContent = false;
+  let i = 0;
+
+  while (i < text.length) {
+    if (text.startsWith('```', i)) {
+      inCodeBlock = !inCodeBlock;
+      i += 3;
+      hasSeenNonWhitespaceContent = true;
+      continue;
+    }
+    if (text[i] === '`' && !inCodeBlock) {
+      inInlineCode = !inInlineCode;
+      i++;
+      hasSeenNonWhitespaceContent = true;
+      continue;
+    }
+    if (inCodeBlock || inInlineCode) {
+      i++;
+      hasSeenNonWhitespaceContent = true;
+      continue;
+    }
+
+    const char = text[i];
+    if (char === ' ' || char === '\n' || char === '\r' || char === '\t') {
+      i++;
+      continue;
+    }
+
+    let matchedType: ParsedBlock['type'] | null = null;
+    let matchedPrefix = '';
+    let endTagStr = '';
+
+    if (matchTag(text, i, '<thought-gemini')) {
+      matchedType = 'thought-gemini';
+      matchedPrefix = '<thought-gemini';
+      endTagStr = '</thought-gemini>';
+    } else if (matchTag(text, i, '<thought')) {
+      if (!text.toLowerCase().startsWith('<thought-gemini', i)) {
+        matchedType = 'thought';
+        matchedPrefix = '<thought';
+        endTagStr = '</thought>';
+      }
+    } else if (matchTag(text, i, '<thinking')) {
+      matchedType = 'thinking';
+      matchedPrefix = '<thinking';
+      endTagStr = '</thinking>';
+    } else if (text.slice(i).toLowerCase().startsWith('[thought:')) {
+      matchedType = 'bracket';
+      matchedPrefix = '[thought:';
+      endTagStr = ']';
+    }
+
+    if (matchedType) {
+      let isValidStart = false;
+      const nextCharIdx = i + matchedPrefix.length;
+      if (nextCharIdx >= text.length) {
+        isValidStart = true;
+      } else {
+        const nextChar = text[nextCharIdx];
+        if (nextChar === '>' || nextChar === ' ' || nextChar === '\n' || nextChar === '\r' || nextChar === '\t') {
+          isValidStart = true;
+        }
+      }
+      if (matchedType === 'bracket') isValidStart = true;
+
+      if (isValidStart) {
+        let startTagEnd = -1;
+        let contentStart = -1;
+        let time: string | undefined;
+        let tokens: string | undefined;
+
+        if (matchedType === 'bracket') {
+          startTagEnd = i + matchedPrefix.length;
+          contentStart = startTagEnd;
+        } else {
+          const gtIdx = text.indexOf('>', i);
+          if (gtIdx !== -1) {
+            startTagEnd = gtIdx + 1;
+            contentStart = startTagEnd;
+
+            if (matchedType === 'thought-gemini') {
+              const startTagContent = text.slice(i + matchedPrefix.length, gtIdx);
+              const timeMatch = startTagContent.match(/time=(?:"|')([^"']*?)(?:"|')/i);
+              const tokensMatch = startTagContent.match(/tokens=(?:"|')([^"']*?)(?:"|')/i);
+              if (timeMatch) time = timeMatch[1];
+              if (tokensMatch) tokens = tokensMatch[1];
+            }
+          } else {
+            startTagEnd = text.length;
+            contentStart = text.length;
+          }
+        }
+
+        let endTagIdx = -1;
+        if (startTagEnd < text.length) {
+          let tempCodeBlock = false;
+          let tempInlineCode = false;
+          let j = startTagEnd;
+          const lowerEndTag = endTagStr.toLowerCase();
+          while (j < text.length) {
+            if (text.startsWith('```', j)) {
+              tempCodeBlock = !tempCodeBlock;
+              j += 3;
+              continue;
+            }
+            if (text[j] === '`' && !tempCodeBlock) {
+              tempInlineCode = !tempInlineCode;
+              j++;
+              continue;
+            }
+            if (tempCodeBlock || tempInlineCode) {
+              j++;
+              continue;
+            }
+            if (text.slice(j).toLowerCase().startsWith(lowerEndTag)) {
+              endTagIdx = j;
+              break;
+            }
+            j++;
+          }
+        }
+
+        const isClosed = endTagIdx !== -1;
+
+        if (isClosed || !hasSeenNonWhitespaceContent) {
+          const contentEnd = isClosed ? endTagIdx : text.length;
+          const endIndex = isClosed ? endTagIdx + endTagStr.length : text.length;
+          blocks.push({
+            type: matchedType,
+            startTagIndex: i,
+            contentStartIndex: contentStart,
+            contentEndIndex: contentEnd,
+            endTagIndex: endTagIdx,
+            isClosed,
+            time,
+            tokens,
+          });
+
+          i = endIndex;
+          continue;
+        }
+      }
+    }
+
+    hasSeenNonWhitespaceContent = true;
+    i++;
+  }
+
+  const thoughts: string[] = [];
+  const segments: { type: 'text' | 'thought'; value: string; block?: ParsedBlock }[] = [];
+  let cleanContent = '';
+  let lastIdx = 0;
+
+  for (const block of blocks) {
+    const preText = text.slice(lastIdx, block.startTagIndex);
+    if (preText) {
+      segments.push({ type: 'text', value: preText });
+      cleanContent += preText;
+    }
+
+    const rawInner = text.slice(block.contentStartIndex, block.contentEndIndex);
+    const cleanedInner = cleanInnerText(rawInner);
+    thoughts.push(cleanedInner);
+
+    segments.push({
+      type: 'thought',
+      value: cleanedInner,
+      block,
+    });
+
+    lastIdx = block.isClosed ? block.endTagIndex + getEndTagLength(block.type) : text.length;
+  }
+
+  const postText = text.slice(lastIdx);
+  if (postText) {
+    segments.push({ type: 'text', value: postText });
+    cleanContent += postText;
+  }
+
+  return {
+    segments,
+    thought: thoughts.join('\n\n').trim(),
+    content: cleanContent,
+  };
+}
+
+export function extractThoughtAndContent(text: string): { 
+  thought: string; 
+  content: string; 
+  geminiTime?: string; 
+  geminiTokens?: string; 
+} {
+  const res = extractThoughtBlocksAndSegments(text);
+  let geminiTime: string | undefined;
+  let geminiTokens: string | undefined;
+  for (const seg of res.segments) {
+    if (seg.type === 'thought' && seg.block?.type === 'thought-gemini') {
+      if (seg.block.time && !geminiTime) geminiTime = seg.block.time;
+      if (seg.block.tokens && !geminiTokens) geminiTokens = seg.block.tokens;
+    }
+  }
+  return {
+    thought: res.thought,
+    content: res.content,
+    geminiTime,
+    geminiTokens,
+  };
 }
 
