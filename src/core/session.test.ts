@@ -10,7 +10,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { ProjectManager, SessionManager } from './session.js';
 vi.mock('node:fs/promises');
-vi.mock('node:os');
+vi.mock('node:os', () => ({
+  homedir: vi.fn(() => '/mock/home'),
+}));
 vi.mock('../utils/logger.js', () => ({
   logger: {
     info: vi.fn(),
