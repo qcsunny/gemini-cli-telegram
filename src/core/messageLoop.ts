@@ -9,31 +9,21 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
+import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput, StructuredMessage } from './types.js';
 import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
 import { markdownToHtml } from '../channels/telegram/formatter.js';
-import { runAgyPrint, getModelCapabilities } from '../agy/agyCli.js';
+import { runAgyPrint, getModelCapabilities, extractThoughtAndContent } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker } from '../utils/pricing.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
 
 function normalizeText(text: string): string {
-  // 1. Strip thought blocks completely to isolate the actual answer body
-  let clean = text.replace(/<(thought|thought-gemini|thinking)(?:\s+[^>]*)?>([\s\S]*?)<\/\1>/gi, '');
-  
-  // 2. Unify CRLF to LF
-  clean = clean.replace(/\r\n/g, '\n');
-  
-  // 3. Strip Markdown formatting symbols to avoid syntax-driven mismatches
+  const { content } = extractThoughtAndContent(text);
+  let clean = content.replace(/\r\n/g, '\n');
   clean = clean.replace(/[*_`#>\-+=()[\]]/g, '');
-  
-  // 4. Unify all continuous spaces/tabs/newlines to a single space
-  clean = clean.replace(/\s+/g, ' ');
-  
-  // 5. Trim and lowercase for uniform comparison
-  return clean.trim().toLowerCase();
+  return clean.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 async function readThoughtFromTranscript(
@@ -115,17 +105,13 @@ async function readThoughtFromTranscript(
           return { thought, source: 'thinking' };
         }
 
-        // Priority 2, 3, 4: parsed.content custom XML tags
+        // Priority 2: parsed.content extracted thought
         if (foundStep.content && typeof foundStep.content === 'string') {
-          const tags = ['thought', 'thought-gemini', 'thinking'];
-          for (const tag of tags) {
-            const regex = new RegExp(`<(${tag})(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/\\1>`, 'i');
-            const match = foundStep.content.match(regex);
-            if (match && match[2].trim()) {
-              const thought = match[2].trim();
-              logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=content:${tag}, length=${thought.length}, hasNewlines=${thought.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
-              return { thought, source: `content:${tag}` };
-            }
+          const { thought } = extractThoughtAndContent(foundStep.content);
+          if (thought.trim()) {
+            const recovered = thought.trim();
+            logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=content:extracted, length=${recovered.length}, hasNewlines=${recovered.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
+            return { thought: recovered, source: 'content:extracted' };
           }
         }
       }
@@ -204,44 +190,35 @@ export async function processMessage(
       if (isFinished && !isFinal) return;
       try {
         if (isRichSingleMessage) {
-          let unifiedText = '';
-          const thoughtTrimmed = thoughtBuffer.trim();
+          const structuredMsg: StructuredMessage = {
+            content: answerBuffer,
+            thought: thoughtBuffer,
+          };
 
-          if (answerBuffer) {
-            unifiedText = answerBuffer;
-            if (thoughtTrimmed) {
-              const closingTag = isFinal ? '</thought>' : '';
-              unifiedText += `\n\n<thought>${thoughtTrimmed}${closingTag}`;
-            }
-          } else if (thoughtTrimmed) {
-            const closingTag = isFinal ? '</thought>' : '';
-            unifiedText = `<thought>${thoughtTrimmed}${closingTag}`;
-          }
-
-          logger.info(`[DEBUG-STAGE-6] Unified rich message constructed: isFinal=${isFinal}, thoughtTrimmedLen=${thoughtTrimmed.length}, answerBufferLen=${answerBuffer.length}, unifiedTextLen=${unifiedText.length}`);
-
-          if (!unifiedText.trim()) {
-            logger.info(`[DEBUG-STAGE-6] unifiedText is empty, skipping update.`);
+          if (!structuredMsg.content.trim() && !structuredMsg.thought?.trim()) {
+            logger.info(`[DEBUG-STAGE-6] structuredMsg is empty, skipping update.`);
             return;
           }
 
-          const truncated = formatter.truncateForEdit(unifiedText);
-          if (truncated.trim()) {
-            if (!currentMessageId) {
-              logger.info(`[DEBUG-STAGE-6] Sending first draft with unifiedText: first100="${truncated.slice(0, 100).replace(/\n/g, '\\n')}"`);
-              currentMessageId = await reply.sendPlain(truncated);
-              logger.info(`[DEBUG-STAGE-6] First draft sent, currentMessageId=${currentMessageId}`);
-            } else {
-              if (reply.editRichDraft) {
-                logger.info(`[DEBUG-STAGE-6] Editing active draft ${currentMessageId} with unifiedText: first100="${truncated.slice(0, 100).replace(/\n/g, '\\n')}"`);
-                await reply.editRichDraft(currentMessageId, truncated);
-              } else {
-                logger.info(`[DEBUG-STAGE-6] editRichDraft missing! Falling back to editPlain with unifiedText: first100="${truncated.slice(0, 100).replace(/\n/g, '\\n')}"`);
-                await reply.editPlain(currentMessageId, truncated);
-              }
-            }
+          const truncatedContent = formatter.truncateForEdit(structuredMsg.content);
+          const truncatedThought = structuredMsg.thought ? formatter.truncateForEdit(structuredMsg.thought) : undefined;
+          
+          const structuredTruncMsg: StructuredMessage = {
+            content: truncatedContent,
+            thought: truncatedThought,
+          };
+
+          if (!currentMessageId) {
+            logger.info(`[DEBUG-STAGE-6] Sending first draft with structuredMsg`);
+            currentMessageId = await reply.sendRichDraft!(structuredTruncMsg);
+            logger.info(`[DEBUG-STAGE-6] First draft sent, currentMessageId=${currentMessageId}`);
           } else {
-            logger.info(`[DEBUG-STAGE-6] truncated unifiedText is empty!`);
+            if (reply.editRichDraft) {
+              logger.info(`[DEBUG-STAGE-6] Editing active draft ${currentMessageId} with structuredMsg`);
+              await reply.editRichDraft(currentMessageId, structuredTruncMsg);
+            } else {
+              logger.info(`[DEBUG-STAGE-6] editRichDraft missing!`);
+            }
           }
         } else {
           const thoughtTrimmed = thoughtBuffer.trim();
@@ -408,6 +385,9 @@ export async function processMessage(
         const result = await readThoughtFromTranscript(session.conversationId, answerBuffer);
         if (result && result.thought) {
           thoughtBuffer = result.thought;
+          // Strip the recovered thought block from answerBuffer to prevent double rendering!
+          const parsed = extractThoughtAndContent(answerBuffer);
+          answerBuffer = parsed.content;
           logger.info(`[messageLoop] Successfully recovered thought from transcript: source=${result.source}, length=${thoughtBuffer.length}`);
         } else {
           logger.info(`[messageLoop] No thought recovered from transcript for conversation ${session.conversationId}`);
@@ -430,7 +410,7 @@ export async function processMessage(
       if (answerBuffer.trim()) {
         const parts = answerBuffer.split(/\s*---(?:split|spilt)---\s*/gi).filter(p => p.trim());
         for (const part of parts) {
-          const partHtml = markdownToHtml(part);
+          const partHtml = markdownToHtml({ content: part });
           const chunks = formatter.chunkText('___RAW_HTML___' + partHtml);
           bodyHtmlChunks.push(...chunks);
         }
@@ -445,8 +425,11 @@ export async function processMessage(
       const footerHtml = markdownToHtml(footerMarker);
 
       if (thoughtBuffer.trim()) {
-        const rawThoughtText = `<thought>\n${thoughtBuffer.trim()}\n</thought>`;
-        const thoughtHtml = markdownToHtml(rawThoughtText);
+        const thoughtHtml = markdownToHtml({
+          content: '',
+          thought: thoughtBuffer.trim(),
+          geminiTime: finalResult.thinkingTime
+        });
         const combinedHtml = thoughtHtml + '\n\n' + footerHtml;
         const chunks = formatter.chunkText('___RAW_HTML___' + combinedHtml);
         thoughtAndStatsHtmlChunks.push(...chunks);
