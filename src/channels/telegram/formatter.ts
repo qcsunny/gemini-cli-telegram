@@ -1189,18 +1189,22 @@ export function normalizeSpacingAroundDetails(html: string): string {
   processed = processed.replace(/(<\/details>)(?:(?:\s|<br\s*\/?>|<p>|<\/p>)*)/gi, (match, details) => {
     return `${details}<br><br>`;
   });
+  
+  // Trim first to handle leading/trailing whitespace before checking boundaries
+  processed = processed.trim();
+  
   // Clean up boundaries
   while (processed.startsWith('<br>') || processed.startsWith('<br/>') || processed.startsWith('<br />')) {
-    if (processed.startsWith('<br>')) processed = processed.substring(4);
-    else if (processed.startsWith('<br/>')) processed = processed.substring(5);
-    else if (processed.startsWith('<br />')) processed = processed.substring(6);
+    if (processed.startsWith('<br>')) processed = processed.substring(4).trim();
+    else if (processed.startsWith('<br/>')) processed = processed.substring(5).trim();
+    else if (processed.startsWith('<br />')) processed = processed.substring(6).trim();
   }
   while (processed.endsWith('<br>') || processed.endsWith('<br/>') || processed.endsWith('<br />')) {
-    if (processed.endsWith('<br>')) processed = processed.substring(0, processed.length - 4);
-    else if (processed.endsWith('<br/>')) processed = processed.substring(0, processed.length - 5);
-    else if (processed.endsWith('<br />')) processed = processed.substring(0, processed.length - 6);
+    if (processed.endsWith('<br>')) processed = processed.substring(0, processed.length - 4).trim();
+    else if (processed.endsWith('<br/>')) processed = processed.substring(0, processed.length - 5).trim();
+    else if (processed.endsWith('<br />')) processed = processed.substring(0, processed.length - 6).trim();
   }
-  return processed.trim();
+  return processed;
 }
 
 export function markdownToHtml(input: string | StructuredMessage, isStreaming = false): string {
