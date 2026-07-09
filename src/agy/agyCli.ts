@@ -639,6 +639,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       logger.debug(`[STDOUT] chunk=${chunkIndex} len=${text.length} containsThought=${containsT} preview="${text.slice(0, 200).replace(/\n/g, '\\n')}"`);
 
       if (onChunk) onChunk(text);
+      // Emit incremental streaming event per chunk so the UI updates in real time
+      if (opts.onEvent) {
+        opts.onEvent({ type: 'text', content: text });
+      }
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
@@ -672,9 +676,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (thought) {
         opts.onEvent?.({ type: 'thought', content: thought });
       }
-      if (content) {
-        opts.onEvent?.({ type: 'text', content: content });
-      }
+      // NOTE: We do NOT re-emit 'text' here because per-chunk stdout events already
+      // streamed every raw chunk into answerBuffer. The recovery path in messageLoop.ts
+      // (extractThoughtAndContent) will strip <thought> blocks from answerBuffer after
+      // streaming completes if thoughtBuffer is empty.
       opts.onEvent?.({ type: 'done' });
       errBuf += stderrDecoder.end();
 
