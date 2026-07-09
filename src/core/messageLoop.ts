@@ -385,13 +385,24 @@ export async function processMessage(
         logger.warn(`[messageLoop] Error waiting for active update promise: ${e}`);
       }
 
+      // Strip <thought> XML from answerBuffer unconditionally before final rendering.
+      // Raw stdout chunks accumulate into answerBuffer including any <thought>…</thought>
+      // tags. Whether thoughtBuffer was populated by the close-handler (agy-CLI path) or
+      // will be populated by transcript recovery below, answerBuffer must be clean before
+      // markdownToHtml renders it, or a second <details> block will appear.
+      {
+        const parsed = extractThoughtAndContent(answerBuffer);
+        answerBuffer = parsed.content;
+        if (parsed.thought && thoughtBuffer.length === 0) {
+          // Promote inline thought to thoughtBuffer if not already set by onEvent
+          thoughtBuffer = parsed.thought;
+        }
+      }
+
       if (thoughtBuffer.length === 0 && session.conversationId) {
         const result = await readThoughtFromTranscript(session.conversationId, answerBuffer, turnStartTime);
         if (result && result.thought) {
           thoughtBuffer = result.thought;
-          // Strip the recovered thought block from answerBuffer to prevent double rendering!
-          const parsed = extractThoughtAndContent(answerBuffer);
-          answerBuffer = parsed.content;
           logger.info(`[messageLoop] Successfully recovered thought from transcript: source=${result.source}, length=${thoughtBuffer.length}`);
         } else {
           logger.info(`[messageLoop] No thought recovered from transcript for conversation ${session.conversationId}`);
@@ -399,6 +410,7 @@ export async function processMessage(
       } else if (thoughtBuffer.length > 0) {
         logger.info(`[messageLoop] Skipping transcript thought recovery since thoughtBuffer already contains real-time thought: length=${thoughtBuffer.length}`);
       }
+
 
       // 5. Final full rendering of response text (supports RichText and structure-aware multi-chunk partitioning)
       if (thinkingMessageId) {
