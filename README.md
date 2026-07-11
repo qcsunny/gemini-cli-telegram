@@ -92,7 +92,12 @@ sudo ./scripts/install-service.sh
 | **守护进程日志** | `tail -f ~/.gemini-cli-telegram/daemon.log` |
 | **系统日志监控** | `sudo journalctl -u gemini-telegram -f` |
 
+### 🔍 多维度错误诊断与隔离
+- **详尽诊断输出**：当本地 `agy` CLI 遭遇认证过期、代理进程异常终止、执行超时或网络异常时，系统会向 Telegram 前端反馈具体失败原因（如：认证失败、进程终止、超时取消等），并在后台日志输出包含 `ExitCode`、`Stderr` 预览的完整 Diagnostic 追踪。
+- **多路由数据隔离**：针对 Gemini 直接调用（Google Direct SDK）与网页端逆向调用（Web2API Proxy），其上下文对话历史数据独立维护在各自的映射容器中，杜绝多渠道并发请求时的上下文数据混淆。
+
 ---
+
 
 ## 🎮 交互指令
 
@@ -128,7 +133,16 @@ sudo ./scripts/install-service.sh
 - **流式草稿渲染**：所有流式文字的中间打字状态均被自动路由至临时草稿箱写信接口 `sendRichDraft`（底层调用 Telegram 的 `sendRichMessageDraft`），打字输出极度丝滑且绝不触发消息重发。
 - **原生思考动画**：AI 在思考和生成阶段，流式输出尾部会自动附带 **`<tg-thinking>Thinking...</tg-thinking>`** 原生标签。这将在 Telegram 手机与桌面端激活官方最高等级的“动态呼吸气泡思考动效”，打造极致灵动的交互体验。
 
+### 🧩 结构化消息渲染与状态机解析 (Structured Message & Segment Parsing)
+- **结构化流式解析**：全链路重构为以 `StructuredMessage` 为核心的数据流。不再使用脆弱的全局正则切割原始字符串，而是通过状态机（State Machine）精确提取 `<thought>` 思考块、内容块、耗时和 Token 消耗。
+- **智能 `<details>` 折叠排版**：
+  - 动态计算内容长度并自适应渲染闭合/展开的思考框。
+  - 精确处理 `<details>` 折叠容器前后的空白换行（避免空行撑开）。
+  - 支持流式输出中“未闭合思考块”的实时渐进式渲染。
+- **实体安全截断**：优化了 HTML 实体（如 `&amp;`、`&lt;` 等）的字节计长与安全切片，解决超长消息截断时可能出现的格式失效或崩溃问题。
+
 ---
+
 
 ## ⚙️ 全局配置说明
 
