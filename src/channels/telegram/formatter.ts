@@ -1179,7 +1179,7 @@ function renderThoughtBlockToHtml(
     summary = isClosed ? '🧠 思考过程 (Thinking Process)' : '🧠 正在思考... (Thinking...)';
   }
 
-  return `${detailsTag}<summary>${summary}</summary>${infoBlock}<i>${innerHtml}</i></details>`;
+  return `${detailsTag}<summary>${summary}</summary>${infoBlock}${innerHtml}</details>`;
 }
 
 export function normalizeSpacingAroundDetails(html: string): string {

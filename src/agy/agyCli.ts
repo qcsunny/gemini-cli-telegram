@@ -201,6 +201,10 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   'Web2API: Gemini 3.5 Flash Thinking Lite': { supportsThinkingSummary: true },
   'Web2API: Gemini 3.1 Pro': { supportsThinkingSummary: true },
   'Web2API: Gemini 3.5 Flash': { supportsThinkingSummary: true },
+  // Claude extended-thinking models — must be declared explicitly since they
+  // don't contain 'gemini' in their name (the heuristic below would miss them).
+  'Claude Sonnet 4.6 (Thinking)': { supportsThinkingSummary: true },
+  'Claude Opus 4.6 (Thinking)': { supportsThinkingSummary: true },
 };
 
 export function getModelCapabilities(modelName?: string): ModelCapabilities {
@@ -520,6 +524,12 @@ export interface AgyRunResult {
   exitCode: number;
   /** Optional stderr content */
   stderr?: string;
+  /** Signal that killed the process, if any */
+  signal?: string;
+  /** Execution duration in ms */
+  durationMs?: number;
+  /** Whether the process was aborted/timed out */
+  isTimeout?: boolean;
 }
 
 /**
@@ -590,6 +600,9 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   logger.debug(`[agyCli] Spawning: ${agy} ${args.slice(0, 3).join(' ')} … (cwd=${cwd})`);
 
   return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    let isTimeout = false;
+
     const cleanEnv: Record<string, string | undefined> = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', CI: '1' };
     delete cleanEnv['ANTIGRAVITY_AGENT'];
     delete cleanEnv['ANTIGRAVITY_LS_ADDRESS'];
@@ -607,7 +620,24 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       cleanEnv['HTTPS_PROXY'] = proxy;
       cleanEnv['http_proxy'] = proxy;
       cleanEnv['https_proxy'] = proxy;
+      cleanEnv['ALL_PROXY'] = proxy;
+      cleanEnv['all_proxy'] = proxy;
     }
+
+    const redactUrl = (urlStr?: string) => {
+      if (!urlStr) return urlStr;
+      try {
+        const url = new URL(urlStr);
+        if (url.password) url.password = '***';
+        return url.toString();
+      } catch {
+        return '***(unparseable_url)';
+      }
+    };
+
+    logger.info(`[agyCli] DIAGNOSTIC - Spawning ${agy}`);
+    logger.info(`[agyCli] DIAGNOSTIC - CWD: ${cwd}`);
+    logger.info(`[agyCli] DIAGNOSTIC - Proxy Env: HTTP_PROXY=${redactUrl(cleanEnv['HTTP_PROXY'])} HTTPS_PROXY=${redactUrl(cleanEnv['HTTPS_PROXY'])} ALL_PROXY=${redactUrl(cleanEnv['ALL_PROXY'])} NO_PROXY=${cleanEnv['NO_PROXY'] ?? cleanEnv['no_proxy']}`);
 
     const child = spawn(agy, args, {
       cwd,
@@ -651,6 +681,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
     // Kill agy when the AbortController fires
     signal?.addEventListener('abort', () => {
+      isTimeout = true;
       logger.debug('[agyCli] Aborting — sending SIGINT to agy process');
       child.kill('SIGINT');
     });
@@ -660,7 +691,8 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       reject(err);
     });
 
-    child.on('close', async (code) => {
+    child.on('close', async (code, signal) => {
+      const durationMs = Date.now() - startTime;
       // Flush decoders
       const finalStdout = stdoutDecoder.end();
       if (finalStdout) {
@@ -684,7 +716,8 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       errBuf += stderrDecoder.end();
 
       const exitCode = code ?? 1;
-      logger.debug(`[agyCli] Process exited with code ${exitCode}. stderr: ${errBuf.slice(0, 200)}`);
+      const sigStr = signal ? String(signal) : undefined;
+      logger.debug(`[agyCli] Process exited with code ${exitCode} (signal: ${sigStr}). duration: ${durationMs}ms, stderr: ${errBuf.slice(0, 200)}`);
 
       let resolvedConvId = conversationId ?? '';
 
@@ -715,7 +748,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         }
       }
 
-      resolve({ conversationId: resolvedConvId, output: outputBuf, exitCode, stderr: errBuf });
+      resolve({ conversationId: resolvedConvId, output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout });
     });
   });
 }

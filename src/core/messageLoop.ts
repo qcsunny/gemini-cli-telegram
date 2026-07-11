@@ -46,7 +46,7 @@ async function readThoughtFromTranscript(
   );
 
   let attempts = 0;
-  const maxAttempts = 20; // 20 * 100ms = 2 seconds total
+  const maxAttempts = 50; // 50 * 100ms = 5 seconds total
 
   // Normalize the expected answer buffer for accurate validation
   const normAnswer = normalizeText(answerBuffer);
@@ -475,7 +475,24 @@ export async function processMessage(
           }
         }
       } else if (!thoughtBuffer.trim() && finalResult.exitCode !== 0) {
-        await reply.send(`${ICONS.error} 执行失败（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录。`);
+        logger.error(`[messageLoop] DIAGNOSTIC - Execution Failed!\n` +
+          `ExitCode: ${finalResult.exitCode}\n` +
+          `Signal: ${finalResult.signal || 'none'}\n` +
+          `Duration: ${finalResult.durationMs}ms\n` +
+          `IsTimeout: ${finalResult.isTimeout}\n` +
+          `CWD: ${cwd}\n` +
+          `Stderr (preview): ${finalResult.stderr?.substring(0, 1000)}\n` +
+          `Stdout (preview): ${finalResult.output?.substring(0, 1000)}\n`);
+        
+        const isAuthError = (finalResult.stderr || '').includes('authentication failed') || (finalResult.output || '').includes('authentication failed');
+        const isTerminated = (finalResult.stderr || '').includes('terminated due to error') || (finalResult.output || '').includes('terminated due to error');
+        
+        let errorReason = '执行失败';
+        if (isAuthError) errorReason = '认证失败或超时 (authentication failed or timed out)';
+        if (isTerminated) errorReason = '代理进程异常终止 (Agent execution terminated due to error)';
+        if (finalResult.isTimeout) errorReason = '执行被用户或系统超时取消 (Timeout/Aborted)';
+
+        await reply.send(`${ICONS.error} ${errorReason}（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录并配置网络。管理员可查看后台日志获取详细 Trace。`);
       }
 
     // 6. Handle Autopilot autonomous loops
