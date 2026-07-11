@@ -267,7 +267,7 @@ export function buildChannelReply(
 
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
-      logger.debug(`[DEBUG-STAGE-8] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      logger.info(`[TRACE-EVIDENCE] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = typeof originalText === 'string'
         ? originalText
@@ -279,7 +279,6 @@ export function buildChannelReply(
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
           html = '正在思考...<br><br>' + html;
         }
-        logger.debug(`[DEBUG-STAGE-7] markdownToHtml conversion (draft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
         const hasThought = typeof originalText === 'string'
           ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
@@ -289,42 +288,42 @@ export function buildChannelReply(
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
         
-        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option A): html="${html}${suffix}"`);
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { html: `${html}${suffix}` },
         });
-        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft success. Response payload keys: ${Object.keys(res || {})}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (HTML) success for draftId=${draftId}. Response keys: ${Object.keys(res || {})}`);
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
-        logger.warn(`sendRichDraft Option A failed: ${err.message || err}. Trying Option B...`);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 
       // Option B: Rich Markdown
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B): markdownLen=${safeMarkdown.length}`);
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option B - Markdown): markdown="${safeMarkdown}"`);
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { markdown: safeMarkdown },
         });
-        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft (Markdown) success. Response payload keys: ${Object.keys(res || {})}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (Markdown) success for draftId=${draftId}. Response keys: ${Object.keys(res || {})}`);
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
-        logger.warn(`sendRichDraft Option B failed: ${err.message || err}.`);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option B (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
         throw err;
       }
     },
     editRichDraft: async (draftId: number, originalText: string | StructuredMessage): Promise<void> => {
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
-      logger.debug(`[DEBUG-STAGE-8] editRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      logger.info(`[TRACE-EVIDENCE] editRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = typeof originalText === 'string'
         ? originalText
@@ -338,7 +337,6 @@ export function buildChannelReply(
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
           html = '正在思考...<br><br>' + html;
         }
-        logger.debug(`[DEBUG-STAGE-7] markdownToHtml conversion (editDraft): htmlLen=${html.length}, first100="${html.slice(0, 100).replace(/\n/g, '\\n')}"`);
 
         const hasThought = typeof originalText === 'string'
           ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
@@ -348,35 +346,35 @@ export function buildChannelReply(
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
         
-        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option A): htmlPayloadLen=${(html+suffix).length}`);
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A): html="${html}${suffix}"`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { html: `${html}${suffix}` },
         });
-        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft (edit) success.`);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit HTML) success for draftId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
-        logger.warn(`editRichDraft Option A (HTML) failed: ${err.message || err}. Trying Option B (Markdown)...`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 
       // Option B: Rich Markdown fallback
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.debug(`[DEBUG-STAGE-8] Calling sendRichMessageDraft (Option B - edit): markdownLen=${safeMarkdown.length}`);
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option B - Markdown): markdown="${safeMarkdown}"`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
           draft_id: draftId,
           rich_message: { markdown: safeMarkdown },
         });
-        logger.debug(`[DEBUG-STAGE-9] sendRichMessageDraft (edit Markdown) success.`);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit Markdown) success for draftId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
-        logger.warn(`editRichDraft Option B (Markdown) failed: ${err.message || err}.`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option B (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
         throw err;
       }
     },

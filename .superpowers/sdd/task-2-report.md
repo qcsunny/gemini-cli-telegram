@@ -127,3 +127,38 @@ We completed the final end-to-end integration and single source of truth parser 
 3. **Validation and Build:**
    - Ran `npm run build` to confirm compilation is 100% successful.
    - Ran `npm run test` to confirm that all 97 vitest tests pass successfully.
+
+## Fix Subagent: Critical & Important Issues from Final Code Review
+
+Commit: `5dc7655` — `fix: apply code review fixes C1/C2/C3/I1/I3/I5/m5`
+
+### Issues Resolved
+
+| ID  | Severity  | File                         | Description                                                               |
+|-----|-----------|------------------------------|---------------------------------------------------------------------------|
+| C1  | Critical  | `src/agy/agyCli.ts`          | Removed dead `matchTag` double-check in `extractThoughtBlocksAndSegments` |
+| C2  | Critical  | `src/agy/agyCli.ts`          | Fixed O(N²) re-parsing — single parse in `close` handler only             |
+| C3  | Critical  | `src/core/messageLoop.ts`    | Fixed 30s recency window; replaced with `turnStartTime` parameter         |
+| I1  | Important | `src/agy/agyCli.ts`          | Reinstated `isWeb2ApiModel` logic (`return model in WEB2API_MODEL_MAP`)   |
+| I3  | Important | `src/channels/telegram/formatter.ts` | Fixed entity counting in `safeHtmlSlice` (`count += entity.length`)  |
+| I5  | Important | `agyCli.ts`, `messageLoop.ts`, `bot.ts` | Downgraded all `[DEBUG-*]`/`[STDOUT]`/`[BUFFER]`/`[EVENT]`/`[TELEGRAM PAYLOAD]` tagged `logger.info` calls to `logger.debug` |
+| m5  | Medium    | `src/agy/agyCli.ts`          | Created `geminiDirectHistories` map separate from `web2apiHistories`      |
+
+### C1 Detail
+The `else if (matchTag(text, i, '<thought'))` branch already guarantees `<thought-gemini>` was not matched (it was checked first in the `if`). The nested `if (!startsWithIgnoreCase(..., '<thought-gemini'))` was dead code. Removed the inner guard.
+
+### C2 Detail
+The original code called `extractThoughtAndContent(accumulatedText)` inside `stdout.on('data')` on every chunk — O(N²) string parsing. Replaced with no per-chunk parse; the single parse now happens once in the `close` event handler on the fully-accumulated `accumulatedText`, then emits `thought`, `text`, and `done` events.
+
+### C3 Detail
+The old 30-second `Math.abs(Date.now() - createdAtTime) > 30000` check was fragile (could skip valid entries for slow machines; could match stale entries within 30s). Added a `turnStartTime: number` parameter captured via `const turnStartTime = Date.now()` (declared in the outer `while` loop scope, assigned inside the `try` block). The check now strictly compares `createdAtTime < turnStartTime` — no stale entries from previous turns can match.
+
+### I3 Detail
+HTML entities like `&amp;`, `&lt;`, `&gt;` (5-6 bytes) were each counted as 1 character by the old `count++`. Changed to `count += entity.length` so the `safeHtmlSlice` budget correctly accounts for the entity's byte length.
+
+### m5 Detail
+`runGeminiDirect` was reading from and writing to `web2apiHistories` — the same map used by `runWeb2Api`. Created a dedicated `geminiDirectHistories = new Map<string, any[]>()` for the Gemini Direct code path to prevent cross-contamination between conversation histories when both routing paths are active.
+
+### Build & Test Results
+- `npm run build` → **0 errors**
+- `npm run test` → **10 test files, 97 tests — all passed** (Duration: 13.39s)

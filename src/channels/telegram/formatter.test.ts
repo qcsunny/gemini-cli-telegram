@@ -138,13 +138,13 @@ Thanks for reading! 🚀
   it('should format completed thought blocks as collapsible details', () => {
     const input = 'Pre-text\n<thought>\nLet me analyze the path\n</thought>\nPost-text';
     const html = markdownToHtml(input);
-    expect(html).toContain('<details><summary>🧠 思考过程 (Thinking Process)</summary><i>Let me analyze the path</i></details>');
+    expect(html).toContain('<details><summary>🧠 思考过程 (Thinking Process)</summary>Let me analyze the path</details>');
   });
 
   it('should format streaming unclosed thought blocks as open details', () => {
     const input = '<thought>\nLet me analyze the path';
     const html = markdownToHtml(input);
-    expect(html).toContain('<details open><summary>🧠 正在思考... (Thinking...)</summary><i>Let me analyze the path</i></details>');
+    expect(html).toContain('<details open><summary>🧠 正在思考... (Thinking...)</summary>Let me analyze the path</details>');
   });
 
   it('should format unclosed thought blocks in the middle of a string as normal content, not details', () => {
@@ -168,7 +168,7 @@ Thanks for reading! 🚀
     expect(html).toContain('<details><summary>🧠 Gemini Thinking · 2.5s · 1.2K</summary>');
     expect(html).toContain('Thinking Time: 2.5 s');
     expect(html).toContain('Thinking Tokens: 1200');
-    expect(html).toContain('<i>This is thinking process.</i>');
+    expect(html).toContain('This is thinking process.');
   });
 
 
@@ -178,7 +178,7 @@ Thanks for reading! 🚀
     expect(html).toContain('<details><summary>🧠 Gemini Thinking · 3.4s · 1.3K</summary>');
     expect(html).toContain('Thinking Time: 3.4 s');
     expect(html).toContain('Thinking Tokens: 1250');
-    expect(html).toContain('<i>Thinking content</i>');
+    expect(html).toContain('Thinking content');
   });
 
   it('should format streaming thought-gemini blocks with metadata correctly', () => {
@@ -187,7 +187,7 @@ Thanks for reading! 🚀
     expect(html).toContain('<details open><summary>🧠 Gemini Thinking · 2.1s · 800</summary>');
     expect(html).toContain('Thinking Time: 2.1 s');
     expect(html).toContain('Thinking Tokens: 800');
-    expect(html).toContain('<i>Thinking on the go</i>');
+    expect(html).toContain('Thinking on the go');
   });
 
   it('should dynamically truncate long thought-gemini blocks', () => {
