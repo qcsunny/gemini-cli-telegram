@@ -1165,11 +1165,13 @@ function renderThoughtBlockToHtml(
   const detailsTag = isOpen ? '<details open>' : '<details>';
   
   let finalContent = trimHtmlBr(markdownToHtmlSnippet(content));
-  const maxThoughtLength = Math.max(200, 3900 - nonThoughtHtmlLength);
-  const { sliced, wasTruncated } = safeHtmlSlice(finalContent, maxThoughtLength);
-  finalContent = sliced;
-  if (wasTruncated) {
-    finalContent += '\n\n……（已省略后续内容，超长思考摘要已被截断）';
+  if (isStreaming) {
+    const maxThoughtLength = Math.max(200, 3900 - nonThoughtHtmlLength);
+    const { sliced, wasTruncated } = safeHtmlSlice(finalContent, maxThoughtLength);
+    finalContent = sliced;
+    if (wasTruncated) {
+      finalContent += '\n\n……（已省略后续内容，超长思考摘要已被截断）';
+    }
   }
 
   const innerHtml = finalContent;
