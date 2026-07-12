@@ -1128,12 +1128,26 @@ function markdownToHtmlSnippet(markdown: string): string {
     return `<details><summary>${summary}</summary>${p3}</details>`;
   });
 
-  html = html.replace(/\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)\]/gi, (match, model, inputTokens, outputTokens, cost) => {
+  html = html.replace(/\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)(?:\s*\|\s*(.*?)\|\s*(.*?))?\]/gi, (match, model, inputTokens, outputTokens, cost, cachedTokens, thinkingTokens) => {
     const m = model.trim();
     const i = inputTokens.trim();
     const o = outputTokens.trim();
     const c = cost.trim();
-    return `<a href="tg://btn_info_footer|${m}|${i}|${o}|${c}">⚙️ ${m} · In: ${i} · Out: ${o} · Cost: ${c}</a>`;
+    const cached = cachedTokens ? cachedTokens.trim() : '';
+    const thinking = thinkingTokens ? thinkingTokens.trim() : '';
+
+    let inStr = i;
+    if (cached && cached !== '0') {
+      inStr += ` (Cached: ${cached})`;
+    }
+    let outStr = o;
+    if (thinking && thinking !== '0') {
+      outStr += ` (Reasoning: ${thinking})`;
+    }
+
+    const extra = (cached || thinking) ? `|${cached || '0'}|${thinking || '0'}` : '';
+    const callbackData = `${m}|${i}|${o}|${c}${extra}`;
+    return `<a href="tg://btn_info_footer|${callbackData}">⚙️ ${m} · In: ${inStr} · Out: ${outStr} · Cost: ${c}</a>`;
   });
 
   return html;

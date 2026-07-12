@@ -71,8 +71,8 @@ describe('Pricing and Token Estimation', () => {
       // inputCost = 2 * (3.00 / 1,000,000) = 0.000006
       // outputCost = 2 * (15.00 / 1,000,000) = 0.000030
       // totalCost = 0.000036
-      // Expected footer format: [footer: Claude Sonnet 4.6 (Thinking) | 2 | 2 | $0.000036]
-      expect(marker).toBe('[footer: Claude Sonnet 4.6 (Thinking) | 2 | 2 | $0.000036]');
+      // Expected footer format: [footer: Claude Sonnet 4.6 (Thinking) (Estimated / 预估) | 2 | 2 | $0.000036]
+      expect(marker).toBe('[footer: Claude Sonnet 4.6 (Thinking) (Estimated / 预估) | 2 | 2 | $0.000036]');
     });
   });
 });
