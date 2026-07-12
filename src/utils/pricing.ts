@@ -109,14 +109,23 @@ export function estimateTokens(text: string): number {
   return finalTokens === 0 ? 1 : finalTokens;
 }
 
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cached: number;
+  thinking: number;
+}
+
 /**
  * Calculate input, output, and total costs based on model lookup and token counts.
  * Lookup is case-insensitive and partial.
+ * Supports cached tokens discount (Gemini caching discount is 25% of input rate).
  */
 export function calculateCost(
   modelName: string,
   inputTokens: number,
-  outputTokens: number
+  outputTokens: number,
+  cachedTokens = 0
 ): { inputCost: number; outputCost: number; totalCost: number } {
   let rates = DEFAULT_RATES;
 
@@ -127,7 +136,8 @@ export function calculateCost(
     }
   }
 
-  const inputCost = (inputTokens / 1_000_000) * rates.inputRate;
+  const cachedRate = rates.inputRate * 0.25;
+  const inputCost = (inputTokens / 1_000_000) * rates.inputRate + (cachedTokens / 1_000_000) * cachedRate;
   const outputCost = (outputTokens / 1_000_000) * rates.outputRate;
   const totalCost = inputCost + outputCost;
 
@@ -137,16 +147,23 @@ export function calculateCost(
 /**
  * Combines estimation and pricing to return a marker string for the footer:
  * [footer: modelName | inputTokens | outputTokens | formattedCost]
- * where cost is formatted to 6 decimal places.
+ * or for official usage:
+ * [footer: modelName | inputTokens | outputTokens | formattedCost | cached | thinking]
  */
 export function formatFooterMarker(
   modelName: string,
   inputPrompt: string,
-  outputText: string
+  outputText: string,
+  usage?: TokenUsage
 ): string {
-  const inputTokens = estimateTokens(inputPrompt);
-  const outputTokens = estimateTokens(outputText);
-  const { totalCost } = calculateCost(modelName, inputTokens, outputTokens);
-
-  return `[footer: ${modelName} | ${inputTokens} | ${outputTokens} | $${totalCost.toFixed(6)}]`;
+  if (usage) {
+    const { input, output, cached, thinking } = usage;
+    const { totalCost } = calculateCost(modelName, input, output, cached);
+    return `[footer: ${modelName} | ${input} | ${output} | $${totalCost.toFixed(6)} | ${cached} | ${thinking}]`;
+  } else {
+    const inputTokens = estimateTokens(inputPrompt);
+    const outputTokens = estimateTokens(outputText);
+    const { totalCost } = calculateCost(modelName, inputTokens, outputTokens);
+    return `[footer: ${modelName} (Estimated / 预估) | ${inputTokens} | ${outputTokens} | $${totalCost.toFixed(6)}]`;
+  }
 }

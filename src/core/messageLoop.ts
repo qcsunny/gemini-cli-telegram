@@ -31,6 +31,9 @@ async function readThoughtFromTranscript(
   answerBuffer: string,
   turnStartTime: number
 ): Promise<{ thought: string; source: string } | null> {
+  if (process.env['VITEST'] || process.env['NODE_ENV'] === 'test') {
+    return null;
+  }
   const startTime = Date.now();
   const baseDir =
     process.env['ANTIGRAVITY_USER_DIR'] ||
@@ -436,7 +439,8 @@ export async function processMessage(
       const footerMarker = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
         finalPrompt,
-        answerBuffer
+        answerBuffer,
+        finalResult.usage
       );
       const footerHtml = markdownToHtml(footerMarker);
 
@@ -484,15 +488,37 @@ export async function processMessage(
           `Stderr (preview): ${finalResult.stderr?.substring(0, 1000)}\n` +
           `Stdout (preview): ${finalResult.output?.substring(0, 1000)}\n`);
         
-        const isAuthError = (finalResult.stderr || '').includes('authentication failed') || (finalResult.output || '').includes('authentication failed');
-        const isTerminated = (finalResult.stderr || '').includes('terminated due to error') || (finalResult.output || '').includes('terminated due to error');
+        const stderrStr = finalResult.stderr || '';
+        const stdoutStr = finalResult.output || '';
+        
+        const isAuthError = stderrStr.includes('authentication failed') || stdoutStr.includes('authentication failed') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required');
+        const isTerminated = stderrStr.includes('terminated due to error') || stdoutStr.includes('terminated due to error');
         
         let errorReason = '执行失败';
-        if (isAuthError) errorReason = '认证失败或超时 (authentication failed or timed out)';
+        if (isAuthError) errorReason = '认证已过期或未登录 (Authentication expired or not logged in)';
         if (isTerminated) errorReason = '代理进程异常终止 (Agent execution terminated due to error)';
         if (finalResult.isTimeout) errorReason = '执行被用户或系统超时取消 (Timeout/Aborted)';
 
-        await reply.send(`${ICONS.error} ${errorReason}（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录并配置网络。管理员可查看后台日志获取详细 Trace。`);
+        let detailMsg = '';
+        const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        if (stdoutStr.includes('Welcome to the Antigravity CLI') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required')) {
+          detailMsg = `\n\n<b>提示</b>: 检测到本地 agy CLI 处于未登录状态，登录交互信息：\n<pre>Welcome to the Antigravity CLI. You are currently not signed in. Select login method: > 1. Google OAuth</pre>\n请通过 SSH 登录服务器运行 <code>agy auth login</code> 完成重新登录。`;
+        } else {
+          const lines: string[] = [];
+          if (stdoutStr.trim()) {
+            lines.push(...stdoutStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused')));
+          }
+          if (stderrStr.trim()) {
+            lines.push(...stderrStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused')));
+          }
+          const uniqueLines = Array.from(new Set(lines)).slice(0, 3);
+          if (uniqueLines.length > 0) {
+            detailMsg = `\n\n<b>错误详情</b>:\n<pre>${uniqueLines.map(escapeHtml).join('\n')}</pre>`;
+          }
+        }
+
+        await reply.send(`${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录并配置网络。${detailMsg}`);
       }
 
     // 6. Handle Autopilot autonomous loops

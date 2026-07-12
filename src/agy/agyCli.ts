@@ -20,6 +20,8 @@ import * as http from 'node:http';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
 import { loadUserConfig } from '../config/userConfig.js';
+// @ts-ignore
+import { DatabaseSync } from 'node:sqlite';
 
 
 // ─── Web2API (local Gemini via gemini-web2api) ────────────────────────────────
@@ -280,6 +282,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
   let contentBuf = '';
   let inThoughts = false;
   let thinkingTokens = 0;
+  let finalUsage: any = null;
   let thoughtStartTime = 0;
   let thoughtEndTime = 0;
 
@@ -312,14 +315,17 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
         const dataStr = trimmed.slice(6).trim();
         if (!dataStr) continue;
 
-          try {
-            const parsed = JSON.parse(dataStr);
+        try {
+          const parsed = JSON.parse(dataStr);
 
-            // Extract usage metadata if returned
-            const usage = parsed?.usageMetadata;
-            if (usage && usage.thinkingTokenCount) {
-              thinkingTokens = usage.thinkingTokenCount;
-            }
+             // Extract usage metadata if returned
+             const usage = parsed?.usageMetadata;
+             if (usage) {
+               finalUsage = usage;
+               if (usage.thinkingTokenCount) {
+                 thinkingTokens = usage.thinkingTokenCount;
+               }
+             }
 
             const parts = parsed?.candidates?.[0]?.content?.parts;
             if (parts && Array.isArray(parts)) {
@@ -357,7 +363,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
                 }
               }
             }
-          } catch {
+        } catch {
             // ignore incomplete SSE chunk lines
           }
       }
@@ -398,6 +404,17 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
     if (thoughtStartTime) {
       (finalResult as any).thinkingTime = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
       (finalResult as any).thinkingTokens = thinkingTokens;
+    }
+
+    if (finalUsage) {
+      const promptTokens = finalUsage.promptTokenCount ?? 0;
+      const cachedTokens = finalUsage.cachedContentTokenCount ?? 0;
+      finalResult.usage = {
+        input: promptTokens - cachedTokens,
+        output: finalUsage.candidatesTokenCount ?? 0,
+        cached: cachedTokens,
+        thinking: finalUsage.thinkingTokenCount ?? 0,
+      };
     }
 
     return finalResult;
@@ -530,6 +547,13 @@ export interface AgyRunResult {
   durationMs?: number;
   /** Whether the process was aborted/timed out */
   isTimeout?: boolean;
+  /** Optional token usage details */
+  usage?: {
+    input: number;
+    output: number;
+    cached: number;
+    thinking: number;
+  };
 }
 
 /**
@@ -748,9 +772,165 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         }
       }
 
-      resolve({ conversationId: resolvedConvId, output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout });
+      let usage: AgyRunResult['usage'] | undefined;
+      if (resolvedConvId) {
+        try {
+          const dbPath = path.join(getConversationsDir(), `${resolvedConvId}.db`);
+          usage = readUsageFromDatabase(dbPath);
+        } catch (e) {
+          logger.warn(`[agyCli] SQLite usage extraction failed: ${e}`);
+        }
+      }
+
+      resolve({ conversationId: resolvedConvId, output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage });
     });
   });
+}
+
+function parseVarint(data: Uint8Array, pos: number): { val: number; nextPos: number } {
+  let val = 0;
+  let shift = 0;
+  while (pos < data.length) {
+    const b = data[pos];
+    val |= (b & 0x7f) << shift;
+    pos++;
+    if (!(b & 0x80)) {
+      break;
+    }
+    shift += 7;
+  }
+  return { val, nextPos: pos };
+}
+
+function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | null {
+  let pos = 0;
+  while (pos < m.length) {
+    let pTag;
+    try {
+      pTag = parseVarint(m, pos);
+    } catch (e) {
+      break;
+    }
+    const tag = pTag.val;
+    pos = pTag.nextPos;
+    if (pos > m.length) break;
+    
+    const wireType = tag & 7;
+    const fieldNum = tag >> 3;
+    
+    if (fieldNum === 9 && wireType === 2) {
+      // Found field 9! Let's decode it
+      let pLen;
+      try {
+        pLen = parseVarint(m, pos);
+      } catch (e) {
+        break;
+      }
+      const len = pLen.val;
+      pos = pLen.nextPos;
+      if (pos + len > m.length) break;
+      
+      const subM = m.subarray(pos, pos + len);
+      let subPos = 0;
+      const usage = { input: 0, output: 0, cached: 0, thinking: 0 };
+      
+      while (subPos < subM.length) {
+        let pSubTag;
+        try {
+          pSubTag = parseVarint(subM, subPos);
+        } catch (e) {
+          break;
+        }
+        const subTag = pSubTag.val;
+        subPos = pSubTag.nextPos;
+        if (subPos > subM.length) break;
+        
+        const subWireType = subTag & 7;
+        const subFieldNum = subTag >> 3;
+        
+        if (subWireType === 0) { // Varint
+          let pSubVal;
+          try {
+            pSubVal = parseVarint(subM, subPos);
+          } catch (e) {
+            break;
+          }
+          const val = pSubVal.val;
+          subPos = pSubVal.nextPos;
+          
+          if (subFieldNum === 2) usage.input = val;
+          else if (subFieldNum === 3) usage.output = val;
+          else if (subFieldNum === 5) usage.cached = val;
+          else if (subFieldNum === 10) usage.thinking = val;
+        } else if (subWireType === 1) {
+          subPos += 8;
+        } else if (subWireType === 2) {
+          let pSubLen;
+          try {
+            pSubLen = parseVarint(subM, subPos);
+          } catch (e) {
+            break;
+          }
+          subPos = pSubLen.nextPos + pSubLen.val;
+        } else if (subWireType === 5) {
+          subPos += 4;
+        } else {
+          subPos++;
+        }
+      }
+      return usage;
+    } else {
+      // Skip this field
+      if (wireType === 0) {
+        let pVal;
+        try {
+          pVal = parseVarint(m, pos);
+        } catch (e) {
+          break;
+        }
+        pos = pVal.nextPos;
+      } else if (wireType === 1) {
+        pos += 8;
+      } else if (wireType === 2) {
+        let pLen;
+        try {
+          pLen = parseVarint(m, pos);
+        } catch (e) {
+          break;
+        }
+        pos = pLen.nextPos + pLen.val;
+      } else if (wireType === 5) {
+        pos += 4;
+      } else {
+        pos++;
+      }
+    }
+  }
+  return null;
+}
+
+function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefined {
+  try {
+    if (!fssync.existsSync(dbPath)) {
+      return undefined;
+    }
+    // @ts-ignore
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db.prepare('SELECT metadata FROM steps ORDER BY idx DESC').all() as any[];
+    db.close();
+    
+    for (const row of rows) {
+      if (row.metadata instanceof Uint8Array) {
+        const usage = extractUsageFromProto(row.metadata);
+        if (usage) {
+          return usage;
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn(`[agyCli] readUsageFromDatabase failed: ${e}`);
+  }
+  return undefined;
 }
 
 export const AVAILABLE_MODELS = [
