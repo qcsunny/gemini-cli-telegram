@@ -193,7 +193,7 @@ Thanks for reading! 🚀
   it('should dynamically truncate long thought-gemini blocks', () => {
     const longThought = 'A'.repeat(4000);
     const input = `Pre-text\n<thought-gemini time="1.5" tokens="500">\n${longThought}\n</thought-gemini>\nPost-text`;
-    const html = markdownToHtml(input);
+    const html = markdownToHtml(input, true);
     expect(html).toContain('……（已省略后续内容，超长思考摘要已被截断）');
     expect(html.length).toBeLessThan(4096);
   });
