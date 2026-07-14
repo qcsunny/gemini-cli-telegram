@@ -463,7 +463,7 @@ export async function processMessage(
         ...thoughtAndStatsHtmlChunks
       ];
 
-      if (finalHtmlMessages.length > 0) {
+      if (finalResult.exitCode === 0 && finalHtmlMessages.length > 0) {
         if (currentMessageId) {
           try {
             await reply.edit(currentMessageId, finalHtmlMessages[0]);
@@ -478,7 +478,7 @@ export async function processMessage(
             await reply.send(msgText);
           }
         }
-      } else if (!thoughtBuffer.trim() && finalResult.exitCode !== 0) {
+      } else if (finalResult.exitCode !== 0) {
         logger.error(`[messageLoop] DIAGNOSTIC - Execution Failed!\n` +
           `ExitCode: ${finalResult.exitCode}\n` +
           `Signal: ${finalResult.signal || 'none'}\n` +
@@ -507,10 +507,10 @@ export async function processMessage(
         } else {
           const lines: string[] = [];
           if (stdoutStr.trim()) {
-            lines.push(...stdoutStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused')));
+            lines.push(...stdoutStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused') || l.includes('not supported')));
           }
           if (stderrStr.trim()) {
-            lines.push(...stderrStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused')));
+            lines.push(...stderrStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused') || l.includes('not supported')));
           }
           const uniqueLines = Array.from(new Set(lines)).slice(0, 3);
           if (uniqueLines.length > 0) {
@@ -518,7 +518,16 @@ export async function processMessage(
           }
         }
 
-        await reply.send(`${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录并配置网络。${detailMsg}`);
+        const errorHtml = `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录并配置网络。${detailMsg}`;
+        if (currentMessageId) {
+          try {
+            await reply.edit(currentMessageId, errorHtml);
+          } catch (e) {
+            await reply.send(errorHtml);
+          }
+        } else {
+          await reply.send(errorHtml);
+        }
       }
 
     // 6. Handle Autopilot autonomous loops
