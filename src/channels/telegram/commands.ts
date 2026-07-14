@@ -400,20 +400,38 @@ export function registerCommands(
     }
 
     try {
-      // Create a plain text version for parsing the title (strips HTML tags)
-      const plainText = textToSave.replace(/<[^>]*>/g, '');
-      const headerLines = plainText.split('\n');
+      // Try to find the first H1-H6 HTML tag or Markdown header first
       let rawTitle = '';
-      for (const line of headerLines) {
-        const match = line.match(/^\s*#{1,6}\s+(.+)$/);
-        if (match) {
-          rawTitle = match[1].trim();
-          break;
+      
+      const hMatch = textToSave.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i);
+      if (hMatch) {
+        rawTitle = hMatch[1].replace(/<[^>]*>/g, '').trim();
+      }
+
+      if (!rawTitle) {
+        const markdownLines = textToSave.split('\n');
+        for (const line of markdownLines) {
+          const match = line.match(/^\s*#{1,6}\s+(.+)$/);
+          if (match) {
+            rawTitle = match[1].trim();
+            break;
+          }
         }
       }
 
       if (!rawTitle) {
-        for (const line of headerLines) {
+        // Fallback: replace HTML block tags and line breaks with newlines to preserve separation,
+        // then strip remaining tags and take the first non-empty line
+        const textWithLines = textToSave
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<\/p>/gi, '\n')
+          .replace(/<\/h[1-6]>/gi, '\n')
+          .replace(/<\/div>/gi, '\n')
+          .replace(/<\/li>/gi, '\n');
+        
+        const plainText = textWithLines.replace(/<[^>]*>/g, '');
+        const lines = plainText.split('\n');
+        for (const line of lines) {
           if (line.trim()) {
             rawTitle = line.trim();
             break;
