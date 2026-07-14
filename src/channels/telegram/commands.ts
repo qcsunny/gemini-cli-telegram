@@ -422,8 +422,8 @@ export function registerCommands(
 
       // Sanitize filename: keep Chinese, alphanumeric, and spaces
       let sanitizedTitle = rawTitle.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, '').trim();
-      if (sanitizedTitle.length > 80) {
-        sanitizedTitle = sanitizedTitle.substring(0, 80).trim();
+      if (sanitizedTitle.length > 30) {
+        sanitizedTitle = sanitizedTitle.substring(0, 30).trim();
       }
 
       if (!sanitizedTitle) {
