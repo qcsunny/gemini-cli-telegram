@@ -390,14 +390,19 @@ export function registerCommands(
       textToSave = replyToMessage.text || '';
     }
 
+    if (textToSave.startsWith('___RAW_HTML___')) {
+      textToSave = textToSave.substring('___RAW_HTML___'.length);
+    }
+
     if (!textToSave.trim()) {
       await ctx.reply(`${ICONS.warning} <b>The replied message has no content to save.</b>`, { parse_mode: 'HTML' });
       return;
     }
 
     try {
-      // Parse first markdown header as title
-      const headerLines = textToSave.split('\n');
+      // Create a plain text version for parsing the title (strips HTML tags)
+      const plainText = textToSave.replace(/<[^>]*>/g, '');
+      const headerLines = plainText.split('\n');
       let rawTitle = '';
       for (const line of headerLines) {
         const match = line.match(/^\s*#{1,6}\s+(.+)$/);
