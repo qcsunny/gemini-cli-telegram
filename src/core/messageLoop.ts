@@ -16,6 +16,7 @@ import { markdownToHtml } from '../channels/telegram/formatter.js';
 import { runAgyPrint, getModelCapabilities, extractThoughtAndContent } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker } from '../utils/pricing.js';
+import { messageCache } from '../utils/messageCache.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
 
@@ -467,15 +468,24 @@ export async function processMessage(
         if (currentMessageId) {
           try {
             await reply.edit(currentMessageId, finalHtmlMessages[0]);
+            if (answerBuffer.trim()) {
+              messageCache.set(currentMessageId, answerBuffer.trim());
+            }
           } catch (e) {
             logger.warn(`[messageLoop] Failed to edit first chunk: ${e}`);
           }
           for (let i = 1; i < finalHtmlMessages.length; i++) {
-            await reply.send(finalHtmlMessages[i]);
+            const msgId = await reply.send(finalHtmlMessages[i]);
+            if (msgId && answerBuffer.trim()) {
+              messageCache.set(msgId, answerBuffer.trim());
+            }
           }
         } else {
           for (const msgText of finalHtmlMessages) {
-            await reply.send(msgText);
+            const msgId = await reply.send(msgText);
+            if (msgId && answerBuffer.trim()) {
+              messageCache.set(msgId, answerBuffer.trim());
+            }
           }
         }
       } else if (finalResult.exitCode !== 0) {
