@@ -194,7 +194,6 @@ export async function processMessage(
   formatter: MessageFormatter,
 ): Promise<void> {
   const chatId = session.chatId ?? Number(session.sessionId);
-  const turnStartTime = Date.now();
   const signal = session.abortController.signal;
 
   if (signal.aborted) {
