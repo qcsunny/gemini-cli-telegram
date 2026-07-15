@@ -1,13 +1,11 @@
-/**
- * @license
- * Copyright 2026 Google LLC
- * SPDX-License-Identifier: Apache-2.0
- */
-
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { InputFile } from 'grammy';
 import type { Api } from 'grammy';
 import { markdownToHtml } from './formatter.js';
 import { logger } from '../../utils/logger.js';
+
+const execAsync = promisify(exec);
 
 export type MediaType =
   | 'photo'
@@ -59,6 +57,8 @@ function detectMediaType(filePath: string): MediaType {
 export function createTelegramSendMedia(
   api: Api,
   chatId: number,
+  token?: string,
+  proxy?: string,
 ): SendMediaFn {
   return async (
     filePath: string,
@@ -75,26 +75,81 @@ export function createTelegramSendMedia(
       `Sending ${resolvedType} to chat ${chatId}: ${filePath}`,
     );
 
-    switch (resolvedType) {
-      case 'photo':
-        await api.sendPhoto(chatId, file, opts);
-        break;
-      case 'voice':
-        await api.sendVoice(chatId, file, opts);
-        break;
-      case 'audio':
-        await api.sendAudio(chatId, file, opts);
-        break;
-      case 'video':
-        await api.sendVideo(chatId, file, opts);
-        break;
-      case 'animation':
-        await api.sendAnimation(chatId, file, opts);
-        break;
-      case 'document':
-      default:
-        await api.sendDocument(chatId, file, opts);
-        break;
+    try {
+      switch (resolvedType) {
+        case 'photo':
+          await api.sendPhoto(chatId, file, opts);
+          break;
+        case 'voice':
+          await api.sendVoice(chatId, file, opts);
+          break;
+        case 'audio':
+          await api.sendAudio(chatId, file, opts);
+          break;
+        case 'video':
+          await api.sendVideo(chatId, file, opts);
+          break;
+        case 'animation':
+          await api.sendAnimation(chatId, file, opts);
+          break;
+        case 'document':
+        default:
+          await api.sendDocument(chatId, file, opts);
+          break;
+      }
+    } catch (e) {
+      logger.error(`Failed to send media via grammy api: ${e}`);
+      if (token) {
+        logger.info(`Attempting fallback media delivery via curl...`);
+        try {
+          const methodMap: Record<MediaType, string> = {
+            photo: 'sendPhoto',
+            voice: 'sendVoice',
+            audio: 'sendAudio',
+            video: 'sendVideo',
+            animation: 'sendAnimation',
+            document: 'sendDocument',
+            auto: 'sendDocument',
+          };
+          const method = methodMap[resolvedType] || 'sendDocument';
+          const fieldMap: Record<MediaType, string> = {
+            photo: 'photo',
+            voice: 'voice',
+            audio: 'audio',
+            video: 'video',
+            animation: 'animation',
+            document: 'document',
+            auto: 'document',
+          };
+          const field = fieldMap[resolvedType] || 'document';
+          
+          let cmd = `curl -s -X POST "https://api.telegram.org/bot${token}/${method}"`;
+          if (proxy) {
+            cmd += ` -x "${proxy}"`;
+          }
+          cmd += ` -F "chat_id=${chatId}"`;
+          cmd += ` -F "${field}=@${filePath}"`;
+          if (caption) {
+            cmd += ` -F "caption=${markdownToHtml(caption)}"`;
+            cmd += ` -F "parse_mode=HTML"`;
+          }
+          
+          logger.info(`Executing curl fallback command`);
+          const { stdout } = await execAsync(cmd);
+          const res = JSON.parse(stdout);
+          if (res.ok) {
+            logger.info(`Curl fallback delivered media successfully.`);
+            return;
+          } else {
+            throw new Error(res.description || 'Unknown error');
+          }
+        } catch (curlErr) {
+          logger.error(`Curl fallback also failed: ${curlErr}`);
+          throw e; // throw the original error
+        }
+      } else {
+        throw e;
+      }
     }
   };
 }

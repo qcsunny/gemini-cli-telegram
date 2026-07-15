@@ -810,7 +810,7 @@ export class TelegramBot {
     }
     this.bot = new Bot(token, { client: clientConfig });
     this.sessionManager = new SessionManager(
-      (chatId) => createTelegramSendMedia(this.bot.api, chatId),
+      (chatId) => createTelegramSendMedia(this.bot.api, chatId, token, options.proxy),
     );
     this.defaultOptions = {
       cwd: options.cwd || process.cwd(),
