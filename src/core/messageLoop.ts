@@ -20,7 +20,11 @@ import { messageCache } from '../utils/messageCache.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
 
-async function detectAndSendNewArtifacts(session: DaemonSession, conversationId: string): Promise<void> {
+async function detectAndSendNewArtifacts(
+  session: DaemonSession,
+  conversationId: string,
+  turnStartTime: number,
+): Promise<void> {
   if (!session.sendMedia || !conversationId) return;
 
   const baseDir =
@@ -30,7 +34,6 @@ async function detectAndSendNewArtifacts(session: DaemonSession, conversationId:
   const artifactDir = path.join(baseDir, 'brain', conversationId);
   try {
     const files = await fs.readdir(artifactDir).catch(() => [] as string[]);
-    const now = Date.now();
     for (const file of files) {
       if (file.startsWith('.') || file === 'scratch' || file === '.system_generated' || file === '.user_uploaded') {
         continue;
@@ -39,9 +42,9 @@ async function detectAndSendNewArtifacts(session: DaemonSession, conversationId:
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat || !stat.isFile()) continue;
 
-      // Detect files created or modified in the last 3 minutes (180000ms)
-      const fileAgeMs = now - stat.mtimeMs;
-      if (fileAgeMs < 180000) {
+      // Only detect files created or modified since the current turn started
+      // We subtract 2000ms (2s) to handle any clock skew or system clock resolution issues
+      if (stat.mtimeMs >= turnStartTime - 2000) {
         const ext = path.extname(file).toLowerCase();
         let mediaType: 'photo' | 'video' | 'audio' | 'voice' | 'document' = 'document';
         if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) {
@@ -64,6 +67,8 @@ async function detectAndSendNewArtifacts(session: DaemonSession, conversationId:
     logger.warn(`[messageLoop] Error detecting new artifacts: ${e}`);
   }
 }
+
+
 
 function normalizeText(text: string): string {
   const { content } = extractThoughtAndContent(text);
@@ -189,6 +194,7 @@ export async function processMessage(
   formatter: MessageFormatter,
 ): Promise<void> {
   const chatId = session.chatId ?? Number(session.sessionId);
+  const turnStartTime = Date.now();
   const signal = session.abortController.signal;
 
   if (signal.aborted) {
@@ -535,7 +541,7 @@ export async function processMessage(
         }
         
         if (finalResult.conversationId) {
-          await detectAndSendNewArtifacts(session, finalResult.conversationId);
+          await detectAndSendNewArtifacts(session, finalResult.conversationId, turnStartTime);
         }
       } else if (finalResult.exitCode !== 0) {
         logger.error(`[messageLoop] DIAGNOSTIC - Execution Failed!\n` +
