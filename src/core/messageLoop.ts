@@ -20,6 +20,51 @@ import { messageCache } from '../utils/messageCache.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
 
+async function detectAndSendNewArtifacts(session: DaemonSession, conversationId: string): Promise<void> {
+  if (!session.sendMedia || !conversationId) return;
+
+  const baseDir =
+    process.env['ANTIGRAVITY_USER_DIR'] ||
+    path.join(os.homedir(), '.gemini', 'antigravity-cli');
+
+  const artifactDir = path.join(baseDir, 'brain', conversationId);
+  try {
+    const files = await fs.readdir(artifactDir).catch(() => [] as string[]);
+    const now = Date.now();
+    for (const file of files) {
+      if (file.startsWith('.') || file === 'scratch' || file === '.system_generated' || file === '.user_uploaded') {
+        continue;
+      }
+      const filePath = path.join(artifactDir, file);
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (!stat || !stat.isFile()) continue;
+
+      // Detect files created or modified in the last 3 minutes (180000ms)
+      const fileAgeMs = now - stat.mtimeMs;
+      if (fileAgeMs < 180000) {
+        const ext = path.extname(file).toLowerCase();
+        let mediaType: 'photo' | 'video' | 'audio' | 'voice' | 'document' = 'document';
+        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) {
+          mediaType = 'photo';
+        } else if (['.mp4', '.mov', '.avi', '.mkv'].includes(ext)) {
+          mediaType = 'video';
+        } else if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) {
+          mediaType = 'audio';
+        }
+
+        logger.info(`[messageLoop] Automatically sending generated artifact file to Telegram: ${file} (type: ${mediaType})`);
+        try {
+          await session.sendMedia(filePath, mediaType, `🎨 Generated: ${file}`);
+        } catch (e) {
+          logger.error(`[messageLoop] Failed to send media ${file}: ${e}`);
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn(`[messageLoop] Error detecting new artifacts: ${e}`);
+  }
+}
+
 function normalizeText(text: string): string {
   const { content } = extractThoughtAndContent(text);
   let clean = content.replace(/\r\n/g, '\n');
@@ -487,6 +532,10 @@ export async function processMessage(
               messageCache.set(msgId, answerBuffer.trim());
             }
           }
+        }
+        
+        if (finalResult.conversationId) {
+          await detectAndSendNewArtifacts(session, finalResult.conversationId);
         }
       } else if (finalResult.exitCode !== 0) {
         logger.error(`[messageLoop] DIAGNOSTIC - Execution Failed!\n` +
