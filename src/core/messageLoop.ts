@@ -560,7 +560,7 @@ export async function processMessage(
 
 
       // 5. Final full rendering of response text (supports RichText and structure-aware multi-chunk partitioning)
-      if (thinkingMessageId) {
+      if (thinkingMessageId && !isThinkingFinalized) {
         try {
           await reply.delete(thinkingMessageId);
         } catch (e) {
@@ -602,10 +602,15 @@ export async function processMessage(
         thoughtAndStatsHtmlChunks.push(...chunks);
       }
 
-      const finalHtmlMessages = [
-        ...bodyHtmlChunks,
-        ...thoughtAndStatsHtmlChunks
-      ];
+      const finalHtmlMessages = isRichSingleMessage
+        ? [
+            ...thoughtAndStatsHtmlChunks,
+            ...bodyHtmlChunks
+          ]
+        : [
+            ...bodyHtmlChunks,
+            ...thoughtAndStatsHtmlChunks
+          ];
 
       if (finalResult.exitCode === 0 && finalHtmlMessages.length > 0) {
         if (currentMessageId) {
