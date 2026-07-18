@@ -273,7 +273,9 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
   return new Promise((resolve, reject) => {
     let outputBuf = '';
     let inReasoning = false;
+    let chunkCount = 0;
     const req = http.request(reqOptions, (res) => {
+      logger.info(`[web2api] Response status=${res.statusCode}`);
       const decoder = new StringDecoder('utf-8');
       let buf = '';
 
@@ -283,12 +285,14 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
         buf = lines.pop() ?? '';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
+          chunkCount++;
           const data = line.slice(6).trim();
           if (data === '[DONE]') continue;
           try {
             const parsed = JSON.parse(data);
             const delta = parsed?.choices?.[0]?.delta?.content ?? '';
             const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? '';
+            if (chunkCount <= 5) logger.info(`[web2api] chunk#${chunkCount} delta="${delta}" reasoningLen=${reasoning.length}`);
 
             if (reasoning) {
               if (!inReasoning) {
@@ -326,6 +330,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
           outputBuf += endTag;
           if (onChunk) onChunk(endTag);
         }
+        logger.info(`[web2api] Response ended. chunkCount=${chunkCount} outputLen=${outputBuf.length}`);
         opts.onEvent?.({ type: 'done' });
         // Persist the assistant reply in history for next turn
         if (outputBuf) {
@@ -335,6 +340,18 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
           const trimmed = history.length > MAX_MESSAGES ? history.slice(history.length - MAX_MESSAGES) : history;
           web2apiHistories.set(convId, trimmed);
         }
+        // Upstream returned no content (e.g. Gemini web rate-limit / empty reply).
+        // Surface a clear message instead of sending a blank message.
+        if (!outputBuf.trim()) {
+          logger.warn(`[web2api] Empty response from upstream for model=${modelId}`);
+          resolve({
+            conversationId: convId,
+            output: '',
+            exitCode: 1,
+            stderr: '⚠️ 上游返回为空，可能是 Gemini 网页端限流，请稍后重试。',
+          });
+          return;
+        }
         resolve({ conversationId: convId, output: outputBuf, exitCode: 0, stderr: '' });
       });
 
@@ -342,6 +359,10 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
     });
 
     req.on('error', reject);
+    req.setTimeout(120000, () => {
+      logger.error(`[web2api] Request timeout after 120s for model=${modelId}`);
+      req.destroy(new Error('web2api request timeout'));
+    });
 
     signal?.addEventListener('abort', () => {
       logger.debug('[web2api] Aborting request');
@@ -370,6 +391,8 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   'Web2API: Gemini 3.5 Flash Thinking Lite': { supportsThinkingSummary: true },
   'Web2API: Gemini 3.1 Pro': { supportsThinkingSummary: true },
   'Web2API: Gemini 3.5 Flash': { supportsThinkingSummary: true },
+  'Web2API: Gemini Flash Lite': { supportsThinkingSummary: true },
+  'Web2API: Gemini Auto': { supportsThinkingSummary: true },
   // Claude extended-thinking models — must be declared explicitly since they
   // don't contain 'gemini' in their name (the heuristic below would miss them).
   'Claude Sonnet 4.6 (Thinking)': { supportsThinkingSummary: true },
@@ -382,6 +405,12 @@ export function getModelCapabilities(modelName?: string): ModelCapabilities {
   }
   if (MODEL_CAPABILITIES[modelName]) {
     return MODEL_CAPABILITIES[modelName];
+  }
+  // Any model routed through the local web2api service is treated as supporting
+  // thinking summary, regardless of its display name. This keeps renamed or
+  // custom web2api models on the rich (Option A/B/C) render path.
+  if (isWeb2ApiModel(modelName)) {
+    return { supportsThinkingSummary: true };
   }
   // Heuristic: Any model containing 'gemini' in its name is treated as supporting thinking summary.
   // This allows extensibility so future models require no Telegram layer modifications.

@@ -13,12 +13,85 @@ import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput, St
 import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
 import { markdownToHtml } from '../channels/telegram/formatter.js';
-import { runAgyPrint, getModelCapabilities, extractThoughtAndContent } from '../agy/agyCli.js';
+import { runAgyPrint, extractThoughtAndContent, getModelCapabilities } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
+
+/**
+ * Overall guard for a single model run. The underlying web2api/http request has
+ * its own socket timeout, but if a response hangs before that fires (e.g. an
+ * upstream stall with no bytes sent), the Promise would never resolve and the
+ * user would see a silent "no reply". This wrapper guarantees the call always
+ * settles, surfacing a clear error instead of hanging forever.
+ */
+const MODEL_RUN_TIMEOUT_MS = 150_000;
+
+async function withTimeout<T>(promise: Promise<T>, modelLabel: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(
+        `模型 \`${modelLabel}\` 在 ${MODEL_RUN_TIMEOUT_MS / 1000}s 内无响应（疑似上游服务挂起）。请稍后重试，或切换到其它模型。`
+      ));
+    }, MODEL_RUN_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Web2API (Gemini web2api) frequently returns the whole answer wrapped in a
+ * single fenced code block (e.g. ```markdown ... ```). The markdown renderer
+ * treats a fenced block as literal code, so headings / bold / tables inside are
+ * lost. If the ENTIRE content is wrapped in exactly one fence (language
+ * `markdown` or empty), strip the fence so the inner markdown renders normally.
+ * Content containing multiple or inline code blocks is left untouched.
+ */
+function stripWholeMessageCodeFence(text: string): string {
+  const trimmed = text.trim();
+  const fenceMatch = /^```([a-zA-Z0-9_-]*)\n([\s\S]*)\n```$/m.exec(trimmed);
+  if (!fenceMatch) return text;
+  const lang = (fenceMatch[1] || '').toLowerCase();
+  // Only strip when it's a markdown/empty fence wrapping the whole message.
+  if (lang && lang !== 'markdown' && lang !== 'md') return text;
+  return fenceMatch[2];
+}
+
+/**
+ * Gemini (web2api) sometimes emits a fenced code block whose opening/closing
+ * ``` delimiter is glued to preceding text on the same line (e.g.
+ * "示例）：```python"). The markdown parser only recognizes a fence when the
+ * ``` sits on its own line, so a mid-line delimiter is rendered as literal
+ * text and the trailing content after the (unterminated) block is lost.
+ * Insert a newline so every ``` delimiter starts its own line.
+ */
+function normalizeCodeFences(text: string): string {
+  // Opening fence glued to preceding text: "示例）：```python" -> put it on its own line
+  let out = text.replace(/([^\n`])```([a-zA-Z0-9_+-]*)/g, '$1\n```$2');
+  // Closing fence glued to preceding text: "code```" -> put it on its own line
+  out = out.replace(/([^\n`])```/g, '$1\n```');
+  return out;
+}
+
+/**
+ * Defense-in-depth: if a web-search / extensions result card leaks past the
+ * server filter, strip blocks that look like Gemini's search-result JSON
+ * ({"heading":..,"actions":{"open_url":..}}) so they are never rendered as a
+ * code block in Telegram.
+ */
+function stripSearchResultPayloads(text: string): string {
+  return text
+    .replace(/```(?:json)?\s*\{[^{}]*"open_url"[^{}]*\}\s*```/g, '')
+    .replace(/\{[^{}]*"heading"[^{}]*"subheading"[^{}]*\}/g, '')
+    .replace(/\{\s*"actions"\s*:\s*\{[^{}]*"open_url"[^{}]*\}\s*\}/g, '');
+}
+
 
 async function detectAndSendNewArtifacts(
   session: DaemonSession,
@@ -226,10 +299,12 @@ export async function processMessage(
   let lastEditTime = 0;
   let isFinished = false;
   let isDone = false;
+  let isThinkingFinalized = false;
   let activeUpdatePromise: Promise<any> = Promise.resolve();
 
   const capabilities = getModelCapabilities(session.model);
-  const isRichSingleMessage = capabilities.supportsThinkingSummary;
+  const parseMode = session.settings?.telegram?.parseMode || 'RichText';
+  const isRichSingleMessage = !!reply.sendRichDraft && (capabilities.supportsThinkingSummary || parseMode === 'RichText');
 
   // Stream editing helper
   const updateMessageStream = async (isFinal = false) => {
@@ -276,7 +351,7 @@ export async function processMessage(
           }
         } else {
           const thoughtTrimmed = thoughtBuffer.trim();
-          if (thoughtTrimmed) {
+          if (thoughtTrimmed && !isThinkingFinalized) {
             const prefix = isFinal
               ? '🧠 思考过程 (Thinking Process)\n\n'
               : '🧠 正在思考... (Thinking...)\n\n';
@@ -322,6 +397,7 @@ export async function processMessage(
       const maxAttempts = 3;
       let success = false;
       let lastResult: any = null;
+      let lastErrorMessage = '';
 
       let thoughtEventCount = 0;
       let textEventCount = 0;
@@ -333,13 +409,14 @@ export async function processMessage(
         thoughtBuffer = '';
         answerBuffer = '';
         isDone = false;
+        isThinkingFinalized = false;
         thoughtEventCount = 0;
         textEventCount = 0;
 
         try {
           logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
           turnStartTime = Date.now();
-          const result = await runAgyPrint({
+          const result = await withTimeout(runAgyPrint({
             prompt: finalPrompt,
             cwd,
             conversationId: session.conversationId,
@@ -360,6 +437,19 @@ export async function processMessage(
               if (event.type === 'thought') {
                 thoughtBuffer += event.content || '';
               } else if (event.type === 'text') {
+                if (thinkingMessageId && !isThinkingFinalized) {
+                  isThinkingFinalized = true;
+                  const msgId = thinkingMessageId;
+                  const finalThought = '🧠 思考过程 (Thinking Process)\n\n' + thoughtBuffer.trim();
+                  activeUpdatePromise = activeUpdatePromise.then(async () => {
+                    try {
+                      logger.info(`[messageLoop] Finalizing thinking draft messageId=${msgId}`);
+                      await reply.edit(msgId, finalThought);
+                    } catch (err) {
+                      logger.warn(`[messageLoop] Failed to finalize thinking draft: ${err}`);
+                    }
+                  });
+                }
                 answerBuffer += event.content || '';
               } else if (event.type === 'done') {
                 isDone = true;
@@ -372,7 +462,7 @@ export async function processMessage(
                 logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
               });
             }
-          });
+          }), modelToUse || session.model || 'unknown');
 
           lastResult = result;
 
@@ -419,7 +509,10 @@ export async function processMessage(
               continue;
             }
           }
-          throw e;
+          // Capture the error so the final render block can surface a clear,
+          // user-facing message instead of leaving the chat silently unanswered.
+          lastErrorMessage = errMsg;
+          break;
         }
       }
 
@@ -446,7 +539,7 @@ export async function processMessage(
       // markdownToHtml renders it, or a second <details> block will appear.
       {
         const parsed = extractThoughtAndContent(answerBuffer);
-        answerBuffer = parsed.content;
+        answerBuffer = stripSearchResultPayloads(normalizeCodeFences(stripWholeMessageCodeFence(parsed.content)));
         if (parsed.thought && thoughtBuffer.length === 0) {
           // Promote inline thought to thoughtBuffer if not already set by onEvent
           thoughtBuffer = parsed.thought;
@@ -554,10 +647,15 @@ export async function processMessage(
         
         const stderrStr = finalResult.stderr || '';
         const stdoutStr = finalResult.output || '';
-        
+
+        // Friendly, user-facing upstream messages (e.g. web2api empty-response
+        // warning) are shown verbatim WITHOUT the generic "执行失败 / agy CLI"
+        // prefix, since they are not CLI/login errors.
+        const isFriendlyUpstreamMsg = !!stderrStr.trim() && /[⚠️❌]/.test(stderrStr) && !/(failed|Error|refused|terminated)/.test(stderrStr);
+
         const isAuthError = stderrStr.includes('authentication failed') || stdoutStr.includes('authentication failed') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required');
         const isTerminated = stderrStr.includes('terminated due to error') || stdoutStr.includes('terminated due to error');
-        
+
         let errorReason = '执行失败';
         if (isAuthError) errorReason = '认证已过期或未登录 (Authentication expired or not logged in)';
         if (isTerminated) errorReason = '代理进程异常终止 (Agent execution terminated due to error)';
@@ -566,7 +664,9 @@ export async function processMessage(
         let detailMsg = '';
         const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-        if (stdoutStr.includes('Welcome to the Antigravity CLI') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required')) {
+        if (isFriendlyUpstreamMsg) {
+          detailMsg = `\n\n${escapeHtml(stderrStr.trim())}`;
+        } else if (stdoutStr.includes('Welcome to the Antigravity CLI') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required')) {
           detailMsg = `\n\n<b>提示</b>: 检测到本地 agy CLI 处于未登录状态，登录交互信息：\n<pre>Welcome to the Antigravity CLI. You are currently not signed in. Select login method: > 1. Google OAuth</pre>\n请通过 SSH 登录服务器运行 <code>agy auth login</code> 完成重新登录。`;
         } else {
           const lines: string[] = [];
@@ -582,7 +682,9 @@ export async function processMessage(
           }
         }
 
-        const errorHtml = `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。请确认您的本地 \`agy\` CLI 已正确登录并配置网络。${detailMsg}`;
+        const errorHtml = isFriendlyUpstreamMsg
+          ? `${escapeHtml(stderrStr.trim())}`
+          : `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。${lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : '请确认您的本地 \`agy\` CLI 已正确登录并配置网络。'}${detailMsg}`;
         if (currentMessageId) {
           try {
             await reply.edit(currentMessageId, errorHtml);
