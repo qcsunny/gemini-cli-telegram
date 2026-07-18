@@ -490,7 +490,7 @@ export async function processMessage(
       const footerMarker = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
         finalPrompt,
-        answerBuffer,
+        answerBuffer + (thoughtBuffer.trim() ? '\n' + thoughtBuffer.trim() : ''),
         finalResult.usage
       );
       const footerHtml = markdownToHtml(footerMarker);

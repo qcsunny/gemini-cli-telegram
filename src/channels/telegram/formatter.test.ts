@@ -324,6 +324,13 @@ Thanks for reading! 🚀
       expect(result.endsWith('<br/>')).toBe(false);
       expect(result.endsWith('<br />')).toBe(false);
     });
+
+    it('should convert LaTeX math brackets to Telegram math tags', () => {
+      const markdown = 'Inline: \\(a^2 + b^2 = c^2\\) and block: \\[\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n\\]';
+      const html = markdownToHtml(markdown);
+      expect(html).toContain('<tg-math>a^2 + b^2 = c^2</tg-math>');
+      expect(html).toContain('<tg-math-block>\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n</tg-math-block>');
+    });
   });
 });
 

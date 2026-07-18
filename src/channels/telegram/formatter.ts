@@ -804,7 +804,12 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
 }
 
 function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
-  const tokens = md.parse(markdown ?? '', {}) as any as MarkdownToken[];
+  let processed = markdown ?? '';
+  if (isHtml) {
+    processed = processed.replace(/\\\[([\s\S]+?)\\\]/g, 'LATEXBLOCKSTART$1LATEXBLOCKEND');
+    processed = processed.replace(/\\\(([\s\S]+?)\\\)/g, 'LATEXINLINESTART$1LATEXINLINEEND');
+  }
+  const tokens = md.parse(processed, {}) as any as MarkdownToken[];
   const state: RenderState = {
     text: '',
     styles: [],
@@ -1609,8 +1614,19 @@ function convertMath(html: string): string {
   return parts.map(part => {
     if (/^<pre/i.test(part.trim())) return part;
     let content = part;
+    
+    // 1. Convert custom LaTeX placeholders to Telegram math tags
+    content = content.replace(/LATEXBLOCKSTART([\s\S]+?)LATEXBLOCKEND/g, '<tg-math-block>$1</tg-math-block>');
+    content = content.replace(/LATEXINLINESTART([\s\S]+?)LATEXINLINEEND/g, '<tg-math>$1</tg-math>');
+
+    // 2. Convert standard $$ ... $$ and $ ... $
     content = content.replace(/\$\$([\s\S]+?)\$\$/g, '<tg-math-block>$1</tg-math-block>');
     content = content.replace(/\$([^\s$](?:[^$\n\r]*?[^\s$])?)\$/g, '<tg-math>$1</tg-math>');
+
+    // 3. Convert any leftover direct block or inline LaTeX delimiters
+    content = content.replace(/\\\[([\s\S]+?)\\\]/g, '<tg-math-block>$1</tg-math-block>');
+    content = content.replace(/\\\(([\s\S]+?)\\\)/g, '<tg-math>$1</tg-math>');
+    
     return content;
   }).join('');
 }
