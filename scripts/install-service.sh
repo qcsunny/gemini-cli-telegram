@@ -24,7 +24,7 @@ SCAN="🔍"
 BOT="🤖"
 
 # --- Configuration ---
-SERVICE_NAME="opencode-bot"
+SERVICE_NAME="gemini-telegram"
 NODE_PATH=$(which node)
 OS_TYPE="$(uname)"
 
@@ -36,7 +36,7 @@ scan_instances() {
 
     local found=0
     # Cari proses node yang menjalankan bot
-    ps aux | grep "node" | grep "dist/index.js" | grep -v grep | awk '{print $2}' | while read pid; do
+    ps aux | grep "node" | grep "dist/cli.js" | grep -v grep | awk '{print $2}' | while read pid; do
         found=1
         # Cari Working Directory (CWD)
         if [ "$OS_TYPE" == "Darwin" ]; then
@@ -128,7 +128,9 @@ run_setup() {
     <key>ProgramArguments</key>
     <array>
         <string>$NODE_PATH</string>
-        <string>dist/index.js</string>
+        <string>dist/cli.js</string>
+        <string>start</string>
+        <string>--live</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$BOT_DIR</string>
@@ -152,14 +154,14 @@ run_setup() {
         SERVICE_PATH="/etc/systemd/system/$SERVICE_NAME.service"
         sudo bash -c "cat << SYSTEMD > $SERVICE_PATH
 [Unit]
-Description=OpenCode Telegram Bot
+Description=Gemini Telegram Bot Service
 After=network.target
 
 [Service]
 Type=simple
 User=$USER_NAME
 WorkingDirectory=$BOT_DIR
-ExecStart=$NODE_PATH dist/index.js
+ExecStart=$NODE_PATH dist/cli.js start --live
 Restart=always
 RestartSec=10
 StandardOutput=append:$BOT_DIR/telegram-bot.log
@@ -202,7 +204,7 @@ case $choice in
         ;;
     2)
         echo -e "${RED}${PROGRESS} Mematikan semua instance bot...${NC}"
-        ps aux | grep "node" | grep "dist/index.js" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
+        ps aux | grep "node" | grep "dist/cli.js" | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null
         echo -e "${GREEN}${CHECK} Semua bot telah dimatikan.${NC}"
         ;;
     3)
