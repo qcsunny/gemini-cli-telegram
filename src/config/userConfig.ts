@@ -20,6 +20,7 @@ export interface UserConfig {
   proxy?: string;
   notebookPath?: string;
   geminiApiKey?: string;
+  deepseekApiKey?: string;
 }
 
 export function configExists(): boolean {

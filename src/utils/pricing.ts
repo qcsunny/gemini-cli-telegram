@@ -12,6 +12,16 @@ interface PricingInfo {
 // Pricing matrix based on active models
 const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
+    // DeepSeek V4 Pro
+    pattern: /deepseek.*pro/i,
+    rates: { inputRate: 0.435, outputRate: 0.87 }
+  },
+  {
+    // DeepSeek V4 Flash
+    pattern: /deepseek.*flash/i,
+    rates: { inputRate: 0.14, outputRate: 0.28 }
+  },
+  {
     // Claude Opus (Thinking)
     pattern: /opus/i,
     rates: { inputRate: 15.00, outputRate: 75.00 }

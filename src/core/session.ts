@@ -12,7 +12,7 @@ import { logger } from '../utils/logger.js';
 import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './types.js';
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd } from '../agy/conversationStore.js';
-import { clearWeb2ApiHistory } from '../agy/agyCli.js';
+import { clearWeb2ApiHistory, clearDeepSeekHistory } from '../agy/agyCli.js';
 
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
 
@@ -344,6 +344,7 @@ export class SessionManager {
       await deleteConversation(chatId);
       if (convId) {
         clearWeb2ApiHistory(convId);
+        clearDeepSeekHistory(convId);
       }
     } catch (e) {
       logger.warn(`Error deleting conversation for chat ${chatId}: ${e}`);

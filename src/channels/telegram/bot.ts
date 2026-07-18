@@ -916,6 +916,7 @@ export class TelegramBot {
       { command: 'schedule', description: 'Schedule a message' },
       { command: 'autopilot', description: 'Auto-reply until goal achieved' },
       { command: 'resume', description: 'List or resume a previous session' },
+      { command: 'save', description: 'Save formatted response to inbox' },
       { command: 'model', description: 'Switch model (starts new session)' },
       { command: 'compact', description: 'Compress chat history' },
       { command: 'addfolder', description: 'Add a folder for read+write access' },

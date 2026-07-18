@@ -60,6 +60,20 @@ describe('Pricing and Token Estimation', () => {
       expect(cost.outputCost).toBeCloseTo(12.00, 8);
       expect(cost.totalCost).toBeCloseTo(14.00, 8);
     });
+
+    it('should calculate cost for DeepSeek Pro and Flash', () => {
+      // DeepSeek Pro: Input: $0.435 / 1M, Output: $0.87 / 1M
+      const proCost = calculateCost('DeepSeek: Pro Thinking', 1_000_000, 1_000_000);
+      expect(proCost.inputCost).toBeCloseTo(0.435, 8);
+      expect(proCost.outputCost).toBeCloseTo(0.87, 8);
+      expect(proCost.totalCost).toBeCloseTo(1.305, 8);
+
+      // DeepSeek Flash: Input: $0.14 / 1M, Output: $0.28 / 1M
+      const flashCost = calculateCost('DeepSeek: Flash', 1_000_000, 1_000_000);
+      expect(flashCost.inputCost).toBeCloseTo(0.14, 8);
+      expect(flashCost.outputCost).toBeCloseTo(0.28, 8);
+      expect(flashCost.totalCost).toBeCloseTo(0.42, 8);
+    });
   });
 
   describe('formatFooterMarker', () => {
