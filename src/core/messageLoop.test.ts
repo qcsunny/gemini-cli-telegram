@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processMessage } from './messageLoop.js';
 import { extractThoughtAndContent } from '../agy/agyCli.js';
-import type { MultimodalInput } from './types.js';
+import type { MultimodalInput, ChannelReply } from './types.js';
 
 // Mock agyCli module
 vi.mock('../agy/agyCli.js', async (importOriginal) => {
@@ -352,5 +352,60 @@ describe('processMessage', () => {
 
     // The stats footer is appended at the END as a separate message (via send).
     expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('btn_info_footer'));
+  });
+
+  it('Rich mode: thinking still gets its own leading message when thought arrives AFTER body text (interleaved)', async () => {
+    // Reproduces the regression: model interleaves thought + text tokens, so
+    // a body draft is created before the thinking message. The thought must
+    // still be shown as a separate leading message, not folded into the footer.
+    const input: MultimodalInput = { text: 'interleaved test' };
+
+    const richReply: ChannelReply = {
+      send: vi.fn().mockResolvedValue(700),
+      edit: vi.fn(),
+      sendPlain: vi.fn().mockResolvedValue(456),
+      editPlain: vi.fn(),
+      delete: vi.fn(),
+      sendRich: vi.fn().mockResolvedValue(701),
+      sendRichDraft: vi.fn().mockResolvedValue(702),
+      editRich: vi.fn(),
+      editRichDraft: vi.fn(),
+    };
+    const richFormatter = {
+      ...mockFormatter,
+      chunkText: vi.fn((text: string) => [text]),
+      truncateForStream: vi.fn((text: string) => text),
+    };
+
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      if (options.onEvent) {
+        options.onEvent({ type: 'text', content: 'body starts first' });
+        options.onEvent({ type: 'thought', content: 'thinking process' });
+        options.onEvent({ type: 'text', content: ' more body' });
+        options.onEvent({ type: 'done' });
+      }
+      return {
+        output: 'body starts first more body',
+        conversationId: 'conv-interleaved',
+        exitCode: 0,
+      };
+    });
+
+    await processMessage(mockSession, input, richReply, richFormatter);
+
+    // The thinking process must be sent as its OWN leading message via send (Rich).
+    const thinkingSent = richReply.send.mock.calls.some((c) =>
+      String(c[0]).includes('thinking process'),
+    );
+    expect(thinkingSent).toBe(true);
+
+    // It must NOT be folded into the footer (which contains the body + btn_info_footer).
+    const footerCall = richReply.send.mock.calls.find((c) =>
+      String(c[0]).includes('btn_info_footer'),
+    );
+    expect(footerCall).toBeDefined();
+    if (footerCall) {
+      expect(String(footerCall[0])).not.toContain('thinking process');
+    }
   });
 });

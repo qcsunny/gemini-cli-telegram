@@ -412,24 +412,28 @@ export async function processMessage(
         if (isRichSingleMessage) {
           // Phase 1 — thinking: stream the thought into its OWN message so it
           // appears BEFORE the answer body (matching the real model order:
-          // think first, then answer). The body draft is not started yet.
-          if (thoughtBuffer.trim() && answerBuffer.trim().length === 0) {
+          // think first, then answer). Created as soon as ANY thought content
+          // arrives, even if body text has already started (some models
+          // interleave thought + text tokens, so we must not gate creation on
+          // an empty answerBuffer — otherwise the thinking message is never
+          // shown and the thought falls through to the footer).
+          if (thoughtBuffer.trim()) {
             const thoughtHtml = markdownToHtml(
               { content: '', thought: thoughtBuffer.trim() },
-              true, // isStreaming: render as an open/collapsible "thinking" block
+              !isThinkingFinalized, // open/collapsible while still streaming
             );
             if (!thinkingMessageId) {
-              logger.debug(`[messageLoop] Sending live thinking message`);
+              logger.info(`[messageLoop] Sending live thinking message (len=${thoughtBuffer.trim().length})`);
               thinkingMessageId = await reply.send(thoughtHtml);
-            } else {
+            } else if (!isThinkingFinalized) {
               await reply.edit(thinkingMessageId, thoughtHtml);
             }
-            return;
           }
 
-          // Transition: thinking just finished, body about to start. Finalize the
-          // thinking message (collapse the open block) and reset the body draft so
-          // the answer begins as a fresh message AFTER the thinking message.
+          // Transition: body content has arrived and the thinking message is
+          // still open. Collapse it once (so it reads as a finished "thinking"
+          // block) and reset the body draft so the answer begins as a fresh
+          // message AFTER the thinking message.
           if (thinkingMessageId && thoughtBuffer.trim() && !isThinkingFinalized && answerBuffer.trim().length > 0) {
             try {
               const closedThought = markdownToHtml(
@@ -442,7 +446,21 @@ export async function processMessage(
               logger.warn(`[messageLoop] Failed to finalize thinking message: ${e}`);
             }
             isThinkingFinalized = true;
+            // If a body draft was created before thinking finalized (model
+            // interleaved thought + text), drop it — the body will be re-sent
+            // as a fresh draft so content isn't duplicated.
+            if (currentMessageId && reply.delete) {
+              try { await reply.delete(currentMessageId); } catch (e) {
+                logger.warn(`[messageLoop] Failed to delete pre-thinking body draft: ${e}`);
+              }
+            }
             currentMessageId = null; // body starts fresh, after thinking
+            committedLen = 0; // reset since the stale draft's content is gone
+          }
+
+          // If thinking is still open and no body yet, just keep streaming it.
+          if (thoughtBuffer.trim() && !isThinkingFinalized && answerBuffer.trim().length === 0) {
+            return;
           }
 
           const pending = answerBuffer.slice(committedLen);
