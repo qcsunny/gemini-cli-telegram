@@ -92,6 +92,9 @@ sudo ./scripts/install-service.sh
 | **守护进程日志** | `tail -f ~/.gemini-cli-telegram/daemon.log` |
 | **系统日志监控** | `sudo journalctl -u gemini-telegram -f` |
 
+> [!WARNING]
+> 服务已配置 `Restart=always`，进程异常退出后会被 systemd **自动拉起**。因此**不要直接用 `kill`/`pkill` 杀进程**——这会与 systemd 的自动重启机制冲突，导致服务在短时间内被反复拉起、日志与进程状态混乱。需要重启时请统一使用 `sudo systemctl restart gemini-telegram`；需要彻底停用时使用 `sudo systemctl stop gemini-telegram`。修改源码后也必须重新编译（`npm run build`）再重启服务，否则运行的仍是旧的 `dist`。
+
 ### 🔍 多维度错误诊断与隔离
 - **详尽诊断输出**：当本地 `agy` CLI 遭遇认证过期、代理进程异常终止、执行超时或网络异常时，系统会向 Telegram 前端反馈具体失败原因（如：认证失败、进程终止、超时取消等），并在后台日志输出包含 `ExitCode`、`Stderr` 预览的完整 Diagnostic 追踪。
 - **多路由数据隔离**：针对 Gemini 直接调用（Google Direct SDK）与网页端逆向调用（Web2API Proxy），其上下文对话历史数据独立维护在各自的映射容器中，杜绝多渠道并发请求时的上下文数据混淆。
@@ -132,6 +135,7 @@ sudo ./scripts/install-service.sh
 ### ✍️ 草稿路由与 `<tg-thinking>` 原生思考打字动效
 - **流式草稿渲染**：所有流式文字的中间打字状态均被自动路由至临时草稿箱写信接口 `sendRichDraft`（底层调用 Telegram 的 `sendRichMessageDraft`），打字输出极度丝滑且绝不触发消息重发。
 - **原生思考动画**：AI 在思考和生成阶段，流式输出尾部会自动附带 **`<tg-thinking>Thinking...</tg-thinking>`** 原生标签。这将在 Telegram 手机与桌面端激活官方最高等级的“动态呼吸气泡思考动效”，打造极致灵动的交互体验。
+- **草稿定稿固化（关键）**：根据 Telegram Bot API 10.1 的官方语义，通过 `sendRichMessageDraft` 发送的草稿本质是**临时预览（ephemeral preview）**，并不会持久化到聊天记录中。因此当完整回复生成完毕时，系统会**用真正的 `sendRichMessage` 把第一条消息固化为一条正式的持久消息**（而非再次刷新草稿），随后将剩余正文分块依次追加发送。这样无论回复多长，聊天窗口里从第一条消息的开头标题、第一段正文，直到最后一条消息，都 100% 连贯保留，绝不会出现第一条消息（或开头段落）被擦除、吞掉或截断的情况。统计脚注（模型、耗时、Token 消耗）始终收尾于最后一条消息。
 
 ### 🧩 结构化消息渲染与状态机解析 (Structured Message & Segment Parsing)
 - **结构化流式解析**：全链路重构为以 `StructuredMessage` 为核心的数据流。不再使用脆弱的全局正则切割原始字符串，而是通过状态机（State Machine）精确提取 `<thought>` 思考块、内容块、耗时和 Token 消耗。
