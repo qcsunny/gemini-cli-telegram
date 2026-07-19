@@ -8,6 +8,7 @@ import MarkdownIt from 'markdown-it';
 import markdownItCjkFriendly from 'markdown-it-cjk-friendly';
 import type { MessageFormatter, StructuredMessage } from '../../core/types.js';
 import type { RichBlock } from './richMessage.js';
+import type { RichText } from '@grammyjs/types/rich.js';
 import { extractThoughtBlocksAndSegments } from '../../agy/agyCli.js';
 
 const TELEGRAM_MAX_LENGTH = 4096;
@@ -1664,52 +1665,233 @@ export function markdownToMarkdownV2(markdown: string): string {
   return renderIRToMarkdownV2(ir);
 }
 
-// ── Rich Text Blocks (API 10.1) ──
+// ── Rich Text Blocks (Bot API 10.2) ──
+
+type RichTextEntity =
+  | { type: 'bold'; text: RichText }
+  | { type: 'italic'; text: RichText }
+  | { type: 'strikethrough'; text: RichText }
+  | { type: 'spoiler'; text: RichText }
+  | { type: 'code'; text: RichText }
+  | { type: 'url'; text: string; href: string };
+
+/**
+ * Convert markdown-it inline tokens into a native 10.2 `RichText` value
+ * (either a plain string, or an array of styled entities). This makes inline
+ * styling (bold/italic/code/links) fully native instead of relying on Telegram
+ * re-parsing raw markdown — which also renders CJK bold correctly at word
+ * boundaries.
+ */
+/**
+ * Trim leading/trailing whitespace from a `RichText` value. A plain string is
+ * trimmed directly; an array of entities is trimmed at its ends (passing
+ * through inner entities unchanged).
+ */
+function trimRichText(rt: RichText): RichText {
+  if (typeof rt === 'string') return rt.trim();
+  if (!Array.isArray(rt)) return rt;
+  const out: RichText[] = [];
+  let started = false;
+  for (const node of rt) {
+    let n = node;
+    if (!started) {
+      if (typeof n === 'string') {
+        if (!n.trim()) continue;
+        n = n.trimStart();
+      }
+      started = true;
+    }
+    out.push(n);
+  }
+  // Trim trailing plain-string node.
+  for (let i = out.length - 1; i >= 0; i--) {
+    const n = out[i];
+    if (typeof n === 'string') {
+      if (!n.trim()) { out.pop(); continue; }
+      out[i] = n.trimEnd();
+    }
+    break;
+  }
+  if (out.length === 0) return '';
+  if (out.length === 1 && typeof out[0] === 'string') return out[0];
+  return out as RichText;
+}
+
+function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): RichText {
+  if (!inlineTokens || inlineTokens.length === 0) return '';
+
+  const out: RichText[] = [];
+  const textBuf: string[] = [];
+  const flush = () => {
+    const t = textBuf.join('');
+    if (t) out.push(t);
+    textBuf.length = 0;
+  };
+
+  // Style stack: each entry records the entity type and the index in `out`
+  // where its content begins.
+  type Open = { type: RichTextEntity['type']; href?: string; start: number };
+  const stack: Open[] = [];
+
+  const pushPlain = (s: string) => {
+    // Convert $...$ (inline) and $$...$$ (block) LaTeX into native
+    // mathematical_expression RichText entities so formulas render natively.
+    const mathRe = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^$\n\r]*?[^\s$])?)\$/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = mathRe.exec(s)) !== null) {
+      if (m.index > last) textBuf.push(s.slice(last, m.index));
+      const expr = (m[1] ?? m[2]).trim();
+      if (expr) out.push({ type: 'mathematical_expression', expression: expr });
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) textBuf.push(s.slice(last));
+  };
+  const open = (type: Open['type'], href?: string) => {
+    flush();
+    stack.push({ type, href, start: out.length });
+  };
+  const close = (type: Open['type']) => {
+    const idx = [...stack].reverse().findIndex((s) => s.type === type);
+    if (idx === -1) return;
+    const realIdx = stack.length - 1 - idx;
+    const top = stack.splice(realIdx, 1)[0];
+    flush();
+    const inner: RichText = out.slice(top.start);
+    out.length = top.start;
+    let node: RichTextEntity;
+    switch (top.type) {
+      case 'bold': node = { type: 'bold', text: inner }; break;
+      case 'italic': node = { type: 'italic', text: inner }; break;
+      case 'strikethrough': node = { type: 'strikethrough', text: inner }; break;
+      case 'spoiler': node = { type: 'spoiler', text: inner }; break;
+      case 'code': node = { type: 'code', text: inner }; break;
+      case 'url': node = { type: 'url', text: String(inner).replace(/\n/g, ' '), href: top.href ?? '' }; break;
+    }
+    out.push(node as RichText);
+  };
+
+  const walk = (tk: MarkdownToken[]) => {
+    for (const token of tk) {
+      switch (token.type) {
+        case 'inline':
+          if (token.children) walk(token.children);
+          break;
+        case 'text':
+        case 'code_inline':
+          pushPlain(token.content ?? '');
+          break;
+        case 'softbreak':
+        case 'hardbreak':
+          pushPlain('\n');
+          break;
+        case 'em_open': open('italic'); break;
+        case 'em_close': close('italic'); break;
+        case 'strong_open': open('bold'); break;
+        case 'strong_close': close('bold'); break;
+        case 's_open': open('strikethrough'); break;
+        case 's_close': close('strikethrough'); break;
+        case 'spoiler_open': open('spoiler'); break;
+        case 'spoiler_close': close('spoiler'); break;
+        case 'code_open': open('code'); break;
+        case 'code_close': close('code'); break;
+        case 'link_open': {
+          const href = getAttr(token, 'href') ?? '';
+          open('url', href);
+          break;
+        }
+        case 'link_close': close('url'); break;
+        case 'image':
+          // Best-effort: represent image alt text as plain text.
+          pushPlain(token.content ?? '');
+          break;
+        default:
+          if (token.children) walk(token.children);
+          break;
+      }
+    }
+  };
+
+  walk(inlineTokens);
+  flush();
+
+  // Unclosed styles: wrap remaining as the topmost open entity if any.
+  while (stack.length) close(stack[stack.length - 1].type);
+
+  if (out.length === 0) return '';
+  if (out.length === 1 && typeof out[0] === 'string') return out[0];
+  return out as RichText;
+}
 
 /**
  * Convert markdown to Bot API 10.2 `InputRichBlock<never>[]` (media-free).
  *
- * Block types follow the 10.2 schema:
- * - `heading` (was `section_heading`) with numeric `size` 1-6
- * - `paragraph`, `pre` (was `preformatted`)
- * - `list` with `items[].blocks` (was `items[].text`)
- * - `table` with `cells: RichBlockTableCell[][]` (align/valign required)
+ * Supported native block types:
+ * - `heading` (size 1-6), `paragraph`, `pre` (with language)
+ * - `list` / `list_item` (blocks), `table` (RichBlockTableCell[][])
+ * - `blockquote`, `pullquote` (from `<aside>`), `details`
+ * - `divider`, `mathematical_expression` (LaTeX), `anchor`
  *
- * Inline styling (bold/italic/code/links) is intentionally dropped here: the
- * 10.2 plain-string RichText lets Telegram re-parse Markdown/HTML inside the
- * block text, so we pass the *raw* inline markdown and let the client render it.
- * This also fixes the old CJK-bold-at-word-boundary problem for free.
+ * Inline text uses native `RichText` entities (bold/italic/code/link/...) via
+ * `inlineToRichText`, so styling — including CJK bold at word boundaries —
+ * renders natively without relying on Telegram re-parsing raw markdown.
  */
+/**
+ * Extract standalone `$$...$$` block math and `<a name="...">` / `<aside>` /
+ * `<tg-math-block>` HTML blocks that markdown-it emits as `html_block` tokens,
+ * converting them into native 10.2 blocks. Returns the block (or null) plus the
+ * matched token length so the caller can skip the raw html_block token.
+ */
+function tryHtmlBlockToRichBlock(
+  token: MarkdownToken,
+): { block: RichBlock | null; advance: number } {
+  const content = (token.content ?? '').trim();
+  if (!content) return { block: null, advance: 1 };
+
+  // `<a name="...">` → native anchor block.
+  const anchorMatch = content.match(/^<a\s+name="([^"]*)"\s*\/?>\s*<\/a>\s*$/i)
+    ?? content.match(/^<a\s+name="([^"]*)"\s*>\s*<\/a>\s*$/i);
+  if (anchorMatch) {
+    return { block: { type: 'anchor', name: anchorMatch[1] }, advance: 1 };
+  }
+
+  // `<tg-math-block>...</tg-math-block>` → native math block.
+  const mathBlockMatch = content.match(/^<tg-math-block>([\s\S]*?)<\/tg-math-block>\s*$/i);
+  if (mathBlockMatch) {
+    return { block: { type: 'mathematical_expression', expression: mathBlockMatch[1].trim() }, advance: 1 };
+  }
+
+  // `<aside>...</aside>` → native pullquote block.
+  const asideMatch = content.match(/^<aside>([\s\S]*?)<\/aside>\s*$/i);
+  if (asideMatch) {
+    const inner = trimRichText(inlineToRichText(md.parseInline(asideMatch[1], {}) as any as MarkdownToken[]));
+    if (inner) {
+      return { block: { type: 'pullquote', text: inner }, advance: 1 };
+    }
+  }
+
+  return { block: null, advance: 1 };
+}
+
 export function markdownToRichBlocks(markdown: string): RichBlock[] {
   const tokens = md.parse(markdown ?? '', {}) as any as MarkdownToken[];
   const blocks: RichBlock[] = [];
-
-  const rawInline = (inlineTokens: MarkdownToken[] | null | undefined): string => {
-    if (!inlineTokens) return '';
-    // Re-serialize the inline tokens back to markdown text. markdown-it does
-    // not expose a public "render to markdown" for inline, so we reconstruct
-    // the source text from the token content when available, falling back to
-    // the original slice.
-    let text = '';
-    for (const t of inlineTokens) {
-      if (t.type === 'text' || t.type === 'code_inline' || t.type === 'softbreak' || t.type === 'hardbreak') {
-        text += t.content ?? '';
-      } else if (t.children) {
-        text += rawInline(t.children);
-      }
-    }
-    return text;
-  };
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
 
     switch (token.type) {
+      case 'html_block':
+      case 'html_inline': {
+        const { block } = tryHtmlBlockToRichBlock(token);
+        if (block) blocks.push(block);
+        break;
+      }
       case 'heading_open': {
         const level = Math.min(6, Math.max(1, Number(token.tag.slice(1)) || 1));
         const inline = tokens[i + 1];
         if (inline?.type === 'inline') {
-          const text = rawInline(inline.children).trim();
+          const text = trimRichText(inlineToRichText(inline.children));
           if (text) {
             blocks.push({ type: 'heading', size: level as 1 | 2 | 3 | 4 | 5 | 6, text });
           }
@@ -1720,7 +1902,7 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
       case 'paragraph_open': {
         const inline = tokens[i + 1];
         if (inline?.type === 'inline') {
-          const text = rawInline(inline.children).trim();
+          const text = trimRichText(inlineToRichText(inline.children));
           if (text) {
             blocks.push({ type: 'paragraph', text });
           }
@@ -1738,18 +1920,20 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         break;
       }
       case 'blockquote_open': {
-        let content = '';
+        // Gather inline content as native RichText entities.
+        const inner: RichText[] = [];
         let j = i + 1;
         while (j < tokens.length && tokens[j].type !== 'blockquote_close') {
-          if (tokens[j].content) content += tokens[j].content;
-          if (tokens[j].type === 'inline') content += tokens[j].content;
+          if (tokens[j].type === 'inline' && tokens[j].children) {
+            const rt = trimRichText(inlineToRichText(tokens[j].children));
+            if (rt) inner.push(rt);
+          }
           j++;
         }
-        const trimmed = content.trim();
-        if (trimmed) {
+        if (inner.length > 0) {
           blocks.push({
             type: 'blockquote',
-            blocks: [{ type: 'paragraph', text: trimmed }],
+            blocks: inner.map((rt) => ({ type: 'paragraph', text: rt })),
           });
         }
         i = j;
@@ -1766,16 +1950,16 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         while (j < tokens.length && tokens[j].type !== (token.type.replace('open', 'close'))) {
           if (tokens[j].type === 'list_item_open') {
             let k = j + 1;
-            let itemText = '';
+            const itemInner: RichText[] = [];
             while (k < tokens.length && tokens[k].type !== 'list_item_close') {
-              if (tokens[k].type === 'inline') {
-                const t = rawInline(tokens[k].children).trim();
-                if (t) itemText = t;
+              if (tokens[k].type === 'inline' && tokens[k].children) {
+                const rt = trimRichText(inlineToRichText(tokens[k].children));
+                if (rt) itemInner.push(rt);
               }
               k++;
             }
-            if (itemText) {
-              items.push({ blocks: [{ type: 'paragraph', text: itemText }] });
+            if (itemInner.length > 0) {
+              items.push({ blocks: itemInner.map((rt) => ({ type: 'paragraph', text: rt })) });
             }
             j = k;
           }
@@ -1788,8 +1972,8 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         break;
       }
       case 'table_open': {
-        const cells: Array<Array<{ text?: string; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }>> = [];
-        let currentRow: Array<{ text?: string; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }> = [];
+        const cells: Array<Array<{ text?: RichText; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }>> = [];
+        let currentRow: Array<{ text?: RichText; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }> = [];
         let j = i + 1;
         while (j < tokens.length && tokens[j].type !== 'table_close') {
           const tk = tokens[j];
@@ -1799,7 +1983,7 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
             cells.push(currentRow);
           } else if (tk.type === 'td_open' || tk.type === 'th_open') {
             const inline = tokens[j + 1];
-            const text = inline?.type === 'inline' ? rawInline(inline.children).trim() : '';
+            const text = inline?.type === 'inline' ? trimRichText(inlineToRichText(inline.children)) : '';
             currentRow.push({
               text: text || undefined,
               is_header: tk.type === 'th_open' ? true : undefined,
