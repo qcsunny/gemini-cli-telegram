@@ -191,6 +191,7 @@ export function buildChannelReply(
         ? originalText.length
         : (originalText.content.length + (originalText.thought?.length || 0));
       logger.debug(`[DEBUG] sendRich called: originalTextLen=${textLen}`);
+      logger.info(`[SENDRICH] sending real message via sendRichMessage (len=${textLen})`);
 
       const safeMarkdown = typeof originalText === 'string'
         ? originalText
@@ -396,10 +397,11 @@ export function buildChannelReply(
       // and leave the first message swallowed once the draft expires). The draft
       // bubble is abandoned and cleaned up by Telegram automatically.
       if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
-        logger.debug(`[DEBUG] Finalizing draft messageId=${messageId} by sending a real message via sendRich`);
+        logger.info(`[FINALIZE] materializing draft into a real persisted message via sendRich (was draft messageId=${messageId})`);
         activeDraftIds.delete(messageId);
         draftIds.delete(chatId);
         const realId = await replyObj.sendRich!(originalText);
+        logger.info(`[FINALIZE] sent real message id=${realId} for chat ${chatId}; first message preserved`);
         return realId;
       }
 
