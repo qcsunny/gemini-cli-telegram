@@ -654,31 +654,15 @@ export async function processMessage(
       }
 
       // (a2) Strip blockquote blocks → plain paragraphs to avoid details+blockquote nesting.
-      // Also hoist the first heading block above the thinking block when thought is present.
+      // NOTE: Only strip blockquotes that were already in blocks before (b). We handle
+      // new ones after (b) in the combined step below.
       {
-        // Replace any blockquote blocks already accumulated with plain paragraphs
         for (let bi = 0; bi < blocks.length; bi++) {
           const blk = blocks[bi] as any;
           if (blk.type === 'blockquote') {
-            // Flatten its inner blocks into paragraphs in-place
             const inner: RichBlock[] = (blk.blocks || []).map((b: any) => ({ type: 'paragraph', text: b.text }));
             blocks.splice(bi, 1, ...inner);
             bi += inner.length - 1;
-          }
-        }
-
-        // Hoist leading heading above thinking block
-        if (thinkingBlockIndex >= 0) {
-          // Find first non-thinking, non-footer heading after thinkingBlockIndex
-          const firstBodyHeadingIdx = blocks.findIndex(
-            (b, i) => i !== thinkingBlockIndex && (b as any).type === 'heading'
-          );
-          if (firstBodyHeadingIdx > thinkingBlockIndex) {
-            // Move it before thinkingBlock
-            const [headingBlock] = blocks.splice(firstBodyHeadingIdx, 1);
-            blocks.unshift(headingBlock);
-            thinkingBlockIndex = 1; // was 0, now shifted by heading
-            if (footerBlockIndex >= 0) footerBlockIndex++;
           }
         }
       }
@@ -695,6 +679,34 @@ export async function processMessage(
           convertedBodyLen = answerBuffer.length;
         }
       }
+
+      // (b2) Post-body cleanup: strip any blockquote blocks introduced in (b),
+      // then hoist the first heading above the thinking block.
+      {
+        // Strip remaining blockquotes → paragraphs
+        for (let bi = 0; bi < blocks.length; bi++) {
+          const blk = blocks[bi] as any;
+          if (blk.type === 'blockquote') {
+            const inner: RichBlock[] = (blk.blocks || []).map((b: any) => ({ type: 'paragraph', text: b.text }));
+            blocks.splice(bi, 1, ...inner);
+            bi += inner.length - 1;
+          }
+        }
+
+        // Hoist the first heading above the thinking block (if present)
+        if (thinkingBlockIndex >= 0) {
+          const firstHeadingIdx = blocks.findIndex(
+            (b, i) => i !== thinkingBlockIndex && (b as any).type === 'heading',
+          );
+          if (firstHeadingIdx > thinkingBlockIndex) {
+            const [headingBlock] = blocks.splice(firstHeadingIdx, 1);
+            blocks.unshift(headingBlock);
+            thinkingBlockIndex = 1;
+            if (footerBlockIndex >= 0) footerBlockIndex++;
+          }
+        }
+      }
+
 
       // (c) Append exactly one footer block (stats line). If thinking was
       // recovered but the body is empty, the message is still a single draft.

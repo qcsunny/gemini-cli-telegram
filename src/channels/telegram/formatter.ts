@@ -1674,7 +1674,7 @@ type RichTextEntity =
   | { type: 'strikethrough'; text: RichText }
   | { type: 'spoiler'; text: RichText }
   | { type: 'code'; text: RichText }
-  | { type: 'url'; text: string; href: string };
+  | { type: 'url'; text: string; url: string };
 
 /**
  * Convert markdown-it inline tokens into a native 10.2 `RichText` value
@@ -1767,7 +1767,7 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): Ric
       case 'strikethrough': node = { type: 'strikethrough', text: inner }; break;
       case 'spoiler': node = { type: 'spoiler', text: inner }; break;
       case 'code': node = { type: 'code', text: inner }; break;
-      case 'url': node = { type: 'url', text: String(inner).replace(/\n/g, ' '), href: top.href ?? '' }; break;
+      case 'url': node = { type: 'url', text: String(inner).replace(/\n/g, ' '), url: top.href ?? '' }; break;
     }
     out.push(node as RichText);
   };
@@ -2087,7 +2087,6 @@ export function buildFinalBlocks(
     blocks.push({
       type: 'details',
       summary,
-      is_open: opts?.isClosed === false ? true : undefined,
       blocks: [{ type: 'paragraph', text: thoughtText }],
     });
   }
