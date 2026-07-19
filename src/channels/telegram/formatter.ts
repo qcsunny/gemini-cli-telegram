@@ -1344,7 +1344,8 @@ function markdownToHtmlSnippet(markdown: string): string {
 
   html = html.replace(/<blockquote>([\s\S]*?)\[details\]\s*([^\n<]*)(?:<br\s*\/?>|\n)?([\s\S]*?)<\/blockquote>/gi, (match, p1, p2, p3) => {
     const summary = p2.trim() || '点击展开';
-    return `<details><summary>${summary}</summary>${p3}</details>`;
+    const cleanContent = p3.replace(/<\/?blockquote>/gi, '').trim();
+    return `<details><summary>${summary}</summary>${cleanContent}</details>`;
   });
 
   html = html.replace(/\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)(?:\s*\|\s*(.*?)\|\s*(.*?))?\]/gi, (match, model, inputTokens, outputTokens, cost, cachedTokens, thinkingTokens) => {
