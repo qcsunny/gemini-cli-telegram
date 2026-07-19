@@ -962,18 +962,7 @@ export class TelegramBot {
       };
       clientConfig.fetch = async (url: any, init: any) => {
         const cleanInit = init ? { ...init } : {};
-        if (cleanInit.signal) {
-          const grammySignal = cleanInit.signal;
-          const nativeController = new globalThis.AbortController();
-          if (grammySignal.aborted) {
-            nativeController.abort();
-          } else {
-            grammySignal.addEventListener('abort', () => {
-              nativeController.abort();
-            });
-          }
-          cleanInit.signal = nativeController.signal;
-        }
+        delete cleanInit.signal;
         // Retry transient proxy/network failures so a dropped long-poll
         // connection recovers instead of stalling update delivery.
         let lastErr: any;
@@ -985,7 +974,6 @@ export class TelegramBot {
             });
           } catch (e: any) {
             lastErr = e;
-            if (cleanInit.signal?.aborted) throw e;
             await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
           }
         }
