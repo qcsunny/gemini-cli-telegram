@@ -1179,12 +1179,41 @@ function trimHtmlBr(html: string): string {
 
 export function normalizeMarkdownFences(markdown: string): string {
   if (!markdown) return markdown;
-  // Insert a newline before a code-fence opener that is glued to the end of a
-  // line of text, so the markdown parser treats it as a fence start rather than
-  // inline content. Only matches real openers: ``` optionally followed by a
-  // language tag and then a newline/end-of-string. Closing fences and ordinary
-  // runs of three backticks are left untouched.
-  return markdown.replace(/(^|[^`\n])```([a-zA-Z0-9_-]*)(?=\n|$)/g, '$1\n```$2');
+  // 1. Split a fence delimiter that is glued to text on the same line onto its
+  //    own line, in both directions:
+  //    - opener glued to preceding text: `正文```python` -> `正文\n```python`
+  //    - closing fence glued to following text: `code```后面` -> `code\n```\n后面`
+  let text = markdown.replace(/(^|[^`\n])```([a-zA-Z0-9_+#.-]*)/g, '$1\n```$2');
+  text = text.replace(/```([a-zA-Z0-9_+#.-]*)\n?([^\n`])/g, '```$1\n$2');
+  // 2. Isolate every fence delimiter (a line that is only ``` + optional lang)
+  //    with blank lines so markdown-it parses it as a real fence instead of
+  //    leaving raw ``` (which Telegram renders as one giant code block).
+  const lines = text.split('\n');
+  const fenceRe = /^(\s*)```([a-zA-Z0-9_+#.-]*)?\s*$/;
+  const out: string[] = [];
+  let prevWasBlank = true;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isFence = fenceRe.test(line);
+    if (isFence) {
+      if (!prevWasBlank) {
+        out.push('');
+        prevWasBlank = true;
+      }
+      out.push(line);
+      if (i + 1 < lines.length && lines[i + 1].trim() !== '' && !fenceRe.test(lines[i + 1])) {
+        out.push('');
+        prevWasBlank = true;
+      } else {
+        prevWasBlank = line.trim() === '';
+      }
+    } else {
+      out.push(line);
+      prevWasBlank = line.trim() === '';
+    }
+  }
+  // 3. Collapse excessive blank lines.
+  return out.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
 /**
