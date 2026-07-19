@@ -653,6 +653,36 @@ export async function processMessage(
         }
       }
 
+      // (a2) Strip blockquote blocks → plain paragraphs to avoid details+blockquote nesting.
+      // Also hoist the first heading block above the thinking block when thought is present.
+      {
+        // Replace any blockquote blocks already accumulated with plain paragraphs
+        for (let bi = 0; bi < blocks.length; bi++) {
+          const blk = blocks[bi] as any;
+          if (blk.type === 'blockquote') {
+            // Flatten its inner blocks into paragraphs in-place
+            const inner: RichBlock[] = (blk.blocks || []).map((b: any) => ({ type: 'paragraph', text: b.text }));
+            blocks.splice(bi, 1, ...inner);
+            bi += inner.length - 1;
+          }
+        }
+
+        // Hoist leading heading above thinking block
+        if (thinkingBlockIndex >= 0) {
+          // Find first non-thinking, non-footer heading after thinkingBlockIndex
+          const firstBodyHeadingIdx = blocks.findIndex(
+            (b, i) => i !== thinkingBlockIndex && (b as any).type === 'heading'
+          );
+          if (firstBodyHeadingIdx > thinkingBlockIndex) {
+            // Move it before thinkingBlock
+            const [headingBlock] = blocks.splice(firstBodyHeadingIdx, 1);
+            blocks.unshift(headingBlock);
+            thinkingBlockIndex = 1; // was 0, now shifted by heading
+            if (footerBlockIndex >= 0) footerBlockIndex++;
+          }
+        }
+      }
+
       // (b) Convert any leftover body markdown (the delta not yet streamed).
       if (answerBuffer.trim()) {
         const remaining = markdownToRichBlocksDelta(
