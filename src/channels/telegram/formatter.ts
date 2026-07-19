@@ -2067,7 +2067,18 @@ export function buildFinalBlocks(
 ): RichBlock[] {
   const blocks: RichBlock[] = [];
 
-  // 1. Thinking block FIRST
+  const body = markdownToRichBlocks(content);
+  let mainHeading: RichBlock | undefined;
+  if (body.length > 0 && body[0].type === 'heading') {
+    mainHeading = body.shift();
+  }
+
+  // 1. Main Heading FIRST (if body starts with a title)
+  if (mainHeading) {
+    blocks.push(mainHeading);
+  }
+
+  // 2. Thinking block SECOND
   const thoughtText = (thought ?? '').trim();
   if (thoughtText) {
     let summary = '🧠 思考过程 (Thinking Process)';
@@ -2084,11 +2095,10 @@ export function buildFinalBlocks(
     });
   }
 
-  // 2. Body blocks SECOND
-  const body = markdownToRichBlocks(content);
+  // 3. Remaining Body blocks THIRD
   blocks.push(...body);
 
-  // 3. Footer block LAST
+  // 4. Footer block LAST
   if (opts?.footerText) {
     blocks.push({ type: 'footer', text: opts.footerText });
   }
