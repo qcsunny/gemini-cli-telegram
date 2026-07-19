@@ -686,7 +686,8 @@ export async function processMessage(
             } catch (e) {
               logger.warn(`[messageLoop] Failed to commit final blocks, falling back to sendRich: ${e}`);
               try {
-                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim() });
+                const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
+                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
                 if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
               } catch (e2) {
                 logger.warn(`[messageLoop] sendRich fallback failed: ${e2}`);
@@ -695,7 +696,8 @@ export async function processMessage(
           } else if (blocks.length > 0) {
             // No draft was ever created (e.g. extremely fast completion): send once.
             try {
-              currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim() });
+              const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
+              currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
               if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
             } catch (e) {
               logger.warn(`[messageLoop] sendRich failed: ${e}`);

@@ -25,6 +25,7 @@ export interface StructuredMessage {
   thought?: string;
   geminiTime?: string;
   geminiTokens?: string;
+  footerText?: string;
 }
 
 /**

@@ -55,11 +55,12 @@ function getBlocksPayload(originalText: string | StructuredMessage): any[] {
     const blocks = buildFinalBlocks(originalText);
     return blocks;
   }
-  const { content, thought, geminiTime, geminiTokens } = originalText;
+  const { content, thought, geminiTime, geminiTokens, footerText } = originalText;
   return buildFinalBlocks(content, thought, {
     time: geminiTime,
     tokens: geminiTokens,
     isClosed: true,
+    footerText,
   });
 }
 const TYPING_TTL_MS = 3_600_000; // Safety: auto-stop typing after 1 hour
