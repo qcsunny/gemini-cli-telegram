@@ -151,6 +151,16 @@ if (isLive) {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(PID_PATH, process.pid.toString());
 
+  // Redirect stdout/stderr to the canonical log file (append mode) so that
+  // logs are always written to LOG_PATH regardless of how the process is
+  // launched (systemd, nohup, or a terminal). This avoids the situation where
+  // a stdio redirection (e.g. systemd StandardOutput=append:) holds a file
+  // descriptor to a different inode than the on-disk log file after the log is
+  // rotated/recreated, causing logs to silently disappear.
+  const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+  process.stdout.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stderr.write;
+
   const cleanup = () => {
     try { fs.unlinkSync(PID_PATH); } catch { /* ignore */ }
   };

@@ -164,8 +164,12 @@ WorkingDirectory=$BOT_DIR
 ExecStart=$NODE_PATH dist/cli.js start --live
 Restart=always
 RestartSec=10
-StandardOutput=append:$BOT_DIR/telegram-bot.log
-StandardError=append:$BOT_DIR/telegram-bot.log
+# The bot writes its own logs to daemon.log (LOG_PATH) inside the process, so
+# do NOT redirect stdout/stderr to a log file here — doing so would make systemd
+# hold a separate file descriptor to a different inode than the on-disk log,
+# causing logs to silently disappear after the log is rotated/recreated.
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
