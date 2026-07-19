@@ -150,4 +150,5 @@ export interface SessionOptions {
 export interface MessageFormatter {
   chunkText(text: string): string[];
   truncateForEdit(text: string): string;
+  truncateForStream(text: string): string;
 }
