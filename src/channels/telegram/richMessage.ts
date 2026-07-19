@@ -4,47 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export interface RichText {
-  text: string;
-}
+// 10.2 block types are sourced from @grammyjs/types (InputRichBlock / RichText).
+// We re-export them here so the rest of the codebase has a single import site
+// and we can keep the non-generic (media-free) aliases short.
+import type { InputRichBlock, RichText } from '@grammyjs/types/rich.js';
 
-export type RichBlock =
-  | {
-      type: 'paragraph';
-      text: RichText;
-    }
-  | {
-      type: 'section_heading';
-      level: 1 | 2 | 3;
-      text: RichText;
-    }
-  | {
-      type: 'preformatted';
-      text: string;
-      language?: string;
-    }
-  | {
-      type: 'block_quotation';
-      text: RichText;
-      is_collapsible?: boolean;
-    }
-  | {
-      type: 'divider';
-    }
-  | {
-      type: 'list';
-      items: Array<{ type: 'list_item'; text: RichText }>;
-    }
-  | {
-      type: 'table';
-      cells: Array<
-        Array<{
-          text: RichText;
-          is_header?: boolean;
-          align?: 'left' | 'center' | 'right';
-          valign?: 'top' | 'middle' | 'bottom';
-        }>
-      >;
-      is_bordered?: boolean;
-      is_striped?: boolean;
-    };
+/** Media-free rich text: a plain string is a valid RichText per Bot API 10.2. */
+export type RichTextPlain = RichText;
+
+/**
+ * A media-free outgoing rich block. The generic F (media) is fixed to `never`
+ * because this bot never embeds media via tg:// links in block mode.
+ */
+export type RichBlock = InputRichBlock<never>;
