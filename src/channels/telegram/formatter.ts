@@ -1921,21 +1921,15 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         break;
       }
       case 'blockquote_open': {
-        // Gather inline content as native RichText entities.
-        const inner: RichText[] = [];
+        // Telegram does NOT allow blockquote nested inside details.
+        // Render as plain paragraphs instead to avoid nesting conflicts.
         let j = i + 1;
         while (j < tokens.length && tokens[j].type !== 'blockquote_close') {
           if (tokens[j].type === 'inline' && tokens[j].children) {
             const rt = trimRichText(inlineToRichText(tokens[j].children));
-            if (rt) inner.push(rt);
+            if (rt) blocks.push({ type: 'paragraph', text: rt });
           }
           j++;
-        }
-        if (inner.length > 0) {
-          blocks.push({
-            type: 'blockquote',
-            blocks: inner.map((rt) => ({ type: 'paragraph', text: rt })),
-          });
         }
         i = j;
         break;
@@ -2068,18 +2062,21 @@ export function buildFinalBlocks(
   const blocks: RichBlock[] = [];
 
   const body = markdownToRichBlocks(content);
+
+  // Extract first heading to hoist above thinking block
   let mainHeading: RichBlock | undefined;
   if (body.length > 0 && body[0].type === 'heading') {
-    mainHeading = body.shift();
+    mainHeading = body.shift() as RichBlock;
   }
 
-  // 1. Main Heading FIRST (if body starts with a title)
-  if (mainHeading) {
+  // 1. Main Heading FIRST (only when there is also a thought to show beneath it)
+  const thoughtText = (thought ?? '').trim();
+  if (mainHeading && thoughtText) {
+    // Hoist heading above thinking block only when thinking block is present
     blocks.push(mainHeading);
   }
 
-  // 2. Thinking block SECOND
-  const thoughtText = (thought ?? '').trim();
+  // 2. Thinking block
   if (thoughtText) {
     let summary = '🧠 思考过程 (Thinking Process)';
     const infoLines: string[] = [];
@@ -2095,7 +2092,10 @@ export function buildFinalBlocks(
     });
   }
 
-  // 3. Remaining Body blocks THIRD
+  // 3. Body blocks: if heading was NOT hoisted (no thought), put it back at the front
+  if (mainHeading && !thoughtText) {
+    blocks.push(mainHeading);
+  }
   blocks.push(...body);
 
   // 4. Footer block LAST
