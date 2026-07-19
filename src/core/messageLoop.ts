@@ -760,7 +760,18 @@ export async function processMessage(
         content: footerMarker,
         thought: thoughtBuffer.trim(),
       });
-      footerChunks.push(...formatter.chunkText('___RAW_HTML___' + footerHtml));
+      // When NO_BODY_CHUNK is on we have verified sendRichMessage has no char
+      // limit, so the footer (which may contain a long thinking <details> block)
+      // must be sent as ONE message — never split at 4096, or the collapsible
+      // block gets cut across messages and stops rendering.
+      if (NO_BODY_CHUNK) {
+        // Verified sendRichMessage has no char limit: send the footer (which may
+        // contain a long thinking <details> block) as ONE message so the
+        // collapsible block is never cut across messages.
+        footerChunks.push('___RAW_HTML___' + footerHtml);
+      } else {
+        footerChunks.push(...formatter.chunkText('___RAW_HTML___' + footerHtml));
+      }
 
       // Finalize. Body text was already materialized incrementally during
       // streaming when committedLen > 0 (each head chunk became a real message,
