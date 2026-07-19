@@ -473,13 +473,20 @@ export function buildChannelReply(
     },
     sendRichDraftBlocks: async (draftId: number, blocks: unknown[]): Promise<number> => {
       try {
+        let targetDraftId = draftId && draftId !== 0 ? draftId : draftIds.get(chatId);
+        if (!targetDraftId) {
+          targetDraftId = Math.floor(Math.random() * 2147483647) + 1;
+        }
+        activeDraftIds.add(targetDraftId);
+        draftIds.set(chatId, targetDraftId);
+
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
-          draft_id: draftId,
+          draft_id: targetDraftId,
           rich_message: { blocks },
         });
-        const returnedId = res?.draft_id ?? res?.message_id ?? (draftId || Math.floor(Math.random() * 1000000) + 1);
+        const returnedId = res?.draft_id ?? res?.message_id ?? targetDraftId;
         if (returnedId) {
           activeDraftIds.add(returnedId);
           draftIds.set(chatId, returnedId);
