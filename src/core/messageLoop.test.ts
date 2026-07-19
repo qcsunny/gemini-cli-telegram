@@ -63,6 +63,7 @@ describe('processMessage', () => {
     mockFormatter = {
       chunkText: vi.fn((text) => [text]),
       truncateForEdit: vi.fn((text) => text),
+      truncateForStream: vi.fn((text) => text),
     };
   });
 

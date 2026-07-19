@@ -471,6 +471,26 @@ export const telegramFormatter: MessageFormatter = {
     }
     return text.substring(0, TELEGRAM_MAX_LENGTH - 4) + '\n...';
   },
+
+  /**
+   * Streaming-only truncation. Telegram caps a single message (incl. a draft)
+   * at ~4096 chars, so the live draft cannot grow past that. Instead of freezing
+   * on the head (first 4096) and hiding everything after, we show a sliding
+   * window: the opening of the answer (so the title/structure stays visible)
+   * plus the most recently generated text (the live writing frontier), with a
+   * short marker in between. The full, correct message replaces this at finalize.
+   */
+  truncateForStream(text: string): string {
+    if (text.length <= TELEGRAM_MAX_LENGTH) {
+      return text;
+    }
+    const headLen = 1600;
+    const tailLen = TELEGRAM_MAX_LENGTH - headLen - 60;
+    const head = text.substring(0, headLen);
+    const tail = text.substring(text.length - tailLen);
+    const omitted = text.length - headLen - tailLen;
+    return `${head}\n\n︙ …（中间省略约 ${omitted} 字，生成中）… ︙\n\n${tail}`;
+  },
 };
 
 // ── HTML escaping ──

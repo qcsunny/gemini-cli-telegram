@@ -329,7 +329,7 @@ export async function processMessage(
             return;
           }
 
-          const truncatedContent = formatter.truncateForEdit(structuredMsg.content);
+          const truncatedContent = formatter.truncateForStream(structuredMsg.content);
           const truncatedThought = structuredMsg.thought ? formatter.truncateForEdit(structuredMsg.thought) : undefined;
           
           const structuredTruncMsg: StructuredMessage = {
