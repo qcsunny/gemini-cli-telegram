@@ -344,11 +344,13 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // First message should be the final reply text (bodyHtmlChunks[0])
+    // The thinking process is streamed LIVE as its own message (first), via sendPlain.
+    expect(mockReply.sendPlain).toHaveBeenCalledWith(expect.stringContaining('thinking process'));
+
+    // The body reply text is rendered (edit on the body draft 456).
     expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('final reply text'));
 
-    // Second message should contain both thinking process AND footer (since they are combined)
-    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('thinking process'));
+    // The stats footer is appended at the END as a separate message (via send).
     expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('btn_info_footer'));
   });
 });

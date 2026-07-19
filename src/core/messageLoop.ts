@@ -410,8 +410,43 @@ export async function processMessage(
       if (isFinished && !isFinal) return;
       try {
         if (isRichSingleMessage) {
+          // Phase 1 — thinking: stream the thought into its OWN message so it
+          // appears BEFORE the answer body (matching the real model order:
+          // think first, then answer). The body draft is not started yet.
+          if (thoughtBuffer.trim() && answerBuffer.trim().length === 0) {
+            const thoughtHtml = markdownToHtml(
+              { content: '', thought: thoughtBuffer.trim() },
+              true, // isStreaming: render as an open/collapsible "thinking" block
+            );
+            if (!thinkingMessageId) {
+              logger.debug(`[messageLoop] Sending live thinking message`);
+              thinkingMessageId = await reply.send(thoughtHtml);
+            } else {
+              await reply.edit(thinkingMessageId, thoughtHtml);
+            }
+            return;
+          }
+
+          // Transition: thinking just finished, body about to start. Finalize the
+          // thinking message (collapse the open block) and reset the body draft so
+          // the answer begins as a fresh message AFTER the thinking message.
+          if (thinkingMessageId && thoughtBuffer.trim() && !isThinkingFinalized && answerBuffer.trim().length > 0) {
+            try {
+              const closedThought = markdownToHtml(
+                { content: '', thought: thoughtBuffer.trim() },
+                false,
+              );
+              await reply.edit(thinkingMessageId, closedThought);
+              logger.info(`[messageLoop] Finalized live thinking message ${thinkingMessageId}`);
+            } catch (e) {
+              logger.warn(`[messageLoop] Failed to finalize thinking message: ${e}`);
+            }
+            isThinkingFinalized = true;
+            currentMessageId = null; // body starts fresh, after thinking
+          }
+
           const pending = answerBuffer.slice(committedLen);
-          if (!pending.trim() && !thoughtBuffer.trim()) {
+          if (!pending.trim()) {
             logger.debug(`[DEBUG-STAGE-6] pending empty, skipping update.`);
             return;
           }
@@ -425,24 +460,23 @@ export async function processMessage(
 
           const structuredMsg: StructuredMessage = {
             content: pending,
-            thought: thoughtBuffer,
+            thought: '',
           };
 
           const truncatedContent = formatter.truncateForStream(structuredMsg.content);
-          const truncatedThought = structuredMsg.thought ? formatter.truncateForEdit(structuredMsg.thought) : undefined;
 
           const structuredTruncMsg: StructuredMessage = {
             content: truncatedContent,
-            thought: truncatedThought,
+            thought: '',
           };
 
           if (!currentMessageId) {
-            logger.debug(`[DEBUG-STAGE-6] Sending first draft with structuredMsg`);
+            logger.debug(`[DEBUG-STAGE-6] Sending first body draft`);
             currentMessageId = await reply.sendRichDraft!(structuredTruncMsg);
-            logger.debug(`[DEBUG-STAGE-6] First draft sent, currentMessageId=${currentMessageId}`);
+            logger.debug(`[DEBUG-STAGE-6] First body draft sent, currentMessageId=${currentMessageId}`);
           } else {
             if (reply.editRichDraft) {
-              logger.debug(`[DEBUG-STAGE-6] Editing active draft ${currentMessageId} with structuredMsg`);
+              logger.debug(`[DEBUG-STAGE-6] Editing active body draft ${currentMessageId}`);
               await reply.editRichDraft(currentMessageId, structuredTruncMsg);
             } else {
               logger.debug(`[DEBUG-STAGE-6] editRichDraft missing!`);
@@ -543,19 +577,6 @@ export async function processMessage(
               if (event.type === 'thought') {
                 thoughtBuffer += event.content || '';
               } else if (event.type === 'text') {
-                if (thinkingMessageId && !isThinkingFinalized) {
-                  isThinkingFinalized = true;
-                  const msgId = thinkingMessageId;
-                  const finalThought = '🧠 思考过程 (Thinking Process)\n\n' + thoughtBuffer.trim();
-                  activeUpdatePromise = activeUpdatePromise.then(async () => {
-                    try {
-                      logger.info(`[messageLoop] Finalizing thinking draft messageId=${msgId}`);
-                      await reply.edit(msgId, finalThought);
-                    } catch (err) {
-                      logger.warn(`[messageLoop] Failed to finalize thinking draft: ${err}`);
-                    }
-                  });
-                }
                 answerBuffer += event.content || '';
               } else if (event.type === 'done') {
                 isDone = true;
@@ -685,7 +706,10 @@ export async function processMessage(
         }
       }
 
-      const thoughtAndStatsHtmlChunks: string[] = [];
+      // The thinking process is streamed live into its own message BEFORE the
+      // body (real model order: think first, then answer), so it is never
+      // re-sent here. Only the stats footer is appended at the end.
+      const footerChunks: string[] = [];
       const footerMarker = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
         finalPrompt,
@@ -693,31 +717,18 @@ export async function processMessage(
         finalResult.usage
       );
       const footerHtml = markdownToHtml(footerMarker);
-
-      if (thoughtBuffer.trim()) {
-        const thoughtHtml = markdownToHtml({
-          content: '',
-          thought: thoughtBuffer.trim(),
-          geminiTime: finalResult.thinkingTime
-        });
-        const combinedHtml = thoughtHtml + '\n\n' + footerHtml;
-        const chunks = formatter.chunkText('___RAW_HTML___' + combinedHtml);
-        thoughtAndStatsHtmlChunks.push(...chunks);
-      } else {
-        const chunks = formatter.chunkText('___RAW_HTML___' + footerHtml);
-        thoughtAndStatsHtmlChunks.push(...chunks);
-      }
+      footerChunks.push(...formatter.chunkText('___RAW_HTML___' + footerHtml));
 
       // Finalize. Body text was already materialized incrementally during
       // streaming when committedLen > 0 (each head chunk became a real message,
       // the active draft holds only the remaining tail). So at the end we only
       // need to: (1) promote the final tail draft to a real message, and
-      // (2) append the thought summary + stats footer. For short replies where
-      // nothing was committed incrementally, fall back to the original full-body
-      // path so the draft is materialized as the first (real) message.
+      // (2) append the stats footer. For short replies where nothing was
+      // committed incrementally, fall back to the original full-body path so the
+      // draft is materialized as the first (real) message.
       const finalHtmlMessages = [
         ...bodyHtmlChunks,
-        ...thoughtAndStatsHtmlChunks
+        ...footerChunks
       ];
 
       if (finalResult.exitCode === 0 && finalHtmlMessages.length > 0) {
@@ -735,7 +746,7 @@ export async function processMessage(
               logger.warn(`[messageLoop] Failed to finalize trailing draft: ${e}`);
             }
           }
-          for (const msgText of thoughtAndStatsHtmlChunks) {
+          for (const msgText of footerChunks) {
             try {
               const msgId = await reply.send(msgText);
               if (msgId && answerBuffer.trim()) messageCache.set(msgId, answerBuffer.trim());
