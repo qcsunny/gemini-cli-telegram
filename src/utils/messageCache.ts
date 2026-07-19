@@ -4,13 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export interface ReplyContext {
+  title?: string;
+  answerMarkdown: string;
+  thinkingMarkdown: string;
+}
+
 /**
  * A simple TTL-based cache for storing original Markdown messages.
  * This allows the /save command to retrieve the unformatted source
  * instead of the rendered text from Telegram.
  */
 export class MessageCache {
-  private cache = new Map<number, { text: string; timestamp: number }>();
+  private cache = new Map<number, { text: string; replyContext?: ReplyContext; timestamp: number }>();
   private readonly ttl: number;
   private readonly maxSize: number;
 
@@ -19,7 +25,7 @@ export class MessageCache {
     this.maxSize = maxSize;
   }
 
-  set(messageId: number, text: string): void {
+  set(messageId: number, text: string, replyContext?: ReplyContext): void {
     // Evict oldest if full
     if (this.cache.size >= this.maxSize) {
       const oldestKey = this.cache.keys().next().value;
@@ -28,6 +34,7 @@ export class MessageCache {
 
     this.cache.set(messageId, {
       text,
+      replyContext,
       timestamp: Date.now(),
     });
 
@@ -47,6 +54,18 @@ export class MessageCache {
     }
 
     return entry.text;
+  }
+
+  getReplyContext(messageId: number): ReplyContext | null {
+    const entry = this.cache.get(messageId);
+    if (!entry) return null;
+
+    if (Date.now() - entry.timestamp > this.ttl) {
+      this.cache.delete(messageId);
+      return null;
+    }
+
+    return entry.replyContext || null;
   }
 
   private cleanup(): void {

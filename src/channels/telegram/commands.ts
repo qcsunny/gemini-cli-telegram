@@ -29,6 +29,8 @@ import type { SessionOptions } from '../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../core/resume.js';
 import { logger } from '../../utils/logger.js';
 import { messageCache } from '../../utils/messageCache.js';
+import type { ReplyContext } from '../../utils/messageCache.js';
+import { extractThoughtAndContent } from '../../agy/agyCli.js';
 import { loadUserConfig } from '../../config/userConfig.js';
 import {
   ICONS,
@@ -442,6 +444,27 @@ function unescapeHtmlEntities(str: string): string {
     .replace(/&#39;/g, "'");
 }
 
+function extractTitleFromMarkdown(answerMarkdown: string): string {
+  const lines = answerMarkdown.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return '';
+
+  // 1. Try first level-1 heading: ^#\s+(.+)$
+  for (const line of lines) {
+    const match = line.match(/^#\s+(.+)$/);
+    if (match) return match[1].trim();
+  }
+
+  // 2. Try first level-2 heading: ^##\s+(.+)$
+  for (const line of lines) {
+    const match = line.match(/^##\s+(.+)$/);
+    if (match) return match[1].trim();
+  }
+
+  // 3. Fallback to the first line (clean out any basic inline markdown formatting like *, _, `)
+  const firstLine = lines[0].replace(/[*_`#]/g, '').trim();
+  return firstLine;
+}
+
   // ── Save message to notebook ──
   bot.command('save', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
@@ -453,102 +476,91 @@ function unescapeHtmlEntities(str: string): string {
       return;
     }
 
-    let textToSave = messageCache.get(replyToMessage.message_id);
-    if (!textToSave) {
-      textToSave = replyToMessage.text || '';
-    }
-
-    let isHtml = textToSave.startsWith('___RAW_HTML___');
-    if (isHtml) {
-      textToSave = textToSave.substring('___RAW_HTML___'.length);
-    } else if (/<[a-z][\s\S]*>/i.test(textToSave)) {
-      isHtml = true;
-    }
-
-    if (!textToSave.trim()) {
-      await ctx.reply(`${ICONS.warning} <b>The replied message has no content to save.</b>`, { parse_mode: 'HTML' });
-      return;
-    }
-
-    if (isHtml) {
-      textToSave = htmlToMarkdown(textToSave);
-    }
-
     try {
-      // Try to find the first H1-H6 HTML tag or Markdown header first
-      let rawTitle = '';
-      
-      const hMatch = textToSave.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i);
-      if (hMatch) {
-        rawTitle = hMatch[1].replace(/<[^>]*>/g, '').trim();
-      }
+      let answerMarkdown = '';
+      let thinkingMarkdown = '';
+      let title = '';
 
-      if (!rawTitle) {
-        const markdownLines = textToSave.split('\n');
-        for (const line of markdownLines) {
-          const match = line.match(/^\s*#{1,6}\s+(.+)$/);
-          if (match) {
-            rawTitle = match[1].trim();
-            break;
-          }
+      // ReplyContext is the primary and direct source of truth
+      const replyContext: ReplyContext | null = messageCache.getReplyContext(replyToMessage.message_id);
+      if (replyContext) {
+        answerMarkdown = replyContext.answerMarkdown;
+        thinkingMarkdown = replyContext.thinkingMarkdown;
+        title = replyContext.title || extractTitleFromMarkdown(answerMarkdown);
+      } else {
+        // Fallback for older messages / messages saved before restart
+        let textToSave = messageCache.get(replyToMessage.message_id);
+        if (!textToSave) {
+          textToSave = replyToMessage.text || '';
         }
-      }
-
-      if (!rawTitle) {
-        // Fallback: replace HTML block tags and line breaks with newlines to preserve separation,
-        // then strip remaining tags and take the first non-empty line
-        const textWithLines = textToSave
-          .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<\/p>/gi, '\n')
-          .replace(/<\/h[1-6]>/gi, '\n')
-          .replace(/<\/div>/gi, '\n')
-          .replace(/<\/li>/gi, '\n');
-        
-        const plainText = textWithLines.replace(/<[^>]*>/g, '');
-        const lines = plainText.split('\n');
-        for (const line of lines) {
-          if (line.trim()) {
-            rawTitle = line.trim();
-            break;
-          }
+        if (!textToSave.trim()) {
+          await ctx.reply(`${ICONS.warning} <b>The replied message has no content to save.</b>`, { parse_mode: 'HTML' });
+          return;
         }
+
+        if (textToSave.startsWith('___RAW_HTML___')) {
+          textToSave = textToSave.substring('___RAW_HTML___'.length);
+        }
+        if (/<[a-z][\s\S]*>/i.test(textToSave)) {
+          textToSave = htmlToMarkdown(textToSave);
+        }
+
+        const parsed = extractThoughtAndContent(textToSave);
+        answerMarkdown = parsed.content;
+        thinkingMarkdown = parsed.thought;
+        title = extractTitleFromMarkdown(answerMarkdown);
       }
 
-      if (!rawTitle) {
-        rawTitle = 'Saved_Message';
+      if (!answerMarkdown.trim() && !thinkingMarkdown.trim()) {
+        await ctx.reply(`${ICONS.warning} <b>The replied message has no content to save.</b>`, { parse_mode: 'HTML' });
+        return;
       }
 
-      // Sanitize filename: keep Chinese, alphanumeric, and spaces
-      let sanitizedTitle = rawTitle.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, '').trim();
-      if (sanitizedTitle.length > 30) {
-        sanitizedTitle = sanitizedTitle.substring(0, 30).trim();
+      // Reassemble the Markdown according to the required Obsidian-friendly structure
+      let reassembledMarkdown = '';
+      if (title) {
+        reassembledMarkdown += `# ${title}\n\n`;
+      }
+      reassembledMarkdown += `${answerMarkdown}\n`;
+
+      if (thinkingMarkdown.trim()) {
+        reassembledMarkdown += `\n---\n\n<details>\n<summary>🤔 AI Thinking（点击展开）</summary>\n\n${thinkingMarkdown.trim()}\n\n</details>\n`;
       }
 
-      if (!sanitizedTitle) {
-        sanitizedTitle = 'Saved_Message';
+      // Sanitize title for filename: Windows illegal characters are \/:*?"<>|
+      let sanitizedTitle = title.replace(/[\/\\:*?"<>|]/g, '').trim();
+      // Truncate length
+      if (sanitizedTitle.length > 50) {
+        sanitizedTitle = sanitizedTitle.substring(0, 50).trim();
       }
-
-      // Replace spaces with underscores
+      // Replace whitespace/tabs with underscores
       sanitizedTitle = sanitizedTitle.replace(/\s+/g, '_');
 
-      // Get YYYYMMDD prefix in local time
+      // Date prefix
       const now = new Date();
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const date = String(now.getDate()).padStart(2, '0');
       const dateStr = `${year}${month}${date}`;
 
+      let fileName = '';
+      if (!sanitizedTitle) {
+        const timestamp = Math.floor(Date.now() / 1000);
+        fileName = `Untitled_${timestamp}.md`;
+      } else {
+        fileName = `${dateStr}_${sanitizedTitle}.md`;
+      }
+
       // Resolve notebook path from user config or fallback to a default safe path
       const userConfig = loadUserConfig();
       const folderPath = userConfig?.notebookPath || path.join(os.homedir(), '.gemini-cli-telegram', 'notebook');
-      const fileName = `${dateStr}_${sanitizedTitle}.md`;
       const filePath = path.join(folderPath, fileName);
 
       // Ensure directory exists
       await fs.mkdir(folderPath, { recursive: true });
 
       // Save content
-      await fs.writeFile(filePath, textToSave, 'utf8');
+      await fs.writeFile(filePath, reassembledMarkdown, 'utf8');
 
       await ctx.reply(`${ICONS.success} <b>Saved to Notebook</b>\n\nSaved successfully to:\n<code>${escapeHtml(filePath)}</code>`, {
         parse_mode: 'HTML',
