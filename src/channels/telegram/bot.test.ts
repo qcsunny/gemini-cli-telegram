@@ -285,22 +285,31 @@ describe('TelegramBot', () => {
 
     it('should promote ephemeral draft preview to a real message when finalization is reached via editRich', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
-      
+
       // Simulate draft is active (this sets a draft ID in draftIds map for the chatId)
       await reply.sendRichDraft!('some draft');
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(1);
 
       // Now call editRich (simulating finalization edit)
-      await reply.editRich!(9999, 'final text');
+      const finalizedId = await reply.editRich!(9999, 'final text');
 
-      // It should NOT call editMessageText since it's a draftId, but rather promote it by calling sendRichMessage
+      // A streamed draft is an ephemeral preview that is NOT persisted by Telegram.
+      // Finalization MUST materialize it into a real message via sendRichMessage
+      // (not another sendRichMessageDraft, which would just refresh the preview and
+      // leave the first message swallowed).
       expect(mockCtx.api.raw.editMessageText).not.toHaveBeenCalled();
-      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith({
-        chat_id: chatId,
-        rich_message: expect.objectContaining({
-          html: expect.any(String),
-        }),
-      });
+      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          chat_id: chatId,
+          rich_message: expect.objectContaining({
+            html: expect.any(String),
+          }),
+        })
+      );
+      // The real persisted message id is returned so callers can track it.
+      expect(finalizedId).toBe(888);
     });
 
     it('should fallback to edit Option B (Markdown) if Option A throws', async () => {

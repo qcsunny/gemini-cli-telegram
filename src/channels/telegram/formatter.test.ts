@@ -16,7 +16,8 @@ import {
   splitDetails,
   tokenizeHtml,
   safeHtmlSlice,
-  normalizeSpacingAroundDetails
+  normalizeSpacingAroundDetails,
+  normalizeMarkdownFences
 } from './formatter.js';
 
 describe('Formatter Rich Message Showcase', () => {
@@ -251,8 +252,8 @@ Thanks for reading! 🚀
 
     it('should split code blocks line-by-line and re-wrap them with code tags', () => {
       const codeHtml = '<pre><code class="language-js">const a = 1;\nconst b = 2;\nconst c = 3;</code></pre>';
-      // Split with low maxLength to force chunking
-      const chunks = splitCodeBlock(codeHtml, 45);
+      // Split with low maxLength to force chunking (must be at least 55 to fit a single line of length 12 with 43 chars of tags)
+      const chunks = splitCodeBlock(codeHtml, 56);
       
       expect(chunks.length).toBe(3);
       expect(chunks[0]).toBe('<pre><code class="language-js">const a = 1;</code></pre>');
@@ -330,6 +331,45 @@ Thanks for reading! 🚀
       const html = markdownToHtml(markdown);
       expect(html).toContain('<tg-math>a^2 + b^2 = c^2</tg-math>');
       expect(html).toContain('<tg-math-block>\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n</tg-math-block>');
+    });
+
+    it('should correctly tokenize nested blockquotes', () => {
+      const htmlText = '<blockquote>Outer <blockquote>Inner</blockquote> OuterEnd</blockquote>';
+      const tokens = tokenizeHtml(htmlText);
+      expect(tokens.length).toBe(1);
+      expect(tokens[0]).toEqual({
+        type: 'blockquote',
+        value: '<blockquote>Outer <blockquote>Inner</blockquote> OuterEnd</blockquote>',
+      });
+    });
+
+    it('should correctly tokenize nested details blocks', () => {
+      const htmlText = '<details><summary>Outer</summary>Content <details><summary>Inner</summary>InnerContent</details> End</details>';
+      const tokens = tokenizeHtml(htmlText);
+      expect(tokens.length).toBe(1);
+      expect(tokens[0]).toEqual({
+        type: 'details',
+        value: '<details><summary>Outer</summary>Content <details><summary>Inner</summary>InnerContent</details> End</details>',
+      });
+    });
+
+    it('should split ultra-long single lines inside code blocks', () => {
+      const longLine = 'A'.repeat(100);
+      const codeHtml = `<pre><code>${longLine}</code></pre>`;
+      const chunks = splitCodeBlock(codeHtml, 50);
+      expect(chunks.length).toBe(4);
+      expect(chunks[0]).toBe(`<pre><code>${'A'.repeat(26)}</code></pre>`);
+      expect(chunks[1]).toBe(`<pre><code>${'A'.repeat(26)}</code></pre>`);
+      expect(chunks[3]).toBe(`<pre><code>${'A'.repeat(22)}</code></pre>`);
+    });
+
+    it('should normalize code fences attached to text onto separate newlines', () => {
+      const input = '• **Header:**```\ncode line 1\ncode line 2\n```';
+      const normalized = normalizeMarkdownFences(input);
+      expect(normalized).toBe('• **Header:**\n```\ncode line 1\ncode line 2\n```');
+      
+      const html = markdownToHtml(input);
+      expect(html).toContain('<pre><code>code line 1\ncode line 2');
     });
   });
 });

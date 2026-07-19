@@ -320,10 +320,10 @@ export function buildChannelReply(
         throw err;
       }
     },
-    editRichDraft: async (draftId: number, originalText: string | StructuredMessage): Promise<void> => {
+    editRichDraft: async (draftId: number, originalText: string | StructuredMessage, isStreaming = true): Promise<void> => {
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
-      logger.info(`[TRACE-EVIDENCE] editRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      logger.info(`[TRACE-EVIDENCE] editRichDraft called: draftId=${draftId}, isStreaming=${isStreaming}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = typeof originalText === 'string'
         ? originalText
@@ -333,7 +333,7 @@ export function buildChannelReply(
       // Updating a draft is done by calling sendRichMessageDraft again with the same draft_id.
       // Option A: Rich HTML
       try {
-        let html = getHtmlPayload(originalText, true);
+        let html = getHtmlPayload(originalText, isStreaming);
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
           html = '正在思考...<br><br>' + html;
         }
@@ -342,11 +342,11 @@ export function buildChannelReply(
           ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
           : (!!originalText.thought && originalText.thought.trim().length > 0);
 
-        const suffix = hasThought
-          ? ''
-          : '\n<tg-thinking>正在思考...</tg-thinking>';
+        const suffix = (isStreaming && !hasThought)
+          ? '\n<tg-thinking>正在思考...</tg-thinking>'
+          : '';
         
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A): html="${html}${suffix}"`);
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A, isStreaming=${isStreaming}): html="${html}${suffix}"`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
@@ -378,7 +378,7 @@ export function buildChannelReply(
         throw err;
       }
     },
-    editRich: async (messageId: number, originalText: string | StructuredMessage): Promise<void> => {
+    editRich: async (messageId: number, originalText: string | StructuredMessage): Promise<number | void> => {
       const textLen = typeof originalText === 'string'
         ? originalText.length
         : (originalText.content.length + (originalText.thought?.length || 0));
@@ -389,13 +389,18 @@ export function buildChannelReply(
         : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
       // If we have an active draft, the messageId is actually a draftId.
-      // We must promote/send the final message as a NEW message instead of editing.
+      // Per Telegram Bot API, a streamed draft is an EPHEMERAL preview that is
+      // NOT persisted in the chat. To keep the first message, we MUST materialize
+      // it into a real message by sending the final content via sendRichMessage
+      // (not another sendRichMessageDraft, which would just refresh the preview
+      // and leave the first message swallowed once the draft expires). The draft
+      // bubble is abandoned and cleaned up by Telegram automatically.
       if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
-        logger.debug(`[DEBUG] Promoting draft to messageId=${messageId} via sendRich`);
+        logger.debug(`[DEBUG] Finalizing draft messageId=${messageId} by sending a real message via sendRich`);
         activeDraftIds.delete(messageId);
         draftIds.delete(chatId);
-        await replyObj.sendRich!(originalText);
-        return;
+        const realId = await replyObj.sendRich!(originalText);
+        return realId;
       }
 
       // Option A: Native Rich HTML
@@ -476,11 +481,10 @@ export function buildChannelReply(
         return msg.message_id;
       }
     },
-    edit: async (messageId: number, newText: string): Promise<void> => {
+    edit: async (messageId: number, newText: string): Promise<number | void> => {
       if (parseMode === 'RichText') {
         if (newText.trim()) {
-          await replyObj.editRich!(messageId, newText);
-          return;
+          return await replyObj.editRich!(messageId, newText);
         }
       }
       await safeEdit(messageId, newText, true);

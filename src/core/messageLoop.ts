@@ -55,7 +55,7 @@ async function withTimeout<T>(promise: Promise<T>, modelLabel: string): Promise<
  */
 function stripWholeMessageCodeFence(text: string): string {
   const trimmed = text.trim();
-  const fenceMatch = /^```([a-zA-Z0-9_-]*)\n([\s\S]*)\n```$/m.exec(trimmed);
+  const fenceMatch = /^```([a-zA-Z0-9_-]*)\n([\s\S]*)\n```$/.exec(trimmed);
   if (!fenceMatch) return text;
   const lang = (fenceMatch[1] || '').toLowerCase();
   // Only strip when it's a markdown/empty fence wrapping the whole message.
@@ -602,20 +602,25 @@ export async function processMessage(
         thoughtAndStatsHtmlChunks.push(...chunks);
       }
 
-      const finalHtmlMessages = isRichSingleMessage
-        ? [
-            ...thoughtAndStatsHtmlChunks,
-            ...bodyHtmlChunks
-          ]
-        : [
-            ...bodyHtmlChunks,
-            ...thoughtAndStatsHtmlChunks
-          ];
+      // Both modes must lead with the answer body so that the FIRST message in
+      // the chat window shows the opening title / first paragraph. In RichText
+      // mode the first message is the streaming draft: editing it to the footer
+      // or thinking summary would "swallow" the start of the real answer. The
+      // thought summary and stats footer always trail at the end.
+      const finalHtmlMessages = [
+        ...bodyHtmlChunks,
+        ...thoughtAndStatsHtmlChunks
+      ];
 
       if (finalResult.exitCode === 0 && finalHtmlMessages.length > 0) {
         if (currentMessageId) {
           try {
-            await reply.edit(currentMessageId, finalHtmlMessages[0]);
+            // In RichText mode this materializes the ephemeral draft into a real
+            // persisted message and returns its new id; in other modes it edits in place.
+            const finalizedId = await reply.edit(currentMessageId, finalHtmlMessages[0]);
+            if (typeof finalizedId === 'number') {
+              currentMessageId = finalizedId;
+            }
             if (answerBuffer.trim()) {
               messageCache.set(currentMessageId, answerBuffer.trim());
             }
