@@ -367,10 +367,19 @@ Thanks for reading! 🚀
     it('should normalize code fences attached to text onto separate newlines', () => {
       const input = '• **Header:**```\ncode line 1\ncode line 2\n```';
       const normalized = normalizeMarkdownFences(input);
-      expect(normalized).toBe('• **Header:**\n```\ncode line 1\ncode line 2\n```');
+      expect(normalized).toBe('• **Header:**\n\n```\n\ncode line 1\ncode line 2\n\n```');
 
       const html = markdownToHtml(input);
-      expect(html).toContain('<pre><code>code line 1\ncode line 2');
+      expect(html).toContain('code line 1\ncode line 2');
+      expect(html).not.toContain('```');
+    });
+
+    it('should not leak raw triple-backticks when closing fence is glued to text', () => {
+      const input = '正文```python\nprint("hello")\n```后面也没有换行接正文继续写。还有 ```js\nconst a=1\n```这种也粘在一起。';
+      const html = markdownToHtml(input);
+      expect(html).not.toContain('```');
+      expect(html).toContain('<pre><code class="language-python">');
+      expect(html).toContain('<pre><code class="language-js">');
     });
   });
 
