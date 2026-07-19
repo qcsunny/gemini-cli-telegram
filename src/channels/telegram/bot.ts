@@ -22,7 +22,7 @@ import type {
   StructuredMessage,
 } from '../../core/types.js';
 import { registerCommands } from './commands.js';
-import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks } from './formatter.js';
+import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks, buildFooterBlocksFromHtml } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
@@ -47,8 +47,11 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
  */
 function getBlocksPayload(originalText: string | StructuredMessage): any[] {
   if (typeof originalText === 'string') {
-    // Raw HTML passthrough has no meaningful block form; let HTML path handle it.
-    if (originalText.startsWith('___RAW_HTML___')) return [];
+    // A footer is sent as `___RAW_HTML___` + (thinking <details> + tg://btn_info_footer
+    // anchor). Convert it to native 10.2 blocks (details + footer) instead of HTML.
+    if (originalText.startsWith('___RAW_HTML___')) {
+      return buildFooterBlocksFromHtml(originalText.substring('___RAW_HTML___'.length));
+    }
     const blocks = buildFinalBlocks(originalText);
     return blocks;
   }

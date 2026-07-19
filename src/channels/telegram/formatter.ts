@@ -1887,6 +1887,105 @@ export function buildStreamingBlocks(
   return body;
 }
 
+/**
+ * Build the native 10.2 footer blocks for a finalized message.
+ *
+ * Two native blocks are produced (in order):
+ *  - `InputRichBlockDetails`: a collapsible "🧠 思考过程" block holding the
+ *    thinking text (rendered natively by Telegram, not hand-rolled <details>).
+ *  - `InputRichBlockFooter`: the official info-footer line
+ *    ("⚙️ model · In: … · Out: … · Cost: …") — the blocks-mode equivalent of the
+ *    `tg://btn_info_footer` HTML anchor used previously.
+ *
+ * The footer is sent as its own message (after the body), as a single blocks
+ * payload, so the collapsible block is never split.
+ */
+export function buildNativeFooterBlocks(opts: {
+  model?: string;
+  inputTokens?: string | number;
+  outputTokens?: string | number;
+  cost?: string;
+  cachedTokens?: string | number;
+  thinkingTokens?: string | number;
+  thought?: string;
+}): RichBlock[] {
+  const blocks: RichBlock[] = [];
+
+  const thoughtText = (opts.thought ?? '').trim();
+  if (thoughtText) {
+    blocks.push({
+      type: 'details',
+      summary: '🧠 思考过程 (Thinking Process)',
+      blocks: [{ type: 'paragraph', text: thoughtText }],
+    });
+  }
+
+  const parts: string[] = [];
+  if (opts.model) parts.push(opts.model);
+  const inStr = opts.inputTokens !== undefined ? String(opts.inputTokens) : '';
+  const outStr = opts.outputTokens !== undefined ? String(opts.outputTokens) : '';
+  if (inStr || outStr) {
+    parts.push(`In: ${inStr}${opts.cachedTokens ? ` (Cached: ${opts.cachedTokens})` : ''} · Out: ${outStr}${opts.thinkingTokens ? ` (Reasoning: ${opts.thinkingTokens})` : ''}`);
+  }
+  if (opts.cost) parts.push(`Cost: ${opts.cost}`);
+  if (parts.length > 0) {
+    blocks.push({ type: 'footer', text: `⚙️ ${parts.join(' · ')}` });
+  }
+
+  return blocks;
+}
+
+/**
+ * Parse a footer rendered as HTML (`___RAW_HTML___` payload) into native 10.2
+ * blocks, so the footer benefits from the structured blocks path instead of
+ * falling back to HTML. Expected HTML shape (produced by markdownToHtml for a
+ * `[footer: …]` marker + thought):
+ *   <details>…<summary>🧠 思考过程 …</summary>…thinking…</details>
+ *   <a href="tg://btn_info_footer|MODEL|IN|OUT|COST[|CACHED|THINKING]">⚙️ …</a>
+ */
+export function buildFooterBlocksFromHtml(html: string): RichBlock[] {
+  const blocks: RichBlock[] = [];
+
+  // 1. Thinking <details> block.
+  const detailsMatch = html.match(/<details[^>]*>([\s\S]*?)<\/details>/i);
+  if (detailsMatch) {
+    let inner = detailsMatch[1];
+    inner = inner.replace(/<summary>[\s\S]*?<\/summary>/gi, '');
+    // Strip the trailing stats line if it was appended inside the details by the
+    // old renderer; the native footer block carries stats separately.
+    inner = inner.replace(/<i>[\s\S]*?<\/i>/gi, '');
+    const text = inner.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+    if (text) {
+      blocks.push({
+        type: 'details',
+        summary: '🧠 思考过程 (Thinking Process)',
+        blocks: [{ type: 'paragraph', text }],
+      });
+    }
+  }
+
+  // 2. Native info footer (tg://btn_info_footer|MODEL|IN|OUT|COST|CACHED|THINKING).
+  const footerMatch = html.match(/tg:\/\/btn_info_footer\|([^"'>]+)/i);
+  if (footerMatch) {
+    const [model, input, output, cost, cached, thinking] = footerMatch[1].split('|');
+    const parts: string[] = [];
+    if (model) parts.push(model);
+    if (input || output) {
+      let s = `In: ${input ?? ''}`;
+      if (cached && cached !== '0') s += ` (Cached: ${cached})`;
+      s += ` · Out: ${output ?? ''}`;
+      if (thinking && thinking !== '0') s += ` (Reasoning: ${thinking})`;
+      parts.push(s);
+    }
+    if (cost) parts.push(`Cost: ${cost}`);
+    if (parts.length > 0) {
+      blocks.push({ type: 'footer', text: `⚙️ ${parts.join(' · ')}` });
+    }
+  }
+
+  return blocks;
+}
+
 function convertMath(html: string): string {
   const parts = html.split(/(<pre[\s\S]*?<\/pre>)/gi);
   return parts.map(part => {
