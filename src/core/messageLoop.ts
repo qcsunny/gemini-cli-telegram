@@ -479,6 +479,8 @@ export async function processMessage(
         thoughtEventCount = 0;
         textEventCount = 0;
 
+        let rawStreamBuffer = '';
+
         try {
           logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
           turnStartTime = Date.now();
@@ -506,14 +508,21 @@ export async function processMessage(
 
               logger.debug(`[EVENT] type="${event.type}" content.length=${event.content?.length || 0} content_preview="${(event.content || '').slice(0, 100).replace(/\n/g, '\\n')}"`);
 
-
               if (event.type === 'thought') {
                 thoughtBuffer += event.content || '';
               } else if (event.type === 'text') {
-                answerBuffer += event.content || '';
-                // Transition from thinking → body: the body region now grows.
-                // Block order stays fixed; we only start appending body blocks.
-                if (phase === 'thinking') phase = 'body';
+                rawStreamBuffer += event.content || '';
+                const parsed = extractThoughtAndContent(rawStreamBuffer);
+                if (parsed.thought) {
+                  thoughtBuffer = parsed.thought;
+                  answerBuffer = parsed.content;
+                } else {
+                  answerBuffer = rawStreamBuffer;
+                }
+                // Transition from thinking → body: only when body text starts arriving
+                if (phase === 'thinking' && answerBuffer.trim()) {
+                  phase = 'body';
+                }
               } else if (event.type === 'done') {
                 isDone = true;
                 logger.debug(`[EVENT STATS] thought event count=${thoughtEventCount} text event count=${textEventCount}`);
