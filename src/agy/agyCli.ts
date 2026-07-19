@@ -716,6 +716,8 @@ export interface AgyRunOptions {
   onChunk?: (chunk: string) => void;
   /** Called with structured streaming events */
   onEvent?: (event: AgyStreamEvent) => void;
+  /** Called on any streamed progress; used by the caller to reset an inactivity timer. */
+  onActivity?: () => void;
   /** Called when the agy child process is successfully spawned. */
   onSpawn?: (pid: number) => void;
   /** AbortSignal — kills the agy process when aborted. */
@@ -899,6 +901,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (opts.onEvent) {
         opts.onEvent({ type: 'text', content: text });
       }
+      if (opts.onActivity) opts.onActivity();
     });
 
     child.stderr.on('data', (chunk: Buffer) => {

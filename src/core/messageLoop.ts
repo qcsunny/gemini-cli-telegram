@@ -27,19 +27,41 @@ const DEBOUNCE_INTERVAL_MS = 1000;
  * user would see a silent "no reply". This wrapper guarantees the call always
  * settles, surfacing a clear error instead of hanging forever.
  */
-const MODEL_RUN_TIMEOUT_MS = 150_000;
+const MODEL_RUN_TIMEOUT_MS = 600_000;
 
-async function withTimeout<T>(promise: Promise<T>, modelLabel: string): Promise<T> {
+/**
+ * Overall guard for a single model run. The timer is *reset on activity*: any
+ * streamed chunk or event counts as progress, so a slow-but-actively-streaming
+ * long reply is NOT killed. It only fires when there has been NO output
+ * (including streamed chunks) for MODEL_RUN_TIMEOUT_MS, i.e. a genuine upstream
+ * stall. `onActivity` lets the caller report progress to reset the timer.
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  modelLabel: string,
+  onActivity?: () => void,
+): Promise<{ result: T; resetInactivity: () => void }> {
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
+  let reject: (reason?: any) => void;
+  const arm = () => {
+    if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       reject(new Error(
         `模型 \`${modelLabel}\` 在 ${MODEL_RUN_TIMEOUT_MS / 1000}s 内无响应（疑似上游服务挂起）。请稍后重试，或切换到其它模型。`
       ));
     }, MODEL_RUN_TIMEOUT_MS);
+  };
+  const timeout: Promise<never> = new Promise((_reject) => {
+    reject = _reject;
+    arm();
   });
+  const activity = () => {
+    if (onActivity) onActivity();
+    arm();
+  };
   try {
-    return await Promise.race([promise, timeout]);
+    const result = await Promise.race([promise, timeout]);
+    return { result, resetInactivity: activity };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -416,15 +438,20 @@ export async function processMessage(
         try {
           logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
           turnStartTime = Date.now();
-          const result = await withTimeout(runAgyPrint({
+          let resetInactivity: (() => void) | undefined;
+          const { result } = await withTimeout(runAgyPrint({
             prompt: finalPrompt,
             cwd,
             conversationId: session.conversationId,
             model: modelToUse,
             proxy: session.proxy,
             signal,
+            onActivity: () => { if (resetInactivity) resetInactivity(); },
             onSpawn: (pid) => { session.childPid = pid; },
             onEvent: (event) => {
+              // Any streamed event counts as progress: reset the inactivity timer
+              // so a slow-but-active long reply is never killed mid-stream.
+              if (resetInactivity) resetInactivity();
               if (event.type === 'thought') {
                 thoughtEventCount++;
               } else if (event.type === 'text') {
