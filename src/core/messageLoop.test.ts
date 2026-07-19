@@ -354,11 +354,11 @@ describe('processMessage', () => {
     expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('btn_info_footer'));
   });
 
-  it('Rich mode: thinking still gets its own leading message when thought arrives AFTER body text (interleaved)', async () => {
-    // Reproduces the regression: model interleaves thought + text tokens, so
-    // a body draft is created before the thinking message. The thought must
-    // still be shown as a separate leading message, not folded into the footer.
-    const input: MultimodalInput = { text: 'interleaved test' };
+  it('Rich mode: thinking process is rendered into the trailing footer message', async () => {
+    // User preference: keep the thinking folded into the end footer (not a
+    // separate leading message). The real thought text must be displayed there,
+    // not just used for token estimation.
+    const input: MultimodalInput = { text: 'footer thinking test' };
 
     const richReply: ChannelReply = {
       send: vi.fn().mockResolvedValue(700),
@@ -366,6 +366,7 @@ describe('processMessage', () => {
       sendPlain: vi.fn().mockResolvedValue(456),
       editPlain: vi.fn(),
       delete: vi.fn(),
+      sendDocument: vi.fn(),
       sendRich: vi.fn().mockResolvedValue(701),
       sendRichDraft: vi.fn().mockResolvedValue(702),
       editRich: vi.fn(),
@@ -379,33 +380,27 @@ describe('processMessage', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       if (options.onEvent) {
-        options.onEvent({ type: 'text', content: 'body starts first' });
-        options.onEvent({ type: 'thought', content: 'thinking process' });
-        options.onEvent({ type: 'text', content: ' more body' });
+        options.onEvent({ type: 'thought', content: 'the model reasons step by step' });
+        options.onEvent({ type: 'text', content: 'final answer' });
         options.onEvent({ type: 'done' });
       }
       return {
-        output: 'body starts first more body',
-        conversationId: 'conv-interleaved',
+        output: '<thought>the model reasons step by step</thought>final answer',
+        conversationId: 'conv-footer-thinking',
         exitCode: 0,
       };
     });
 
     await processMessage(mockSession, input, richReply, richFormatter);
 
-    // The thinking process must be sent as its OWN leading message via send (Rich).
-    const thinkingSent = richReply.send.mock.calls.some((c) =>
-      String(c[0]).includes('thinking process'),
-    );
-    expect(thinkingSent).toBe(true);
-
-    // It must NOT be folded into the footer (which contains the body + btn_info_footer).
-    const footerCall = richReply.send.mock.calls.find((c) =>
+    // The footer (sent via send) must contain the actual thinking text.
+    const sendCalls = (richReply.send as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const footerCall = sendCalls.find((c) =>
       String(c[0]).includes('btn_info_footer'),
     );
     expect(footerCall).toBeDefined();
     if (footerCall) {
-      expect(String(footerCall[0])).not.toContain('thinking process');
+      expect(String(footerCall[0])).toContain('the model reasons step by step');
     }
   });
 });

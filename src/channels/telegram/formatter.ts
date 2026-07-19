@@ -5,6 +5,7 @@
  */
 
 import MarkdownIt from 'markdown-it';
+import markdownItCjkFriendly from 'markdown-it-cjk-friendly';
 import type { MessageFormatter, StructuredMessage } from '../../core/types.js';
 import type { RichBlock, RichText } from './richMessage.js';
 import { extractThoughtBlocksAndSegments } from '../../agy/agyCli.js';
@@ -234,7 +235,7 @@ export function splitTable(tableHtml: string, maxLength: number): string[] {
   const tbodyContent = tbodyMatch ? tbodyMatch[1] : '';
   
   const rows: string[] = [];
-  const trRegex = /<tr>[\s\S]*?<\/tr>/gi;
+  const trRegex = /<tr(?:\s[^>]*)?>[\s\S]*?<\/tr>/gi;
   let match;
   while ((match = trRegex.exec(tbodyContent)) !== null) {
     rows.push(match[0]);
@@ -417,6 +418,16 @@ export function chunkAnswerBody(htmlText: string, maxLength: number): string[] {
       for (const subChunk of subChunks) {
         chunks.push(subChunk);
       }
+      // Safety: if a sub-chunk still exceeds the limit (e.g. an unhandled token
+      // type), fall back to tag-aware text splitting so we never emit a message
+      // over Telegram's ~4096 char cap (which would otherwise get truncated
+      // mid-tag, breaking rendering).
+      if (subChunks.some((c) => c.length > maxLength)) {
+        chunks.length = 0;
+        for (const sub of splitTextWithOpenTags(val, maxLength)) {
+          chunks.push(sub);
+        }
+      }
     } else {
       if (currentChunk.length + val.length > maxLength) {
         if (currentChunk.trim().length > 0) {
@@ -533,6 +544,11 @@ const md = new MarkdownIt({
   typographer: false,
 });
 md.enable(['strikethrough', 'table']);
+
+// Treat CJK characters as emphasis boundaries so that `**加粗**` and
+// `**“中文”**` adjacent to CJK text/punctuation render correctly (CommonMark
+// otherwise requires spaces around the `**` delimiters and fails for CJK).
+md.use(markdownItCjkFriendly);
 
 md.inline.ruler.at('text', (state, silent) => {
   const pos = state.pos;
@@ -1303,6 +1319,12 @@ export function normalizeMarkdownStructure(markdown: string): string {
   // This avoids touching `---` that appears inside words or code.
   text = text.replace(/(\n|^)([ \t]*---[ \t]*|[ \t]*———[ \t]*)(?=\n|#|$)/g, '$1\n\n$2\n\n');
   text = text.replace(/([^\n#])(---|———)(?=\s*#)/g, '$1\n\n$2\n\n');
+  // A heading (`#`..`######` + space) glued to the end of the previous line
+  // (e.g. `## 1. 范式转移...AGI）### 1.1 大模型...`) is not recognized by the
+  // parser because the `#` is not at line start. Split it onto its own line so
+  // it renders as a real sub-heading instead of being swallowed into the prior
+  // heading's text.
+  text = text.replace(/([^\n\s#])(#{1,6}\s+[^\n]+)/g, '$1\n$2');
   // Collapse the excessive blank lines we may have introduced.
   text = text.replace(/\n{3,}/g, '\n\n');
   return text;

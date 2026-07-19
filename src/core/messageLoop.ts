@@ -352,7 +352,16 @@ export async function processMessage(
   // materialized into real (persisted) messages during streaming.
   let committedLen = 0;
 
-  const CHUNK_FINALIZE_THRESHOLD = 3900;
+  // EXPERIMENT: raise threshold so nothing commits incrementally; the whole
+  // body is sent as one final message (tests sendRichMessage char limit).
+  // EXPERIMENT: when true, send the whole body as one message (no chunking)
+  // to test whether sendRichMessage has no char limit. Set false to restore
+  // safe 4096-based chunking.
+  const NO_BODY_CHUNK = true;
+  // EXPERIMENT: when true, the live streaming draft is also never truncated
+  // (tests whether sendRichDraft has no char limit either).
+  const NO_DRAFT_CHUNK = true;
+  const CHUNK_FINALIZE_THRESHOLD = NO_BODY_CHUNK ? Number.MAX_SAFE_INTEGER : 3900;
 
   const capabilities = getModelCapabilities(session.model);
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
@@ -481,7 +490,9 @@ export async function processMessage(
             thought: '',
           };
 
-          const truncatedContent = formatter.truncateForStream(structuredMsg.content);
+          const truncatedContent = NO_DRAFT_CHUNK
+            ? structuredMsg.content
+            : formatter.truncateForStream(structuredMsg.content);
 
           const structuredTruncMsg: StructuredMessage = {
             content: truncatedContent,
@@ -719,14 +730,21 @@ export async function processMessage(
         const parts = answerBuffer.split(/\s*---(?:split|spilt)---\s*/gi).filter(p => p.trim());
         for (const part of parts) {
           const partHtml = markdownToHtml({ content: part });
-          const chunks = formatter.chunkText('___RAW_HTML___' + partHtml);
+          // EXPERIMENT: when NO_BODY_CHUNK is true, send the whole body as a
+          // single message to test whether sendRichMessage has no char limit.
+          // Set to false to restore safe 4096-based chunking.
+          const chunks = NO_BODY_CHUNK
+            ? ['___RAW_HTML___' + partHtml]
+            : formatter.chunkText('___RAW_HTML___' + partHtml);
           bodyHtmlChunks.push(...chunks);
         }
       }
 
-      // The thinking process is streamed live into its own message BEFORE the
-      // body (real model order: think first, then answer), so it is never
-      // re-sent here. Only the stats footer is appended at the end.
+      // The thinking process is folded into the trailing footer message (user
+      // preference: keep it at the end, not as a separate leading message), so
+      // render the real thought text here as a collapsible block followed by the
+      // stats line. Previously the thought was only fed into token estimation
+      // and never actually displayed.
       const footerChunks: string[] = [];
       const footerMarker = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
@@ -734,7 +752,14 @@ export async function processMessage(
         answerBuffer + (thoughtBuffer.trim() ? '\n' + thoughtBuffer.trim() : ''),
         finalResult.usage
       );
-      const footerHtml = markdownToHtml(footerMarker);
+      // Render the footer exactly once via markdownToHtml: the thinking text
+      // becomes a readable collapsible "🧠 思考过程" block, and the stats line
+      // is the content. Calling markdownToHtml more than once would re-parse and
+      // mangle the already-rendered HTML.
+      const footerHtml = markdownToHtml({
+        content: footerMarker,
+        thought: thoughtBuffer.trim(),
+      });
       footerChunks.push(...formatter.chunkText('___RAW_HTML___' + footerHtml));
 
       // Finalize. Body text was already materialized incrementally during
