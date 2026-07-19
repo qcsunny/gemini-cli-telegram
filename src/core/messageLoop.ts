@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
-import { markdownToRichBlocksDelta } from '../channels/telegram/formatter.js';
+import { markdownToRichBlocks, markdownToRichBlocksDelta } from '../channels/telegram/formatter.js';
 import { runAgyPrint, extractThoughtAndContent, getModelCapabilities } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
@@ -669,10 +669,13 @@ export async function processMessage(
 
       // (b) Convert any leftover body markdown (the delta not yet streamed).
       if (answerBuffer.trim()) {
-        const remaining = markdownToRichBlocksDelta(
-          convertedBodyLen === 0 ? '' : answerBuffer.slice(0, convertedBodyLen),
-          answerBuffer,
-        );
+        // When no streaming occurred at all (convertedBodyLen===0), parse the full
+        // answerBuffer in one shot with markdownToRichBlocks to avoid the delta
+        // overlap-split logic which would re-parse already-converted rows and produce
+        // duplicate table rows / list items.
+        const remaining = convertedBodyLen === 0
+          ? markdownToRichBlocks(answerBuffer)
+          : markdownToRichBlocksDelta(answerBuffer.slice(0, convertedBodyLen), answerBuffer);
         if (remaining.length > 0) {
           if (footerBlockIndex >= 0) blocks.splice(footerBlockIndex, 0, ...remaining);
           else blocks.push(...remaining);
@@ -728,30 +731,58 @@ export async function processMessage(
         }
 
         // Atomically commit the single draft → one real persisted message.
+        const replyContext = {
+          answerMarkdown: answerBuffer.trim(),
+          thinkingMarkdown: thoughtBuffer.trim(),
+        };
+
         if (isRichSingleMessage) {
           if (currentMessageId !== null && blocks.length > 0) {
             phase = 'footer';
             try {
               await reply.editRichBlocks!(currentMessageId, blocks);
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
             } catch (e) {
               logger.warn(`[messageLoop] Failed to commit final blocks, falling back to sendRich: ${e}`);
               try {
                 const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
                 currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
-                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
               } catch (e2) {
                 logger.warn(`[messageLoop] sendRich fallback failed: ${e2}`);
               }
             }
           } else if (blocks.length > 0) {
-            // No draft was ever created (e.g. extremely fast completion): send once.
+            // No draft was ever created (e.g. Claude Thinking model outputs all at once).
+            // Send the already-built blocks array directly instead of re-invoking sendRich
+            // (which would re-parse answerBuffer via buildFinalBlocks and may produce
+            // different/duplicate content).
             try {
               const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
-              currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+              if (reply.sendRichDraftBlocks && reply.editRichBlocks) {
+                // Use draft→real flow so the message is properly materialized
+                const draftId = await reply.sendRichDraftBlocks(0, blocks);
+                if (draftId) {
+                  currentMessageId = draftId;
+                  phase = 'footer';
+                  const realId = await reply.editRichBlocks(draftId, blocks);
+                  if (typeof realId === 'number' && realId > 0) currentMessageId = realId;
+                } else {
+                  throw new Error('sendRichDraftBlocks returned no id');
+                }
+              } else {
+                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
+              }
+              if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext);
             } catch (e) {
-              logger.warn(`[messageLoop] sendRich failed: ${e}`);
+              logger.warn(`[messageLoop] sendRich (no-draft path) failed: ${e}`);
+              try {
+                const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
+                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
+                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
+              } catch (e2) {
+                logger.warn(`[messageLoop] sendRich fallback also failed: ${e2}`);
+              }
             }
           }
         } else if (answerBuffer.trim()) {
@@ -762,10 +793,10 @@ export async function processMessage(
           try {
             if (currentMessageId !== null) {
               await reply.edit!(currentMessageId, finalText);
-              messageCache.set(currentMessageId, answerBuffer.trim());
+              messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
             } else {
               currentMessageId = await reply.send!(finalText);
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
             }
           } catch (e) {
             logger.warn(`[messageLoop] Plain finalize failed: ${e}`);
