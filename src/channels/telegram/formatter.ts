@@ -491,6 +491,10 @@ export const telegramFormatter: MessageFormatter = {
     const omitted = text.length - headLen - tailLen;
     return `${head}\n\n︙ …（中间省略约 ${omitted} 字，生成中）… ︙\n\n${tail}`;
   },
+
+  findSafeCutPoint(markdown: string, maxLen: number): number {
+    return findSafeCutPoint(markdown, maxLen);
+  },
 };
 
 // ── HTML escaping ──
@@ -1178,6 +1182,45 @@ export function safeHtmlSlice(html: string, maxLength: number): { sliced: string
     sliced: result,
     wasTruncated: i < html.length,
   };
+}
+
+/**
+ * Find a safe cut point in raw markdown text at or before `maxLen` such that the
+ * slice is NOT split mid-structure. A cut is only allowed right after a blank
+ * line (paragraph boundary) that lies OUTSIDE any fenced code block, table, or
+ * run of heading lines. This keeps code blocks, tables and headings intact
+ * across streamed-chunk boundaries.
+ */
+export function findSafeCutPoint(markdown: string, maxLen: number): number {
+  if (markdown.length <= maxLen) return markdown.length;
+  const text = markdown.slice(0, maxLen);
+
+  // Track fenced code blocks (``` ... ```) so we never cut inside one.
+  let inFence = false;
+  let lastSafe = 0;
+  const lines = text.split('\n');
+  let acc = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // toggle fence state on lines that are exactly a fence delimiter
+    if (/^\s*```[a-zA-Z0-9_+#.-]*\s*$/.test(line)) {
+      inFence = !inFence;
+    }
+    const lineEnd = acc + line.length; // index of '\n' after this line
+    // A blank line ends a paragraph; safe to cut after it if not in a fence.
+    if (!inFence && line.trim() === '' && i > 0) {
+      // cut right after this blank line (include the '\n')
+      lastSafe = Math.min(lineEnd + 1, text.length);
+    }
+    acc = lineEnd + 1; // +1 for the '\n'
+  }
+
+  if (lastSafe > 0) return lastSafe;
+
+  // No paragraph boundary found before maxLen (e.g. one giant paragraph or
+  // everything is inside a code block). Fall back to maxLen — better to overshoot
+  // slightly than to mangle a code block by cutting mid-line.
+  return maxLen;
 }
 
 function trimHtmlBr(html: string): string {

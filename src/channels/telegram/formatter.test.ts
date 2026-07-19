@@ -18,7 +18,8 @@ import {
   safeHtmlSlice,
   normalizeSpacingAroundDetails,
   normalizeMarkdownFences,
-  normalizeMarkdownStructure
+  normalizeMarkdownStructure,
+  findSafeCutPoint
 } from './formatter.js';
 
 describe('Formatter Rich Message Showcase', () => {
@@ -411,6 +412,28 @@ Thanks for reading! 🚀
       expect(html).toContain('段落一');
       expect(html).toContain('段落二');
       expect(html).toContain('───');
+    });
+  });
+
+  describe('findSafeCutPoint', () => {
+    it('should not cut inside a fenced code block', () => {
+      const md = '前言文字\n\n```python\nline1\nline2\nline3\n```\n\n后文';
+      // threshold lands inside the code block region
+      const cut = findSafeCutPoint(md, 30);
+      const slice = md.slice(0, cut);
+      // the slice must not contain an unterminated ``` — i.e. if it opens a fence it must close it
+      const opens = (slice.match(/```/g) || []).length;
+      expect(opens % 2).toBe(0);
+    });
+
+    it('should cut at a paragraph boundary before the threshold', () => {
+      const md = '段落A第一行\n段落A第二行\n\n段落B第一行\n段落B第二行\n\n段落C';
+      const cut = findSafeCutPoint(md, 32);
+      expect(md.slice(cut)).toMatch(/^段落[BC]/); // cut is right after a blank line
+    });
+
+    it('should return full length when text is short', () => {
+      expect(findSafeCutPoint('短文本', 100)).toBe('短文本'.length);
     });
   });
 });
