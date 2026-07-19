@@ -7,7 +7,7 @@
 <p>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20-339933?style=flat-square&logo=node.js" alt="Node.js"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-red?style=flat-square" alt="License"></a>
-  <a href="https://t.me/BotFather"><img src="https://img.shields.io/badge/telegram-API%2010.1-0088cc?style=flat-square&logo=telegram" alt="Telegram"></a>
+  <a href="https://t.me/BotFather"><img src="https://img.shields.io/badge/telegram-API%2010.2-0088cc?style=flat-square&logo=telegram" alt="Telegram"></a>
 </p>
 
 <p>
@@ -128,20 +128,21 @@ sudo ./scripts/install-service.sh
 
 ---
 
-## 🎨 消息渲染引擎与 API 10.1 升级
+## 🎨 消息渲染引擎与 API 10.2 升级
 
 > [!TIP]
-> 本项目已重构并深度适配 **Telegram Bot API 10.1 原生富文本架构（Rich Messages）**，在 `RichText` 模式下展现无与伦比的交互质感。
+> 本项目已升级并深度适配 **Telegram Bot API 10.2 原生结构化富文本（Rich Blocks）**：主发送路径使用 `InputRichMessage.blocks` 结构化块（段落 / 标题 / 代码 / 表格 / 列表 / 折叠 details / 思考 thinking），由 Telegram 云端原生渲染，在 `RichText` 模式下展现无与伦比的交互质感。
 
-### ⚡ 3 级高弹性自动回退渲染链路 (Highly Resilient Pipeline)
-为了确保任何复杂代码与排版 100% 成功发送，系统在 `RichText` 模式下提供以下三重兜底机制：
-1. **Option A (原生云端解析 HTML - 黄金首选)**：调用 `sendRichMessage` 发送由 HTML 转换的富文本块，交由 Telegram 云端自动渲染，完美支持**圆角斑马纹表格**、**折叠 details 容器**以及 **LaTeX 数学公式**，完全消除脆弱的本地 AST 解析崩溃隐患。
-2. **Option B (高兼容性 MarkdownV2 自动重试)**：若 HTML 解析遇到边缘字符异常，系统立刻捕获并自动降级为精准转义的 `MarkdownV2` 格式重新发送。
-3. **Option C (最坏情况传统 HTML 兜底)**：若 API 10.1 传输或 Telegram 官方服务端突发网络灾难，则使用传统 `ctx.reply` (HTML 解析模式) 强制发送，确保消息绝不漏发。
+### ⚡ 4 级高弹性自动回退渲染链路 (Highly Resilient Pipeline)
+ 为了确保任何复杂代码与排版 100% 成功发送，系统在 `RichText` 模式下提供以下四重兜底机制：
+ 1. **Option A (10.2 原生结构化 Blocks - 黄金首选)**：调用 `sendRichMessage` / `sendRichMessageDraft` 发送 `InputRichMessage.blocks`。思考过程以原生 `details` 折叠块收尾于消息末尾（`buildFinalBlocks`），流式草稿阶段用原生 `thinking` 占位块（`buildStreamingBlocks`，仅 draft 可用）激活官方思考动效。块内文本交由 Telegram 原生解析样式，彻底规避本地 AST 拼接崩溃，并顺带修复中文连续书写时的加粗边界问题。
+ 2. **Option B (原生云端解析 HTML 自动重试)**：若 blocks 不被服务端接受，自动降级为 HTML 富文本（`rich_message.html`），完美支持**圆角斑马纹表格**、**折叠 details 容器**以及 **LaTeX 数学公式**。
+ 3. **Option C (高兼容性 Markdown 自动重试)**：若 HTML 解析遇到边缘字符异常，系统立刻捕获并自动降级为精准转义的 Markdown 格式重新发送。
+ 4. **Option D (最坏情况传统 HTML 兜底)**：若 API 传输或 Telegram 官方服务端突发网络灾难，则使用传统 `ctx.reply` (HTML 解析模式) 强制发送，确保消息绝不漏发。
 
 ### ✍️ 草稿路由与 `<tg-thinking>` 原生思考打字动效
 - **流式草稿渲染**：所有流式文字的中间打字状态均被自动路由至临时草稿箱写信接口 `sendRichDraft`（底层调用 Telegram 的 `sendRichMessageDraft`），打字输出极度丝滑且绝不触发消息重发。
-- **原生思考动画**：AI 在思考和生成阶段，流式输出尾部会自动附带 **`<tg-thinking>Thinking...</tg-thinking>`** 原生标签。这将在 Telegram 手机与桌面端激活官方最高等级的“动态呼吸气泡思考动效”，打造极致灵动的交互体验。
+- **原生思考动画**：AI 在思考和生成阶段，流式输出会先以 10.2 原生 **`thinking` 占位块**（`InputRichBlockThinking`）呈现，待正文到达后切换为真实块内容；此块仅可用于 `sendRichMessageDraft`，因此定稿消息中以原生 `details` 折叠块（"🧠 思考过程"）收尾呈现，替代旧版手搓 `<tg-thinking>` 标签与 `<details>` HTML。
 - **草稿定稿固化（关键）**：根据 Telegram Bot API 10.1 的官方语义，通过 `sendRichMessageDraft` 发送的草稿本质是**临时预览（ephemeral preview）**，并不会持久化到聊天记录中。因此当完整回复生成完毕时，系统会**用真正的 `sendRichMessage` 把第一条消息固化为一条正式的持久消息**（而非再次刷新草稿），随后将剩余正文依次追加发送。这样无论回复多长，聊天窗口里从第一条消息的开头标题、第一段正文，直到最后一条消息，都 100% 连贯保留，绝不会出现第一条消息（或开头段落）被擦除、吞掉或截断的情况。统计脚注（模型、耗时、Token 消耗）始终收尾于最后一条消息。
 - **单条消息无字符上限（已实测验证）**：经真实长消息压测确认，在当前运行环境（Telegram 富文本通道 + 本地代理）下，`sendRichMessage`（定稿正式消息）与 `sendRichDraft`（流式草稿）**均不存在单条消息的字符数上限**，超长正文（数万字）可完整、不被截断地作为一条消息收发。因此项目已**关闭正文切分**：最终正文作为一条完整消息发送，流式草稿也始终展示完整已生成内容，不再按 4096 字符切片或滑动窗口截断。若需在未来某环境恢复保守切分（例如 Telegram 策略变更导致超长消息失败），可于 `src/core/messageLoop.ts` 中将实验开关 `NO_BODY_CHUNK` 与 `NO_DRAFT_CHUNK` 改回 `false`，即可恢复按 4096 字符的安全切分与流式滑动窗口。
 
