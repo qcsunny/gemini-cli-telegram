@@ -19,7 +19,9 @@ import {
   normalizeSpacingAroundDetails,
   normalizeMarkdownFences,
   normalizeMarkdownStructure,
-  findSafeCutPoint
+  findSafeCutPoint,
+  buildFooterBlocksFromHtml,
+  buildNativeFooterBlocks
 } from './formatter.js';
 
 describe('Formatter Rich Message Showcase', () => {
@@ -434,6 +436,38 @@ Thanks for reading! 🚀
 
     it('should return full length when text is short', () => {
       expect(findSafeCutPoint('短文本', 100)).toBe('短文本'.length);
+    });
+  });
+
+  describe('10.2 native footer blocks', () => {
+    it('should parse a footer HTML into native details + footer blocks', () => {
+      const html =
+        '<a href="tg://btn_info_footer|Gemini 3.5 Flash (Medium)|120|250|$0.000084|40|1300">⚙️ Gemini 3.5 Flash (Medium) · In: 120 · Out: 250 · Cost: $0.000084</a>' +
+        '<details><summary>🧠 思考过程 (Thinking Process)</summary>Let me analyze the path.<i>Thinking Time: 2.5 s</i></details>';
+      const blocks = buildFooterBlocksFromHtml(html);
+      expect(blocks.length).toBe(2);
+      expect(blocks[0]).toMatchObject({ type: 'details', summary: '🧠 思考过程 (Thinking Process)' });
+      expect((blocks[0] as any).blocks[0].text).toBe('Let me analyze the path.');
+      expect(blocks[1]).toMatchObject({ type: 'footer' });
+      expect((blocks[1] as any).text).toContain('⚙️ Gemini 3.5 Flash (Medium)');
+      expect((blocks[1] as any).text).toContain('In: 120 (Cached: 40)');
+      expect((blocks[1] as any).text).toContain('Out: 250 (Reasoning: 1300)');
+      expect((blocks[1] as any).text).toContain('Cost: $0.000084');
+    });
+
+    it('should build native footer blocks from structured stats', () => {
+      const blocks = buildNativeFooterBlocks({
+        model: 'Gemini 3.1 Pro',
+        inputTokens: 1024,
+        outputTokens: 2048,
+        cost: '$0.012345',
+        thought: '这是思考内容。',
+      });
+      expect(blocks.length).toBe(2);
+      expect(blocks[0]).toMatchObject({ type: 'details' });
+      expect((blocks[0] as any).blocks[0].text).toBe('这是思考内容。');
+      expect((blocks[1] as any).text).toContain('⚙️ Gemini 3.1 Pro');
+      expect((blocks[1] as any).text).toContain('Cost: $0.012345');
     });
   });
 });
