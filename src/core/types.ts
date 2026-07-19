@@ -44,6 +44,16 @@ export interface ChannelReply {
   sendRichDraft?(text: string | StructuredMessage): Promise<number>;
   editRich?(messageId: number, text: string | StructuredMessage): Promise<number | void>;
   editRichDraft?(draftId: number, text: string | StructuredMessage, isStreaming?: boolean): Promise<void>;
+  /**
+   * Append-only streaming primitive: (re)send the FULL current block array for
+   * the given draft or real message. Telegram has no true "append" — the only
+   * way to grow a rich message is to resend the whole array under the same
+   * draft_id / message_id. The caller owns a single authoritative RichBlock[]
+   * and only ever grows it (never rebuilds/reorders), so this is idempotent and
+   * safe against retries/duplicates.
+   */
+  sendRichDraftBlocks?(draftId: number, blocks: unknown[]): Promise<number>;
+  editRichBlocks?(messageId: number, blocks: unknown[]): Promise<number | void>;
 }
 
 /**

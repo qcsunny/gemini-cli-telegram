@@ -9,14 +9,15 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput, StructuredMessage } from './types.js';
+import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
-import { markdownToHtml } from '../channels/telegram/formatter.js';
+import { markdownToRichBlocksDelta } from '../channels/telegram/formatter.js';
 import { runAgyPrint, extractThoughtAndContent, getModelCapabilities } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
-import { formatFooterMarker } from '../utils/pricing.js';
+import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
+import type { RichBlock } from '../channels/telegram/richMessage.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
 
@@ -341,158 +342,110 @@ export async function processMessage(
   // 2. Local variables for streaming response
   let thoughtBuffer = '';
   let answerBuffer = '';
-  let thinkingMessageId: number | null = null;
   let currentMessageId: number | null = null;
   let lastEditTime = 0;
   let isFinished = false;
   let isDone = false;
-  let isThinkingFinalized = false;
   let activeUpdatePromise: Promise<any> = Promise.resolve();
-  // Incremental finalization: how much of answerBuffer has already been
-  // materialized into real (persisted) messages during streaming.
-  let committedLen = 0;
-
-  // EXPERIMENT: raise threshold so nothing commits incrementally; the whole
-  // body is sent as one final message (tests sendRichMessage char limit).
-  // EXPERIMENT: when true, send the whole body as one message (no chunking)
-  // to test whether sendRichMessage has no char limit. Set false to restore
-  // safe 4096-based chunking.
-  const NO_BODY_CHUNK = true;
-  // EXPERIMENT: when true, the live streaming draft is also never truncated
-  // (tests whether sendRichDraft has no char limit either).
-  const NO_DRAFT_CHUNK = true;
-  const CHUNK_FINALIZE_THRESHOLD = NO_BODY_CHUNK ? Number.MAX_SAFE_INTEGER : 3900;
 
   const capabilities = getModelCapabilities(session.model);
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
-  const isRichSingleMessage = !!reply.sendRichDraft && (capabilities.supportsThinkingSummary || parseMode === 'RichText');
+  // Rich append-only path: requires the new block-streaming primitives.
+  const isRichSingleMessage = !!reply.sendRichDraftBlocks && (capabilities.supportsThinkingSummary || parseMode === 'RichText');
 
-  // Materialize the leading portion of the not-yet-committed answer text into a
-  // real persisted message, so long replies land incrementally instead of waiting
-  // for the full response. The current draft is "promoted" to a real message
-  // (head) and a fresh tail draft is started for the remainder — keeping the
-  // active draft always at the bottom and preserving top-to-bottom order.
-  const finalizePendingChunks = async (isFinal: boolean) => {
-    const pending = answerBuffer.slice(committedLen);
-    if (!isFinal && pending.length < CHUNK_FINALIZE_THRESHOLD) return;
-    if (isFinal && pending.trim().length === 0) return;
+  // ── Single-draft append-only state machine ────────────────────────────────
+  // Exactly ONE RichBlock[] is the source of truth for the whole reply. Block
+  // order is FIXED: [thinkingBlock?, ...bodyBlocks, footerBlock?]. We only ever
+  // PUSH to the end of the body region; we never reorder, rebuild, or replace
+  // the array. Telegram has no native "append", so growing the message means
+  // resending the whole current array under the same draft_id / message_id —
+  // idempotent and safe against retries, duplicates and out-of-order chunks.
+  type Phase = 'thinking' | 'body' | 'footer';
+  let phase: Phase = 'thinking';
+  let blocks: RichBlock[] = [];
+  let thinkingBlockIndex = -1;
+  let footerBlockIndex = -1;
+  let convertedBodyLen = 0;
 
-    let cut = pending.length;
-    if (!isFinal && cut > CHUNK_FINALIZE_THRESHOLD) {
-      cut = formatter.findSafeCutPoint(pending, CHUNK_FINALIZE_THRESHOLD);
-    }
-    const toSend = pending.slice(0, cut);
-    const remainder = pending.slice(cut);
-    if (!toSend.trim()) return;
+  const buildThinkingBlock = (text: string, isStreaming: boolean): RichBlock => ({
+    type: 'details',
+    summary: isStreaming ? '🧠 正在思考... (Thinking...)' : '🧠 思考过程 (Thinking Process)',
+    is_open: isStreaming || undefined,
+    blocks: [{ type: 'paragraph', text: text }],
+  });
 
-    const headMsg: StructuredMessage = { content: toSend, thought: '' };
-    try {
-      if (currentMessageId && reply.editRich) {
-        const realId = await reply.editRich(currentMessageId, headMsg);
-        if (typeof realId === 'number') currentMessageId = realId;
-      } else if (reply.sendRich) {
-        currentMessageId = await reply.sendRich(headMsg);
-      }
-      if (currentMessageId && answerBuffer.trim()) {
-        messageCache.set(currentMessageId, answerBuffer.trim());
-      }
-      committedLen += toSend.length;
-      // Start a fresh tail draft for the remainder (kept at the bottom).
-      if (remainder.trim() && reply.sendRichDraft) {
-        currentMessageId = await reply.sendRichDraft({ content: remainder, thought: '' });
-      }
-    } catch (e) {
-      logger.warn(`[messageLoop] Failed to materialize streamed chunk: ${e}`);
+  // Render the whole authoritative array to the wire (draft while streaming,
+  // real message once finalized). Never called with a partial/reordered array.
+  const flushBlocks = async () => {
+    if (currentMessageId === null || currentMessageId === 0) {
+      const resId = await reply.sendRichDraftBlocks!(0, blocks);
+      if (typeof resId === 'number' && resId > 0) currentMessageId = resId;
+    } else if (phase === 'footer') {
+      // Finalized: promote draft to a real persisted message carrying the SAME
+      // blocks array (no rebuild, no second message, no coverage).
+      const realId = await reply.editRichBlocks!(currentMessageId, blocks);
+      if (typeof realId === 'number' && realId > 0) currentMessageId = realId;
+    } else {
+      await reply.sendRichDraftBlocks!(currentMessageId, blocks);
     }
   };
 
-  // Stream editing helper
+  // Stream editing helper — append-only.
   const updateMessageStream = async (isFinal = false) => {
     if (isFinished && !isFinal) return;
     const now = Date.now();
-    if (!isFinal && now - lastEditTime < DEBOUNCE_INTERVAL_MS) {
-      return;
-    }
+    if (!isFinal && now - lastEditTime < DEBOUNCE_INTERVAL_MS) return;
     lastEditTime = now;
 
     activeUpdatePromise = activeUpdatePromise.then(async () => {
       if (isFinished && !isFinal) return;
       try {
-        if (isRichSingleMessage) {
-          // Thinking is folded into the trailing footer (native `details` block)
-          // at finalize time, per the established UX decision — NOT shown as a
-          // separate leading message. So during streaming we only render the
-          // body draft here. This also avoids the prior bug where the leading
-          // thinking message + body-draft deletion could drop the body entirely.
-          const pending = answerBuffer.slice(committedLen);
-          if (!pending.trim()) {
-            logger.debug(`[DEBUG-STAGE-6] pending empty (still thinking), skipping body update.`);
-            return;
+        if (!isRichSingleMessage) {
+          // Non-rich fallback: plain text (thinking then body), single message path.
+          let text = '';
+          if (thoughtBuffer.trim()) {
+            const prefix = isFinal ? '🧠 思考过程 (Thinking Process)\n\n' : '🧠 正在思考... (Thinking...)\n\n';
+            text = prefix + thoughtBuffer.trim();
+            if (answerBuffer.trim()) text += '\n\n' + answerBuffer.trim();
+          } else if (answerBuffer.trim()) {
+            text = answerBuffer.trim();
           }
-
-          // Promote committed head chunks into real messages when the pending
-          // tail has grown past the threshold (boundary-safe cut inside).
-          if (pending.length >= CHUNK_FINALIZE_THRESHOLD && currentMessageId) {
-            await finalizePendingChunks(false);
-            return;
+          if (text) {
+            const truncated = formatter.truncateForEdit(text);
+            if (!currentMessageId) currentMessageId = await reply.sendPlain(truncated);
+            else await reply.editPlain(currentMessageId, truncated);
           }
+          return;
+        }
 
-          const structuredMsg: StructuredMessage = {
-            content: pending,
-            thought: '',
-          };
+        // ── Rich append-only path ──
+        if (phase === 'thinking') {
+          // Thinking block created once; only its text grows. While still
+          // thinking we have no body yet, so the array is just [thinking].
+          if (thinkingBlockIndex < 0 && thoughtBuffer.trim()) {
+            blocks.push(buildThinkingBlock(thoughtBuffer.trim(), true));
+            thinkingBlockIndex = blocks.length - 1;
+          } else if (thinkingBlockIndex >= 0) {
+            blocks[thinkingBlockIndex] = buildThinkingBlock(thoughtBuffer.trim(), true);
+          }
+          if (blocks.length > 0) await flushBlocks();
+          return;
+        }
 
-          const truncatedContent = NO_DRAFT_CHUNK
-            ? structuredMsg.content
-            : formatter.truncateForStream(structuredMsg.content);
-
-          const structuredTruncMsg: StructuredMessage = {
-            content: truncatedContent,
-            thought: '',
-          };
-
-          if (!currentMessageId) {
-            logger.debug(`[DEBUG-STAGE-6] Sending first body draft`);
-            currentMessageId = await reply.sendRichDraft!(structuredTruncMsg);
-            logger.debug(`[DEBUG-STAGE-6] First body draft sent, currentMessageId=${currentMessageId}`);
+        // phase === 'body' (or footer): append new body blocks before footer.
+        const delta = markdownToRichBlocksDelta(convertedBodyLen === 0 ? '' : answerBuffer.slice(0, convertedBodyLen), answerBuffer);
+        if (delta.length > 0) {
+          if (footerBlockIndex >= 0) {
+            blocks.splice(footerBlockIndex, 0, ...delta);
+            footerBlockIndex += delta.length;
           } else {
-            if (reply.editRichDraft) {
-              logger.debug(`[DEBUG-STAGE-6] Editing active body draft ${currentMessageId}`);
-              await reply.editRichDraft(currentMessageId, structuredTruncMsg);
-            } else {
-              logger.debug(`[DEBUG-STAGE-6] editRichDraft missing!`);
-            }
+            blocks.push(...delta);
           }
-        } else {
-          const thoughtTrimmed = thoughtBuffer.trim();
-          if (thoughtTrimmed && !isThinkingFinalized) {
-            const prefix = isFinal
-              ? '🧠 思考过程 (Thinking Process)\n\n'
-              : '🧠 正在思考... (Thinking...)\n\n';
-            const formattedThought = prefix + thoughtTrimmed;
-            const truncatedThought = formatter.truncateForEdit(formattedThought);
-            if (truncatedThought.trim()) {
-              if (!thinkingMessageId) {
-                thinkingMessageId = await reply.sendPlain(truncatedThought);
-              } else {
-                await reply.editPlain(thinkingMessageId, truncatedThought);
-              }
-            }
-          }
-
-          if (answerBuffer.trim()) {
-            const truncatedContent = formatter.truncateForEdit(answerBuffer);
-            if (truncatedContent.trim()) {
-              if (!currentMessageId) {
-                currentMessageId = await reply.sendPlain(truncatedContent);
-              } else {
-                await reply.editPlain(currentMessageId, truncatedContent);
-              }
-            }
-          }
+          convertedBodyLen = answerBuffer.length;
+          await flushBlocks();
         }
       } catch (e) {
-        logger.warn(`[messageLoop] Failed to update streaming message: ${e}`);
+        logger.warn(`[messageLoop] Failed to update streaming blocks: ${e}`);
       }
     });
 
@@ -523,7 +476,6 @@ export async function processMessage(
         thoughtBuffer = '';
         answerBuffer = '';
         isDone = false;
-        isThinkingFinalized = false;
         thoughtEventCount = 0;
         textEventCount = 0;
 
@@ -559,6 +511,9 @@ export async function processMessage(
                 thoughtBuffer += event.content || '';
               } else if (event.type === 'text') {
                 answerBuffer += event.content || '';
+                // Transition from thinking → body: the body region now grows.
+                // Block order stays fixed; we only start appending body blocks.
+                if (phase === 'thinking') phase = 'body';
               } else if (event.type === 'done') {
                 isDone = true;
                 logger.debug(`[EVENT STATS] thought event count=${thoughtEventCount} text event count=${textEventCount}`);
@@ -667,123 +622,100 @@ export async function processMessage(
       }
 
 
-      // 5. Final full rendering of response text (supports RichText and structure-aware multi-chunk partitioning)
-      if (thinkingMessageId && !isThinkingFinalized) {
-        try {
-          await reply.delete(thinkingMessageId);
-        } catch (e) {
-          logger.warn(`[messageLoop] Failed to delete temporary thinking message: ${e}`);
+      // 5. Append-only finalize of the SAME single draft (no rebuild, no second
+      //    message, no coverage). The authoritative `blocks` array is finalized
+      //    in place: (a) close the thinking block if still open, (b) convert any
+      //    remaining body markdown not yet pushed, (c) append exactly one footer
+      //    block. Order is [thinking, ...body, footer] and never changes.
+
+      // (a) Close / fill the thinking block (native `details`, collapsed).
+      if (thoughtBuffer.trim()) {
+        const closedThinking: RichBlock = {
+          type: 'details',
+          summary: '🧠 思考过程 (Thinking Process)',
+          blocks: [{ type: 'paragraph', text: thoughtBuffer.trim() }],
+        };
+        if (thinkingBlockIndex >= 0) {
+          blocks[thinkingBlockIndex] = closedThinking;
+        } else {
+          blocks.unshift(closedThinking);
+          thinkingBlockIndex = 0;
+          footerBlockIndex = footerBlockIndex >= 0 ? footerBlockIndex + 1 : -1;
         }
       }
 
-      const bodyHtmlChunks: string[] = [];
-
+      // (b) Convert any leftover body markdown (the delta not yet streamed).
       if (answerBuffer.trim()) {
-        const parts = answerBuffer.split(/\s*---(?:split|spilt)---\s*/gi).filter(p => p.trim());
-        for (const part of parts) {
-          const partHtml = markdownToHtml({ content: part });
-          // EXPERIMENT: when NO_BODY_CHUNK is true, send the whole body as a
-          // single message to test whether sendRichMessage has no char limit.
-          // Set to false to restore safe 4096-based chunking.
-          const chunks = NO_BODY_CHUNK
-            ? ['___RAW_HTML___' + partHtml]
-            : formatter.chunkText('___RAW_HTML___' + partHtml);
-          bodyHtmlChunks.push(...chunks);
+        const remaining = markdownToRichBlocksDelta(
+          convertedBodyLen === 0 ? '' : answerBuffer.slice(0, convertedBodyLen),
+          answerBuffer,
+        );
+        if (remaining.length > 0) {
+          if (footerBlockIndex >= 0) blocks.splice(footerBlockIndex, 0, ...remaining);
+          else blocks.push(...remaining);
+          convertedBodyLen = answerBuffer.length;
         }
       }
 
-      // The thinking process is folded into the trailing footer message (user
-      // preference: keep it at the end, not as a separate leading message), so
-      // render the real thought text here as a collapsible block followed by the
-      // stats line. Previously the thought was only fed into token estimation
-      // and never actually displayed.
-      const footerChunks: string[] = [];
+      // (c) Append exactly one footer block (stats line). If thinking was
+      // recovered but the body is empty, the message is still a single draft.
       const footerMarker = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
         finalPrompt,
         answerBuffer + (thoughtBuffer.trim() ? '\n' + thoughtBuffer.trim() : ''),
-        finalResult.usage
+        finalResult.usage,
       );
-      // Render the footer exactly once via markdownToHtml: the thinking text
-      // becomes a readable collapsible "🧠 思考过程" block, and the stats line
-      // is the content. Calling markdownToHtml more than once would re-parse and
-      // mangle the already-rendered HTML.
-      const footerHtml = markdownToHtml({
-        content: footerMarker,
-        thought: thoughtBuffer.trim(),
-      });
-      // When NO_BODY_CHUNK is on we have verified sendRichMessage has no char
-      // limit, so the footer (which may contain a long thinking <details> block)
-      // must be sent as ONE message — never split at 4096, or the collapsible
-      // block gets cut across messages and stops rendering.
-      if (NO_BODY_CHUNK) {
-        // Verified sendRichMessage has no char limit: send the footer (which may
-        // contain a long thinking <details> block) as ONE message so the
-        // collapsible block is never cut across messages.
-        footerChunks.push('___RAW_HTML___' + footerHtml);
-      } else {
-        footerChunks.push(...formatter.chunkText('___RAW_HTML___' + footerHtml));
-      }
+      if (finalResult.exitCode === 0) {
+        const footerParts = parseFooterMarker(footerMarker);
+        if (footerParts.length > 0) {
+          if (footerBlockIndex >= 0) {
+            blocks[footerBlockIndex] = { type: 'footer', text: `⚙️ ${footerParts.join(' · ')}` };
+          } else {
+            blocks.push({ type: 'footer', text: `⚙️ ${footerParts.join(' · ')}` });
+            footerBlockIndex = blocks.length - 1;
+          }
+        }
 
-      // Finalize. Body text was already materialized incrementally during
-      // streaming when committedLen > 0 (each head chunk became a real message,
-      // the active draft holds only the remaining tail). So at the end we only
-      // need to: (1) promote the final tail draft to a real message, and
-      // (2) append the stats footer. For short replies where nothing was
-      // committed incrementally, fall back to the original full-body path so the
-      // draft is materialized as the first (real) message.
-      const finalHtmlMessages = [
-        ...bodyHtmlChunks,
-        ...footerChunks
-      ];
-
-      if (finalResult.exitCode === 0 && finalHtmlMessages.length > 0) {
-        if (committedLen > 0) {
-          // Long reply: body already sent incrementally. The final streaming draft
-          // (currentMessageId) still holds the remaining tail — promote it to a real
-          // message, then append the thought summary + stats footer below it.
-          const tailText = answerBuffer.slice(committedLen);
-          if (currentMessageId && reply.editRich) {
+        // Atomically commit the single draft → one real persisted message.
+        if (isRichSingleMessage) {
+          if (currentMessageId !== null && blocks.length > 0) {
+            phase = 'footer';
             try {
-              const realId = await reply.editRich(currentMessageId, { content: tailText.trim() || ' ', thought: '' });
-              if (typeof realId === 'number') currentMessageId = realId;
-              if (currentMessageId && answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+              await reply.editRichBlocks!(currentMessageId, blocks);
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
             } catch (e) {
-              logger.warn(`[messageLoop] Failed to finalize trailing draft: ${e}`);
+              logger.warn(`[messageLoop] Failed to commit final blocks, falling back to sendRich: ${e}`);
+              try {
+                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim() });
+                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+              } catch (e2) {
+                logger.warn(`[messageLoop] sendRich fallback failed: ${e2}`);
+              }
+            }
+          } else if (blocks.length > 0) {
+            // No draft was ever created (e.g. extremely fast completion): send once.
+            try {
+              currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim() });
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+            } catch (e) {
+              logger.warn(`[messageLoop] sendRich failed: ${e}`);
             }
           }
-          for (const msgText of footerChunks) {
-            try {
-              const msgId = await reply.send(msgText);
-              if (msgId && answerBuffer.trim()) messageCache.set(msgId, answerBuffer.trim());
-            } catch (e) {
-              logger.warn(`[messageLoop] Failed to send footer chunk: ${e}`);
-            }
-          }
-        } else if (currentMessageId) {
+        } else if (answerBuffer.trim()) {
+          // Plain-text fallback finalize (no rich primitives available).
+          const finalText = thoughtBuffer.trim()
+            ? `🧠 思考过程 (Thinking Process)\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
+            : answerBuffer.trim();
           try {
-            const finalizedId = await reply.edit(currentMessageId, finalHtmlMessages[0]);
-            if (typeof finalizedId === 'number') {
-              currentMessageId = finalizedId;
-            }
-            if (answerBuffer.trim()) {
+            if (currentMessageId !== null) {
+              await reply.edit!(currentMessageId, finalText);
               messageCache.set(currentMessageId, answerBuffer.trim());
+            } else {
+              currentMessageId = await reply.send!(finalText);
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
             }
           } catch (e) {
-            logger.warn(`[messageLoop] Failed to edit first chunk: ${e}`);
-          }
-          for (let i = 1; i < finalHtmlMessages.length; i++) {
-            const msgId = await reply.send(finalHtmlMessages[i]);
-            if (msgId && answerBuffer.trim()) {
-              messageCache.set(msgId, answerBuffer.trim());
-            }
-          }
-        } else {
-          for (const msgText of finalHtmlMessages) {
-            const msgId = await reply.send(msgText);
-            if (msgId && answerBuffer.trim()) {
-              messageCache.set(msgId, answerBuffer.trim());
-            }
+            logger.warn(`[messageLoop] Plain finalize failed: ${e}`);
           }
         }
 

@@ -2016,6 +2016,38 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
 }
 
 /**
+ * Incremental body converter for the append-only streaming state machine.
+ *
+ * Given the body markdown converted so far (`alreadyConverted`) and the full
+ * current body markdown (`full`), it converts only the *new* tail into native
+ * 10.2 blocks and returns them. The split point is chosen at the last
+ * double-newline in the overlap region so we never cut a block (paragraph /
+ * list / table / fence) in half — a half-converted block would otherwise
+ * briefly render as literal text before the next tick completes it.
+ *
+ * This keeps the body region of the message strictly append-only: each tick we
+ * only PUSH new blocks computed from bytes not seen before, never rebuild or
+ * reorder the existing ones.
+ */
+export function markdownToRichBlocksDelta(
+  alreadyConverted: string,
+  full: string,
+): RichBlock[] {
+  if (!full || full.length <= alreadyConverted.length) return [];
+  if (alreadyConverted.length === 0) {
+    return markdownToRichBlocks(full);
+  }
+  // Find a safe cut in the overlap (the last blank line before the end of the
+  // already-converted portion) so we re-convert from a block boundary.
+  const overlap = full.slice(0, alreadyConverted.length);
+  const cut = overlap.lastIndexOf('\n\n');
+  const safe = cut < 0 ? alreadyConverted.length : cut;
+  const delta = full.slice(safe).replace(/^\n+/, '');
+  if (!delta.trim()) return [];
+  return markdownToRichBlocks(delta);
+}
+
+/**
  * Build the 10.2 `InputRichMessage.blocks` payload for a StructuredMessage.
  *
  * - Body markdown is converted to native blocks.

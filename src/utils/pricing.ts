@@ -177,3 +177,30 @@ export function formatFooterMarker(
     return `[footer: ${modelName} (Estimated / 预估) | ${inputTokens} | ${outputTokens} | $${totalCost.toFixed(6)}]`;
   }
 }
+
+/**
+ * Parse the `[footer: ...]` marker produced by `formatFooterMarker` into a list
+ * of human-readable stat fragments (e.g. "In: 1234", "Cost: $0.001234") for the
+ * native 10.2 `footer` block. Returns an empty array when the marker is absent,
+ * so callers can skip the footer block entirely.
+ */
+export function parseFooterMarker(marker: string): string[] {
+  const m = marker.match(/\[footer:\s*(.*?)\s*\]/);
+  if (!m) return [];
+  const parts = m[1].split('|').map((p) => p.trim());
+  if (parts.length < 4) return [];
+  const [model, input, output, cost] = parts;
+  const cached = parts[4];
+  const thinking = parts[5];
+  const out: string[] = [];
+  if (model) out.push(model);
+  if (input || output) {
+    let s = `In: ${input ?? ''}`;
+    if (cached && cached !== '0') s += ` (Cached: ${cached})`;
+    s += ` · Out: ${output ?? ''}`;
+    if (thinking && thinking !== '0') s += ` (Reasoning: ${thinking})`;
+    out.push(s);
+  }
+  if (cost) out.push(`Cost: ${cost}`);
+  return out;
+}
