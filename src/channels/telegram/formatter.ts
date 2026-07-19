@@ -867,6 +867,7 @@ function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
     processed = processed.replace(/\\\[([\s\S]+?)\\\]/g, 'LATEXBLOCKSTART$1LATEXBLOCKEND');
     processed = processed.replace(/\\\(([\s\S]+?)\\\)/g, 'LATEXINLINESTART$1LATEXINLINEEND');
   }
+  processed = normalizeMarkdownStructure(processed);
   const tokens = md.parse(processed, {}) as any as MarkdownToken[];
   const state: RenderState = {
     text: '',
@@ -1184,6 +1185,35 @@ export function normalizeMarkdownFences(markdown: string): string {
   // language tag and then a newline/end-of-string. Closing fences and ordinary
   // runs of three backticks are left untouched.
   return markdown.replace(/(^|[^`\n])```([a-zA-Z0-9_-]*)(?=\n|$)/g, '$1\n```$2');
+}
+
+/**
+ * Fix common markdown structural mistakes produced by LLM output so that
+ * markdown-it renders them as intended:
+ *  - ATX headings without a space after the hashes (e.g. `###1. 标题`,
+ *    `#### 3.1 标题`) are not recognized as headings by the parser; insert the
+ *    missing space so they become real headings.
+ *  - A horizontal rule `---` on its own line that is missing surrounding blank
+ *    lines (so it merges with adjacent text instead of becoming an `<hr>`) is
+ *    given the blank lines it needs to be recognized as a separator.
+ */
+export function normalizeMarkdownStructure(markdown: string): string {
+  if (!markdown) return markdown;
+  let text = markdown;
+  // `###1.` / `## 2.1` already spaced is fine; fix `###1.`, `#### 3.1`,
+  // `##标题` where the hash run is immediately followed by a non-space char.
+  text = text.replace(/^(#{1,6})(?=[^\s#>])/gm, '$1 ');
+  // Horizontal rules `---` / `———` emitted by the model are often glued to the
+  // surrounding text (e.g. `正文---### 4.` or `---` without blank lines), so
+  // markdown-it does not treat them as <hr>. Only lines that consist solely of
+  // the separator (with optional surrounding whitespace) are normalized, and a
+  // separator glued to a heading on the same line is split onto its own line.
+  // This avoids touching `---` that appears inside words or code.
+  text = text.replace(/(\n|^)([ \t]*---[ \t]*|[ \t]*———[ \t]*)(?=\n|#|$)/g, '$1\n\n$2\n\n');
+  text = text.replace(/([^\n#])(---|———)(?=\s*#)/g, '$1\n\n$2\n\n');
+  // Collapse the excessive blank lines we may have introduced.
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text;
 }
 
 function markdownToHtmlSnippet(markdown: string): string {

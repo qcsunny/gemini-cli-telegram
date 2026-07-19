@@ -17,7 +17,8 @@ import {
   tokenizeHtml,
   safeHtmlSlice,
   normalizeSpacingAroundDetails,
-  normalizeMarkdownFences
+  normalizeMarkdownFences,
+  normalizeMarkdownStructure
 } from './formatter.js';
 
 describe('Formatter Rich Message Showcase', () => {
@@ -367,9 +368,40 @@ Thanks for reading! 🚀
       const input = '• **Header:**```\ncode line 1\ncode line 2\n```';
       const normalized = normalizeMarkdownFences(input);
       expect(normalized).toBe('• **Header:**\n```\ncode line 1\ncode line 2\n```');
-      
+
       const html = markdownToHtml(input);
       expect(html).toContain('<pre><code>code line 1\ncode line 2');
+    });
+  });
+
+  describe('Markdown Structure Normalization', () => {
+    it('should add a space after ATX hashes with no space (###1. -> ### 1.)', () => {
+      expect(normalizeMarkdownStructure('###1. 自注意力机制')).toBe('### 1. 自注意力机制');
+      expect(normalizeMarkdownStructure('#### 3.1 标题')).toBe('#### 3.1 标题');
+      expect(normalizeMarkdownStructure('## 2.1 已有空格')).toBe('## 2.1 已有空格');
+    });
+
+    it('should render headings without a leading space as real headings', () => {
+      expect(markdownToHtml('###1. 自注意力机制')).toContain('<b>1. 自注意力机制');
+      expect(markdownToHtml('#### 3.1 标题没有正确换行')).toContain('<b>3.1 标题没有正确换行');
+    });
+
+    it('should split a separator glued to a heading onto its own line', () => {
+      const html = markdownToHtml('正文内容---### 4. 分隔符和标题');
+      expect(html).toContain('4. 分隔符和标题');
+      // separator and heading must be on separate lines (not glued)
+      expect(html).not.toContain('---###');
+    });
+
+    it('should not break a --- that appears inside a word', () => {
+      expect(markdownToHtml('普通 a---b 不应被拆')).toBe('普通 a---b 不应被拆');
+    });
+
+    it('should recognize a standalone --- as a horizontal separator', () => {
+      const html = markdownToHtml('段落一\n---\n段落二');
+      expect(html).toContain('段落一');
+      expect(html).toContain('段落二');
+      expect(html).toContain('───');
     });
   });
 });
