@@ -794,7 +794,7 @@ export class TelegramBot {
         dispatcher: this.proxyAgent,
         compress: true,
       };
-      clientConfig.fetch = (url: any, init: any) => {
+      clientConfig.fetch = async (url: any, init: any) => {
         const cleanInit = init ? { ...init } : {};
         if (cleanInit.signal) {
           const grammySignal = cleanInit.signal;
@@ -808,10 +808,22 @@ export class TelegramBot {
           }
           cleanInit.signal = nativeController.signal;
         }
-        return undiciFetch(url, {
-          ...cleanInit,
-          dispatcher: this.proxyAgent,
-        });
+        // Retry transient proxy/network failures so a dropped long-poll
+        // connection recovers instead of stalling update delivery.
+        let lastErr: any;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            return await undiciFetch(url, {
+              ...cleanInit,
+              dispatcher: this.proxyAgent,
+            });
+          } catch (e: any) {
+            lastErr = e;
+            if (cleanInit.signal?.aborted) throw e;
+            await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          }
+        }
+        throw lastErr;
       };
     }
     this.bot = new Bot(token, { client: clientConfig });
@@ -939,7 +951,9 @@ export class TelegramBot {
     // This allows /cancel to run even while a message handler is busy.
     this.runner = run(this.bot, {
       runner: {
-        fetch: { timeout: 30 },
+        // Shorter long-poll timeout so the proxy can't silently kill an idle
+        // 30s connection (which caused updates to pile up and redeliver late).
+        fetch: { timeout: 10 },
         silent: true,
       },
     });
