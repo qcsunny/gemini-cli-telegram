@@ -449,9 +449,11 @@ export async function processMessage(
             onActivity: () => { if (resetInactivity) resetInactivity(); },
             onSpawn: (pid) => { session.childPid = pid; },
             onEvent: (event) => {
-              // Any streamed event counts as progress: reset the inactivity timer
+              // Any streamed event counts as progress: reset both the model-run
+              // inactivity timer and the bot's stuck-session watchdog (_busySince)
               // so a slow-but-active long reply is never killed mid-stream.
               if (resetInactivity) resetInactivity();
+              session._busySince = Date.now();
               if (event.type === 'thought') {
                 thoughtEventCount++;
               } else if (event.type === 'text') {
@@ -696,7 +698,7 @@ export async function processMessage(
         let errorReason = '执行失败';
         if (isAuthError) errorReason = '认证已过期或未登录 (Authentication expired or not logged in)';
         if (isTerminated) errorReason = '代理进程异常终止 (Agent execution terminated due to error)';
-        if (finalResult.isTimeout) errorReason = '执行被用户或系统超时取消 (Timeout/Aborted)';
+        if (finalResult.isTimeout || signal.aborted) errorReason = '执行被取消或超时 (Cancelled/Timeout)';
 
         let detailMsg = '';
         const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -721,7 +723,7 @@ export async function processMessage(
 
         const errorHtml = isFriendlyUpstreamMsg
           ? `${escapeHtml(stderrStr.trim())}`
-          : `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。${lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : '请确认您的本地 \`agy\` CLI 已正确登录并配置网络。'}${detailMsg}`;
+          : `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。${signal.aborted || finalResult.isTimeout ? '任务已被取消或超时（可能是系统看门狗或用户主动停止）。' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : '请确认您的本地 \`agy\` CLI 已正确登录并配置网络。')}${detailMsg}`;
         if (currentMessageId) {
           try {
             await reply.edit(currentMessageId, errorHtml);
