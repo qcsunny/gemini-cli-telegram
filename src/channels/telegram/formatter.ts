@@ -7,7 +7,7 @@
 import MarkdownIt from 'markdown-it';
 import markdownItCjkFriendly from 'markdown-it-cjk-friendly';
 import type { MessageFormatter, StructuredMessage } from '../../core/types.js';
-import type { RichBlock, RichText } from './richMessage.js';
+import type { RichBlock } from './richMessage.js';
 import { extractThoughtBlocksAndSegments } from '../../agy/agyCli.js';
 
 const TELEGRAM_MAX_LENGTH = 4096;
@@ -1666,39 +1666,53 @@ export function markdownToMarkdownV2(markdown: string): string {
 
 // ── Rich Text Blocks (API 10.1) ──
 
+/**
+ * Convert markdown to Bot API 10.2 `InputRichBlock<never>[]` (media-free).
+ *
+ * Block types follow the 10.2 schema:
+ * - `heading` (was `section_heading`) with numeric `size` 1-6
+ * - `paragraph`, `pre` (was `preformatted`)
+ * - `list` with `items[].blocks` (was `items[].text`)
+ * - `table` with `cells: RichBlockTableCell[][]` (align/valign required)
+ *
+ * Inline styling (bold/italic/code/links) is intentionally dropped here: the
+ * 10.2 plain-string RichText lets Telegram re-parse Markdown/HTML inside the
+ * block text, so we pass the *raw* inline markdown and let the client render it.
+ * This also fixes the old CJK-bold-at-word-boundary problem for free.
+ */
 export function markdownToRichBlocks(markdown: string): RichBlock[] {
   const tokens = md.parse(markdown ?? '', {}) as any as MarkdownToken[];
   const blocks: RichBlock[] = [];
 
-  const parseRichText = (inlineTokens: MarkdownToken[] | null | undefined): RichText => {
-    if (!inlineTokens || inlineTokens.length === 0) return { text: '' };
-    
-    const state: RenderState = {
-      text: '',
-      styles: [],
-      openStyles: [],
-      links: [],
-      linkStack: [],
-      listStack: [],
-    };
-    renderTokens(inlineTokens, state);
-    
-    return { text: state.text };
+  const rawInline = (inlineTokens: MarkdownToken[] | null | undefined): string => {
+    if (!inlineTokens) return '';
+    // Re-serialize the inline tokens back to markdown text. markdown-it does
+    // not expose a public "render to markdown" for inline, so we reconstruct
+    // the source text from the token content when available, falling back to
+    // the original slice.
+    let text = '';
+    for (const t of inlineTokens) {
+      if (t.type === 'text' || t.type === 'code_inline' || t.type === 'softbreak' || t.type === 'hardbreak') {
+        text += t.content ?? '';
+      } else if (t.children) {
+        text += rawInline(t.children);
+      }
+    }
+    return text;
   };
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    
+
     switch (token.type) {
       case 'heading_open': {
-        const level = (Number(token.tag.slice(1)) || 1) as 1 | 2 | 3;
+        const level = Math.min(6, Math.max(1, Number(token.tag.slice(1)) || 1));
         const inline = tokens[i + 1];
         if (inline?.type === 'inline') {
-          blocks.push({
-            type: 'section_heading',
-            level: level > 3 ? 3 : level as 1 | 2 | 3,
-            text: parseRichText(inline.children)
-          });
+          const text = rawInline(inline.children).trim();
+          if (text) {
+            blocks.push({ type: 'heading', size: level as 1 | 2 | 3 | 4 | 5 | 6, text });
+          }
           i += 2;
         }
         break;
@@ -1706,12 +1720,9 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
       case 'paragraph_open': {
         const inline = tokens[i + 1];
         if (inline?.type === 'inline') {
-          const rt = parseRichText(inline.children);
-          if (rt.text.trim()) {
-            blocks.push({
-              type: 'paragraph',
-              text: rt
-            });
+          const text = rawInline(inline.children).trim();
+          if (text) {
+            blocks.push({ type: 'paragraph', text });
           }
           i += 2;
         }
@@ -1720,9 +1731,9 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
       case 'fence':
       case 'code_block': {
         blocks.push({
-          type: 'preformatted',
+          type: 'pre',
           text: token.content ?? '',
-          language: token.info || undefined
+          language: token.info || undefined,
         });
         break;
       }
@@ -1734,11 +1745,11 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
           if (tokens[j].type === 'inline') content += tokens[j].content;
           j++;
         }
-        if (content.trim()) {
+        const trimmed = content.trim();
+        if (trimmed) {
           blocks.push({
-            type: 'block_quotation',
-            text: { text: content.trim() },
-            is_collapsible: content.includes('[details]')
+            type: 'blockquote',
+            blocks: [{ type: 'paragraph', text: trimmed }],
           });
         }
         i = j;
@@ -1750,21 +1761,23 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
       }
       case 'bullet_list_open':
       case 'ordered_list_open': {
-        const items: any[] = [];
+        const items: Array<{ blocks: RichBlock[] }> = [];
         let j = i + 1;
         while (j < tokens.length && tokens[j].type !== (token.type.replace('open', 'close'))) {
           if (tokens[j].type === 'list_item_open') {
-             let k = j + 1;
-             while (k < tokens.length && tokens[k].type !== 'list_item_close') {
-               if (tokens[k].type === 'inline') {
-                 const rt = parseRichText(tokens[k].children);
-                 if (rt.text.trim()) {
-                   items.push({ type: 'list_item', text: rt });
-                 }
-               }
-               k++;
-             }
-             j = k;
+            let k = j + 1;
+            let itemText = '';
+            while (k < tokens.length && tokens[k].type !== 'list_item_close') {
+              if (tokens[k].type === 'inline') {
+                const t = rawInline(tokens[k].children).trim();
+                if (t) itemText = t;
+              }
+              k++;
+            }
+            if (itemText) {
+              items.push({ blocks: [{ type: 'paragraph', text: itemText }] });
+            }
+            j = k;
           }
           j++;
         }
@@ -1775,51 +1788,103 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         break;
       }
       case 'table_open': {
-         const cells: any[][] = [];
-         let currentRow: any[] = [];
-         let j = i + 1;
-         while (j < tokens.length && tokens[j].type !== 'table_close') {
-           const token = tokens[j];
-           if (token.type === 'tr_open') {
-             currentRow = [];
-           } else if (token.type === 'tr_close') {
-             cells.push(currentRow);
-           } else if (token.type === 'td_open' || token.type === 'th_open') {
-             const inline = tokens[j + 1];
-             if (inline?.type === 'inline') {
-               currentRow.push({
-                 text: parseRichText(inline.children),
-                 is_header: token.type === 'th_open' ? true : undefined,
-                 align: 'left',
-                 valign: 'middle',
-               });
-             }
-             j += 2;
-           }
-           j++;
-         }
-         if (cells.length > 0) {
-           blocks.push({
-             type: 'table',
-             cells,
-             is_bordered: true,
-             is_striped: true,
-           });
-         }
-         i = j;
-         break;
+        const cells: Array<Array<{ text?: string; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }>> = [];
+        let currentRow: Array<{ text?: string; is_header?: true; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom' }> = [];
+        let j = i + 1;
+        while (j < tokens.length && tokens[j].type !== 'table_close') {
+          const tk = tokens[j];
+          if (tk.type === 'tr_open') {
+            currentRow = [];
+          } else if (tk.type === 'tr_close') {
+            cells.push(currentRow);
+          } else if (tk.type === 'td_open' || tk.type === 'th_open') {
+            const inline = tokens[j + 1];
+            const text = inline?.type === 'inline' ? rawInline(inline.children).trim() : '';
+            currentRow.push({
+              text: text || undefined,
+              is_header: tk.type === 'th_open' ? true : undefined,
+              align: 'left',
+              valign: 'middle',
+            });
+            j += 2;
+          }
+          j++;
+        }
+        if (cells.length > 0) {
+          blocks.push({
+            type: 'table',
+            cells: cells as any,
+            is_bordered: true,
+            is_striped: true,
+          });
+        }
+        i = j;
+        break;
       }
     }
   }
 
   if (blocks.length === 0 && markdown && markdown.trim()) {
-     blocks.push({
-       type: 'paragraph',
-       text: { text: markdown.trim() }
-     });
+    blocks.push({ type: 'paragraph', text: markdown.trim() });
   }
 
   return blocks;
+}
+
+/**
+ * Build the 10.2 `InputRichMessage.blocks` payload for a StructuredMessage.
+ *
+ * - Body markdown is converted to native blocks.
+ * - The thinking/thought text (if any) is appended as a native collapsible
+ *   `details` block ("🧠 思考过程") at the END of the message, matching the
+ *   existing UX decision. Optional time/tokens metadata is shown in the summary.
+ *
+ * The returned blocks array is suitable for `sendRichMessage` / `editMessageText`
+ * (final, persisted messages). For streaming drafts use
+ * `buildStreamingBlocks` instead.
+ */
+export function buildFinalBlocks(
+  content: string,
+  thought?: string,
+  opts?: { time?: string; tokens?: string; isClosed?: boolean },
+): RichBlock[] {
+  const body = markdownToRichBlocks(content);
+  const blocks: RichBlock[] = [...body];
+
+  const thoughtText = (thought ?? '').trim();
+  if (thoughtText) {
+    let summary = '🧠 思考过程 (Thinking Process)';
+    const infoLines: string[] = [];
+    if (opts?.time && Number(opts.time) > 0) infoLines.push(`Thinking Time: ${opts.time} s`);
+    if (opts?.tokens && Number(opts.tokens) > 0) infoLines.push(`Thinking Tokens: ${opts.tokens}`);
+    if (infoLines.length > 0) summary = `${summary} · ${infoLines.join(' · ')}`;
+
+    blocks.push({
+      type: 'details',
+      summary,
+      is_open: opts?.isClosed === false ? true : undefined,
+      blocks: [{ type: 'paragraph', text: thoughtText }],
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * Build blocks for a streaming draft. While the model is still thinking we emit
+ * a native `thinking` placeholder block (Bot API 10.2, draft-only). Once the body
+ * starts arriving, the thinking block is omitted and body blocks are streamed.
+ */
+export function buildStreamingBlocks(
+  content: string,
+  hasThought: boolean,
+  isStreaming: boolean,
+): RichBlock[] {
+  const body = markdownToRichBlocks(content);
+  if (isStreaming && hasThought && body.length === 0) {
+    return [{ type: 'thinking', text: '正在思考...' }];
+  }
+  return body;
 }
 
 function convertMath(html: string): string {

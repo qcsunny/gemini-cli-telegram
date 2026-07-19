@@ -22,7 +22,7 @@ import type {
   StructuredMessage,
 } from '../../core/types.js';
 import { registerCommands } from './commands.js';
-import { telegramFormatter, markdownToHtml, markdownToMarkdownV2 } from './formatter.js';
+import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
@@ -34,6 +34,30 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
     return originalText.substring('___RAW_HTML___'.length);
   }
   return markdownToHtml(originalText, isStreaming);
+}
+
+/**
+ * Build the Bot API 10.2 `InputRichMessage.blocks` payload from a message.
+ * - For string input, the structured thought markers (`<thought>` / `<thought-gemini>`)
+ *   are extracted by markdownToHtml's segment parser; here we keep it simple and
+ *   treat the whole string as body (thinking already folded into HTML elsewhere).
+ * - For StructuredMessage, body + thought are rendered as native blocks, with the
+ *   thought appended as a collapsible `details` block at the end.
+ * Returns an empty array when there is nothing renderable (caller falls back to HTML).
+ */
+function getBlocksPayload(originalText: string | StructuredMessage): any[] {
+  if (typeof originalText === 'string') {
+    // Raw HTML passthrough has no meaningful block form; let HTML path handle it.
+    if (originalText.startsWith('___RAW_HTML___')) return [];
+    const blocks = buildFinalBlocks(originalText);
+    return blocks;
+  }
+  const { content, thought, geminiTime, geminiTokens } = originalText;
+  return buildFinalBlocks(content, thought, {
+    time: geminiTime,
+    tokens: geminiTokens,
+    isClosed: true,
+  });
 }
 const TYPING_TTL_MS = 3_600_000; // Safety: auto-stop typing after 1 hour
 const DOWNLOAD_MAX_RETRIES = 3;
@@ -198,7 +222,24 @@ export function buildChannelReply(
         : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
       try {
-        // Option A: Native Rich HTML (Telegram parses this on the server)
+        // Option A (10.2): Native structured blocks. Thinking rendered as a
+        // native collapsible `details` block at the end (see buildFinalBlocks).
+        try {
+          const blocks = getBlocksPayload(originalText);
+          if (blocks.length > 0) {
+            const res: any = await (ctx.api.raw as any).sendRichMessage({
+              chat_id: chatId,
+              message_thread_id: messageThreadId,
+              rich_message: { blocks },
+            });
+            messageCache.set(res.message_id, safeMarkdown);
+            return res.message_id;
+          }
+        } catch (err: any) {
+          logger.warn(`sendRich Option A (blocks) failed: ${err.message || err}. Trying Option B...`);
+        }
+
+        // Option B: Native Rich HTML (Telegram parses this on the server)
         try {
           let html = getHtmlPayload(originalText);
           if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
@@ -213,10 +254,10 @@ export function buildChannelReply(
           messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
         } catch (err: any) {
-          logger.warn(`sendRich Option A failed: ${err.message || err}. Trying Option B...`);
+          logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
         }
 
-        // Option B: Rich Markdown
+        // Option C: Rich Markdown
         try {
           const preparedMarkdown = prepareTelegramMarkdown(safeMarkdown);
           const res: any = await (ctx.api.raw as any).sendRichMessage({
@@ -227,10 +268,10 @@ export function buildChannelReply(
           messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
         } catch (err: any) {
-          logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
+          logger.warn(`sendRich Option C failed: ${err.message || err}. Trying Option D...`);
         }
 
-        // Option C: HTML Fallback
+        // Option D: HTML Fallback
         try {
           let htmlText = getHtmlPayload(originalText);
           if (htmlText.includes('<details') && !htmlText.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
@@ -243,7 +284,7 @@ export function buildChannelReply(
           messageCache.set(msg.message_id, safeMarkdown);
           return msg.message_id;
         } catch (err: any) {
-          logger.warn(`sendRich Option C failed: ${err.message || err}. Falling back to plain text.`);
+          logger.warn(`sendRich Option D failed: ${err.message || err}. Falling back to plain text.`);
           const msg = await ctx.reply(safeMarkdown, {
             message_thread_id: messageThreadId,
           });
@@ -274,7 +315,31 @@ export function buildChannelReply(
         ? originalText
         : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
-      // Option A: Native Rich HTML with native thinking animation
+      // Option A (10.2): Native structured blocks with native `thinking` placeholder
+      // while streaming (draft-only). Body blocks are streamed once content arrives.
+      try {
+        const hasThought = typeof originalText === 'string'
+          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+          : (!!originalText.thought && originalText.thought.trim().length > 0);
+        const content = typeof originalText === 'string' ? originalText : originalText.content;
+        const blocks = buildStreamingBlocks(content, hasThought, true);
+        if (blocks.length > 0) {
+          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option A - blocks): draftId=${draftId}, blocks=${blocks.length}`);
+          const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            draft_id: draftId,
+            rich_message: { blocks },
+          });
+          logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (blocks) success for draftId=${draftId}. Response keys: ${Object.keys(res || {})}`);
+          messageCache.set(draftId, cacheMarkdown);
+          return draftId;
+        }
+      } catch (err: any) {
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (blocks) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+      }
+
+      // Option B: Native Rich HTML with native thinking animation
       try {
         let html = getHtmlPayload(originalText, true);
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
@@ -288,8 +353,8 @@ export function buildChannelReply(
         const suffix = hasThought
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
-        
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option A): html="${html}${suffix}"`);
+
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option B): html="${html}${suffix}"`);
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
@@ -300,13 +365,13 @@ export function buildChannelReply(
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option B (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 
-      // Option B: Rich Markdown
+      // Option C: Rich Markdown
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option B - Markdown): markdown="${safeMarkdown}"`);
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option C - Markdown): markdown="${safeMarkdown}"`);
         const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
@@ -317,7 +382,7 @@ export function buildChannelReply(
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option B (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option C (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
         throw err;
       }
     },
@@ -332,7 +397,30 @@ export function buildChannelReply(
 
       // Per Bot API 10.1: there is no "editRichMessageDraft" method.
       // Updating a draft is done by calling sendRichMessageDraft again with the same draft_id.
-      // Option A: Rich HTML
+      // Option A (10.2): Native structured blocks with native `thinking` placeholder.
+      try {
+        const hasThought = typeof originalText === 'string'
+          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+          : (!!originalText.thought && originalText.thought.trim().length > 0);
+        const content = typeof originalText === 'string' ? originalText : originalText.content;
+        const blocks = buildStreamingBlocks(content, hasThought, isStreaming);
+        if (blocks.length > 0) {
+          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A - blocks, isStreaming=${isStreaming}): blocks=${blocks.length}`);
+          await (ctx.api.raw as any).sendRichMessageDraft({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            draft_id: draftId,
+            rich_message: { blocks },
+          });
+          logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit blocks) success for draftId=${draftId}.`);
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        }
+      } catch (err: any) {
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A (blocks) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+      }
+
+      // Option B: Rich HTML
       try {
         let html = getHtmlPayload(originalText, isStreaming);
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
@@ -346,8 +434,8 @@ export function buildChannelReply(
         const suffix = (isStreaming && !hasThought)
           ? '\n<tg-thinking>正在思考...</tg-thinking>'
           : '';
-        
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A, isStreaming=${isStreaming}): html="${html}${suffix}"`);
+
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option B, isStreaming=${isStreaming}): html="${html}${suffix}"`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
@@ -358,13 +446,13 @@ export function buildChannelReply(
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option B (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 
-      // Option B: Rich Markdown fallback
+      // Option C: Rich Markdown fallback
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option B - Markdown): markdown="${safeMarkdown}"`);
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option C - Markdown): markdown="${safeMarkdown}"`);
         await (ctx.api.raw as any).sendRichMessageDraft({
           chat_id: chatId,
           message_thread_id: messageThreadId,
@@ -375,7 +463,7 @@ export function buildChannelReply(
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option B (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option C (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
         throw err;
       }
     },
@@ -405,7 +493,29 @@ export function buildChannelReply(
         return realId;
       }
 
-      // Option A: Native Rich HTML
+      // Option A (10.2): Native structured blocks (final, persisted message).
+      try {
+        const blocks = getBlocksPayload(originalText);
+        if (blocks.length > 0) {
+          logger.debug(`[DEBUG] editMessageText (Option A - blocks) called: messageId=${messageId}, blocks=${blocks.length}`);
+          await (ctx.api.raw as any).editMessageText({
+            chat_id: chatId,
+            message_id: messageId,
+            rich_message: { blocks },
+          });
+          logger.debug(`[DEBUG] editMessageText (Option A - blocks) success: messageId=${messageId}`);
+          messageCache.set(messageId, cacheMarkdown);
+          return;
+        }
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) {
+          messageCache.set(messageId, cacheMarkdown);
+          return;
+        }
+        logger.warn(`editRich Option A (blocks) failed: ${err.message || err}. Trying Option B...`);
+      }
+
+      // Option B: Native Rich HTML
       try {
         let html = getHtmlPayload(originalText);
         if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
@@ -413,31 +523,11 @@ export function buildChannelReply(
         }
         logger.debug(`[TELEGRAM PAYLOAD] editRich originalText.length=${textLen} html.length=${html.length} containsDetails=${html.includes('<details')} containsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')} containsBodyTitle=${html.includes('证明') || html.includes('Proof')}`);
 
-        logger.debug(`[DEBUG] editMessageText (Option A) called: messageId=${messageId}`);
-        await (ctx.api.raw as any).editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          rich_message: { html },
-        });
-        logger.debug(`[DEBUG] editMessageText (Option A) success: messageId=${messageId}`);
-        messageCache.set(messageId, cacheMarkdown);
-        return;
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified')) {
-          messageCache.set(messageId, cacheMarkdown);
-          return;
-        }
-        logger.warn(`editRich Option A failed: ${err.message || err}. Trying Option B...`);
-      }
-
-      // Option B: Rich Markdown
-      try {
-        const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
         logger.debug(`[DEBUG] editMessageText (Option B) called: messageId=${messageId}`);
         await (ctx.api.raw as any).editMessageText({
           chat_id: chatId,
           message_id: messageId,
-          rich_message: { markdown: safeMarkdown },
+          rich_message: { html },
         });
         logger.debug(`[DEBUG] editMessageText (Option B) success: messageId=${messageId}`);
         messageCache.set(messageId, cacheMarkdown);
@@ -450,7 +540,27 @@ export function buildChannelReply(
         logger.warn(`editRich Option B failed: ${err.message || err}. Trying Option C...`);
       }
 
-      // Option C: HTML Fallback
+      // Option C: Rich Markdown
+      try {
+        const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
+        logger.debug(`[DEBUG] editMessageText (Option C) called: messageId=${messageId}`);
+        await (ctx.api.raw as any).editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          rich_message: { markdown: safeMarkdown },
+        });
+        logger.debug(`[DEBUG] editMessageText (Option C) success: messageId=${messageId}`);
+        messageCache.set(messageId, cacheMarkdown);
+        return;
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) {
+          messageCache.set(messageId, cacheMarkdown);
+          return;
+        }
+        logger.warn(`editRich Option C failed: ${err.message || err}. Trying Option D...`);
+      }
+
+      // Option D: HTML Fallback
       await safeEdit(messageId, originalText, true);
     },
 
