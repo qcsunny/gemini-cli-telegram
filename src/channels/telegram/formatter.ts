@@ -2062,11 +2062,11 @@ export function markdownToRichBlocksDelta(
 export function buildFinalBlocks(
   content: string,
   thought?: string,
-  opts?: { time?: string; tokens?: string; isClosed?: boolean },
+  opts?: { time?: string; tokens?: string; isClosed?: boolean; footerText?: string },
 ): RichBlock[] {
-  const body = markdownToRichBlocks(content);
-  const blocks: RichBlock[] = [...body];
+  const blocks: RichBlock[] = [];
 
+  // 1. Thinking block FIRST
   const thoughtText = (thought ?? '').trim();
   if (thoughtText) {
     let summary = '🧠 思考过程 (Thinking Process)';
@@ -2081,6 +2081,15 @@ export function buildFinalBlocks(
       is_open: opts?.isClosed === false ? true : undefined,
       blocks: [{ type: 'paragraph', text: thoughtText }],
     });
+  }
+
+  // 2. Body blocks SECOND
+  const body = markdownToRichBlocks(content);
+  blocks.push(...body);
+
+  // 3. Footer block LAST
+  if (opts?.footerText) {
+    blocks.push({ type: 'footer', text: opts.footerText });
   }
 
   return blocks;
