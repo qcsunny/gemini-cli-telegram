@@ -34,7 +34,7 @@ export interface StructuredMessage {
  */
 export interface ChannelReply {
   send(text: string): Promise<number>;
-  edit(messageId: number, text: string): Promise<void>;
+  edit(messageId: number, text: string): Promise<number | void>;
   sendPlain(text: string): Promise<number>;
   editPlain(messageId: number, text: string): Promise<void>;
   sendDocument(path: string, caption?: string): Promise<void>;
@@ -42,8 +42,8 @@ export interface ChannelReply {
   // Optional Rich Message API helper methods
   sendRich?(text: string | StructuredMessage): Promise<number>;
   sendRichDraft?(text: string | StructuredMessage): Promise<number>;
-  editRich?(messageId: number, text: string | StructuredMessage): Promise<void>;
-  editRichDraft?(draftId: number, text: string | StructuredMessage): Promise<void>;
+  editRich?(messageId: number, text: string | StructuredMessage): Promise<number | void>;
+  editRichDraft?(draftId: number, text: string | StructuredMessage, isStreaming?: boolean): Promise<void>;
 }
 
 /**

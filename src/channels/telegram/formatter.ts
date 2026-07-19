@@ -74,37 +74,76 @@ type HtmlToken = {
 };
 
 export function tokenizeHtml(htmlText: string): HtmlToken[] {
-  const blockRegex = /(<details[\s>][\s\S]*?<\/details>|<pre[\s>][\s\S]*?<\/pre>|<table[\s>][\s\S]*?<\/table>|<tg-math-block>[\s\S]*?<\/tg-math-block>|<blockquote>[\s\S]*?<\/blockquote>)/gi;
-  const parts = htmlText.split(blockRegex);
   const tokens: HtmlToken[] = [];
+  let index = 0;
   
-  for (const part of parts) {
-    if (!part) continue;
+  const tagStartRegex = /<(details|pre|table|tg-math-block|blockquote)([\s>])/gi;
+  
+  while (index < htmlText.length) {
+    tagStartRegex.lastIndex = index;
+    const match = tagStartRegex.exec(htmlText);
     
-    if (part.toLowerCase().startsWith('<details')) {
-      tokens.push({ type: 'details', value: part });
-    } else if (part.toLowerCase().startsWith('<pre')) {
-      tokens.push({ type: 'pre', value: part });
-    } else if (part.toLowerCase().startsWith('<table')) {
-      tokens.push({ type: 'table', value: part });
-    } else if (part.toLowerCase().startsWith('<tg-math-block')) {
-      tokens.push({ type: 'math_block', value: part });
-    } else if (part.toLowerCase().startsWith('<blockquote')) {
-      tokens.push({ type: 'blockquote', value: part });
-    } else {
-      const subParts = part.split(/(<br\s*\/?>\s*<br\s*\/?>|<br\s*\/?>)/gi);
-      for (const subPart of subParts) {
-        if (!subPart) continue;
-        if (subPart.toLowerCase().startsWith('<br')) {
-          tokens.push({ type: 'break', value: subPart });
-        } else {
-          tokens.push({ type: 'text', value: subPart });
-        }
+    if (!match) {
+      const remaining = htmlText.substring(index);
+      if (remaining) {
+        pushTextTokens(remaining, tokens);
       }
+      break;
     }
+    
+    const matchStart = match.index;
+    const tagName = match[1].toLowerCase();
+    
+    if (matchStart > index) {
+      pushTextTokens(htmlText.substring(index, matchStart), tokens);
+    }
+    
+    let depth = 1;
+    let scanIndex = matchStart + match[0].length;
+    const tagPairRegex = new RegExp(`<(/)?${tagName}([\\s>])`, 'gi');
+    
+    while (depth > 0 && scanIndex < htmlText.length) {
+      tagPairRegex.lastIndex = scanIndex;
+      const pairMatch = tagPairRegex.exec(htmlText);
+      if (!pairMatch) {
+        scanIndex = htmlText.length;
+        break;
+      }
+      
+      const isClose = !!pairMatch[1];
+      if (isClose) {
+        depth--;
+      } else {
+        depth++;
+      }
+      scanIndex = pairMatch.index + pairMatch[0].length;
+    }
+    
+    const blockValue = htmlText.substring(matchStart, scanIndex);
+    const typeMap: Record<string, HtmlToken['type']> = {
+      details: 'details',
+      pre: 'pre',
+      table: 'table',
+      'tg-math-block': 'math_block',
+      blockquote: 'blockquote'
+    };
+    tokens.push({ type: typeMap[tagName] || 'text', value: blockValue });
+    index = scanIndex;
   }
   
   return tokens;
+}
+
+function pushTextTokens(text: string, tokens: HtmlToken[]) {
+  const subParts = text.split(/(<br\s*\/?>\s*<br\s*\/?>|<br\s*\/?>)/gi);
+  for (const subPart of subParts) {
+    if (!subPart) continue;
+    if (subPart.toLowerCase().startsWith('<br')) {
+      tokens.push({ type: 'break', value: subPart });
+    } else {
+      tokens.push({ type: 'text', value: subPart });
+    }
+  }
 }
 
 export function splitDetails(detailsHtml: string, maxLength: number): string[] {
@@ -146,18 +185,37 @@ export function splitCodeBlock(codeBlockHtml: string, maxLength: number): string
   
   const preStart = `<pre><code${attrs}>`;
   const preEnd = '</code></pre>';
+  const baseLen = preStart.length + preEnd.length;
+  const lineMaxLength = maxLength - baseLen;
   
   const lines = content.split('\n');
   const chunks: string[] = [];
   let currentLines: string[] = [];
+  let currentChunkLen = 0;
   
   for (const line of lines) {
-    const currentChunkHtml = preStart + [...currentLines, line].join('\n') + preEnd;
-    if (currentChunkHtml.length > maxLength && currentLines.length > 0) {
-      chunks.push(preStart + currentLines.join('\n') + preEnd);
-      currentLines = [line];
+    if (line.length > lineMaxLength) {
+      if (currentLines.length > 0) {
+        chunks.push(preStart + currentLines.join('\n') + preEnd);
+        currentLines = [];
+        currentChunkLen = 0;
+      }
+      let lineIdx = 0;
+      while (lineIdx < line.length) {
+        const take = Math.min(lineMaxLength, line.length - lineIdx);
+        const slice = line.substring(lineIdx, lineIdx + take);
+        chunks.push(preStart + slice + preEnd);
+        lineIdx += take;
+      }
     } else {
-      currentLines.push(line);
+      if (currentChunkLen + line.length + (currentLines.length > 0 ? 1 : 0) > lineMaxLength) {
+        chunks.push(preStart + currentLines.join('\n') + preEnd);
+        currentLines = [line];
+        currentChunkLen = line.length;
+      } else {
+        currentLines.push(line);
+        currentChunkLen += line.length + (currentLines.length > 1 ? 1 : 0);
+      }
     }
   }
   
@@ -1118,8 +1176,19 @@ function trimHtmlBr(html: string): string {
   return result;
 }
 
+export function normalizeMarkdownFences(markdown: string): string {
+  if (!markdown) return markdown;
+  // Insert a newline before a code-fence opener that is glued to the end of a
+  // line of text, so the markdown parser treats it as a fence start rather than
+  // inline content. Only matches real openers: ``` optionally followed by a
+  // language tag and then a newline/end-of-string. Closing fences and ordinary
+  // runs of three backticks are left untouched.
+  return markdown.replace(/(^|[^`\n])```([a-zA-Z0-9_-]*)(?=\n|$)/g, '$1\n```$2');
+}
+
 function markdownToHtmlSnippet(markdown: string): string {
-  const ir = markdownToIR(markdown, true);
+  const normalized = normalizeMarkdownFences(markdown);
+  const ir = markdownToIR(normalized, true);
   let html = renderIRToHtml(ir);
 
   if (ir.tables && ir.tables.length > 0) {
