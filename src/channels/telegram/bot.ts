@@ -470,6 +470,51 @@ export function buildChannelReply(
         throw err;
       }
     },
+    sendRichDraftBlocks: async (draftId: number, blocks: unknown[]): Promise<number> => {
+      try {
+        const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
+          chat_id: chatId,
+          message_thread_id: messageThreadId,
+          draft_id: draftId,
+          rich_message: { blocks },
+        });
+        const returnedId = res?.draft_id ?? res?.message_id ?? (draftId || Math.floor(Math.random() * 1000000) + 1);
+        if (returnedId) {
+          activeDraftIds.add(returnedId);
+          draftIds.set(chatId, returnedId);
+        }
+        return returnedId;
+      } catch (err: any) {
+        logger.warn(`sendRichDraftBlocks failed for draftId=${draftId}: ${err.message || err}`);
+        throw err;
+      }
+    },
+    editRichBlocks: async (messageId: number, blocks: unknown[]): Promise<number | void> => {
+      try {
+        if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
+          const res: any = await (ctx.api.raw as any).sendRichMessage({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            draft_id: messageId,
+            rich_message: { blocks },
+          });
+          const realId = res?.message_id ?? messageId;
+          activeDraftIds.delete(messageId);
+          if (draftIds.get(chatId) === messageId) draftIds.delete(chatId);
+          return realId;
+        }
+        await (ctx.api.raw as any).editMessageText({
+          chat_id: chatId,
+          message_id: messageId,
+          rich_message: { blocks },
+        });
+        return messageId;
+      } catch (err: any) {
+        if (err?.description?.includes('message is not modified')) return messageId;
+        logger.warn(`editRichBlocks failed for messageId=${messageId}: ${err.message || err}`);
+        throw err;
+      }
+    },
     editRich: async (messageId: number, originalText: string | StructuredMessage): Promise<number | void> => {
       const textLen = typeof originalText === 'string'
         ? originalText.length

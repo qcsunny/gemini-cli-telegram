@@ -279,7 +279,7 @@ describe('processMessage', () => {
     });
   });
 
-  it('should send separate messages for thought and formal reply', async () => {
+  it('should combine thought and body into a single append-only message', async () => {
     const input: MultimodalInput = { text: 'tell me a joke' };
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
@@ -295,14 +295,23 @@ describe('processMessage', () => {
       };
     });
 
+    // Plain fallback path: thought + body rendered into one final message.
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // During stream or final render, separate message targets should be sent
-    expect(mockReply.sendPlain).toHaveBeenCalledWith(expect.stringContaining('Let me think'));
-    expect(mockReply.sendPlain).toHaveBeenCalledWith(expect.stringContaining('Haha!'));
+    // Only one message is created (sendPlain called once for draft creation)
+    expect(mockReply.sendPlain).toHaveBeenCalledTimes(1);
+    // Final render must contain BOTH thought and body in a single message.
+    expect(mockReply.edit).toHaveBeenCalledWith(
+      456,
+      expect.stringContaining('Let me think'),
+    );
+    expect(mockReply.edit).toHaveBeenCalledWith(
+      456,
+      expect.stringContaining('Haha!'),
+    );
   });
 
-  it('should split messages when split delimiters like ---split--- or ---spilt--- are present', async () => {
+  it('should NOT split on ---split--- delimiters (single message only)', async () => {
     const input: MultimodalInput = { text: 'split test' };
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
@@ -319,14 +328,15 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // It should edit the streaming message with the first part
-    expect(mockReply.edit).toHaveBeenCalledWith(456, '___RAW_HTML___Intro part');
-
-    // And send subsequent parts as separate messages (with footer markers)
-    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('___RAW_HTML___Main content part'));
+    // Body stays in ONE message; nothing is sent as a separate message.
+    expect(mockReply.send).not.toHaveBeenCalled();
+    expect(mockReply.edit).toHaveBeenCalledWith(
+      456,
+      expect.stringContaining('Main content part'),
+    );
   });
 
-  it('should combine thought and stats into a single message at the end', async () => {
+  it('should fold thought and stats into a single message (no separate footer message)', async () => {
     const input: MultimodalInput = { text: 'test combination' };
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
@@ -344,22 +354,24 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // The thinking process is streamed LIVE as its own message (first), via sendPlain.
-    expect(mockReply.sendPlain).toHaveBeenCalledWith(expect.stringContaining('thinking process'));
-
-    // The body reply text is rendered (edit on the body draft 456).
-    expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('final reply text'));
-
-    // The stats footer is appended at the END as a separate message (via send).
-    expect(mockReply.send).toHaveBeenCalledWith(expect.stringContaining('btn_info_footer'));
+    // Everything lands in ONE message (456) — no separate footer send.
+    expect(mockReply.send).not.toHaveBeenCalled();
+    expect(mockReply.edit).toHaveBeenCalledWith(
+      456,
+      expect.stringContaining('thinking process'),
+    );
+    expect(mockReply.edit).toHaveBeenCalledWith(
+      456,
+      expect.stringContaining('final reply text'),
+    );
   });
 
-  it('Rich mode: thinking process is rendered into the trailing footer message', async () => {
-    // User preference: keep the thinking folded into the end footer (not a
-    // separate leading message). The real thought text must be displayed there,
-    // not just used for token estimation.
+  it('Rich mode: thinking process is rendered into the trailing details block of a single message', async () => {
+    // User preference: keep the thinking folded into the end (a native `details`
+    // block), in the SAME message as the body — never a separate message.
     const input: MultimodalInput = { text: 'footer thinking test' };
 
+    const capturedBlocks: any[] = [];
     const richReply: ChannelReply = {
       send: vi.fn().mockResolvedValue(700),
       edit: vi.fn(),
@@ -371,6 +383,16 @@ describe('processMessage', () => {
       sendRichDraft: vi.fn().mockResolvedValue(702),
       editRich: vi.fn(),
       editRichDraft: vi.fn(),
+      sendRichDraftBlocks: vi.fn(async (_draftId: number, blocks: unknown[]) => {
+        capturedBlocks.length = 0;
+        capturedBlocks.push(...(blocks as any[]));
+        return 702;
+      }),
+      editRichBlocks: vi.fn(async (_id: number, blocks: unknown[]) => {
+        capturedBlocks.length = 0;
+        capturedBlocks.push(...(blocks as any[]));
+        return 702;
+      }),
     };
     const richFormatter = {
       ...mockFormatter,
@@ -393,14 +415,17 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, richReply, richFormatter);
 
-    // The footer (sent via send) must contain the actual thinking text.
-    const sendCalls = (richReply.send as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    const footerCall = sendCalls.find((c) =>
-      String(c[0]).includes('btn_info_footer'),
+    // Exactly ONE message worth of blocks, with fixed order: [details(thinking), ...body, footer?].
+    expect(capturedBlocks.length).toBeGreaterThan(0);
+    // The thinking block (details) carries the real thought text.
+    const thinking = capturedBlocks.find(
+      (b) => b?.type === 'details' && String(b?.blocks?.[0]?.text ?? '').includes('the model reasons step by step'),
     );
-    expect(footerCall).toBeDefined();
-    if (footerCall) {
-      expect(String(footerCall[0])).toContain('the model reasons step by step');
-    }
+    expect(thinking).toBeDefined();
+    // The body block carries the real answer.
+    const bodyText = JSON.stringify(capturedBlocks);
+    expect(bodyText).toContain('final answer');
+    // No second message was sent.
+    expect(richReply.send).not.toHaveBeenCalled();
   });
 });
