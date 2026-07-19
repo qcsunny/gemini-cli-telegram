@@ -38,7 +38,7 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
 const TYPING_TTL_MS = 3_600_000; // Safety: auto-stop typing after 1 hour
 const DOWNLOAD_MAX_RETRIES = 3;
 const DOWNLOAD_RETRY_BASE_MS = 1000;
-const MAX_MESSAGE_PROCESSING_MS = 900_000; // 15 minute watchdog; only fires if no streamed activity (busySince is refreshed on each streamed event)
+const MAX_MESSAGE_PROCESSING_MS = 960_000; // 16 min watchdog; >= hard run cap so model-timeout fires first. busySince is refreshed on each streamed event.
 const HEALTH_CHECK_INTERVAL_MS = 60_000; // Check every minute
 
 export interface TelegramBotOptions {

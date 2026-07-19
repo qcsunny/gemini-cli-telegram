@@ -64,6 +64,7 @@ describe('processMessage', () => {
       chunkText: vi.fn((text) => [text]),
       truncateForEdit: vi.fn((text) => text),
       truncateForStream: vi.fn((text) => text),
+      findSafeCutPoint: vi.fn((text: string, maxLen: number) => Math.min(text.length, maxLen)),
     };
   });
 

@@ -27,43 +27,68 @@ const DEBOUNCE_INTERVAL_MS = 1000;
  * user would see a silent "no reply". This wrapper guarantees the call always
  * settles, surfacing a clear error instead of hanging forever.
  */
-const MODEL_RUN_TIMEOUT_MS = 600_000;
+/**
+ * Hard cap on a single model run (wall-clock from start, NEVER reset by
+ * activity). A streamed reply that runs longer than this is killed. 15 min is
+ * ~180k Chinese chars at 200 char/s — far beyond any daily need; longer means
+ * the model is stuck in a loop.
+ */
+const MODEL_RUN_HARD_TIMEOUT_MS = 900_000;
+/**
+ * Inactivity guard: if there has been NO streamed output for this long, the run
+ * is treated as a genuine upstream stall and killed. Reset on every streamed
+ * chunk so an actively-streaming (even slow) reply is never killed.
+ */
+const MODEL_RUN_INACTIVITY_MS = 600_000;
 
 /**
- * Overall guard for a single model run. The timer is *reset on activity*: any
- * streamed chunk or event counts as progress, so a slow-but-actively-streaming
- * long reply is NOT killed. It only fires when there has been NO output
- * (including streamed chunks) for MODEL_RUN_TIMEOUT_MS, i.e. a genuine upstream
- * stall. `onActivity` lets the caller report progress to reset the timer.
+ * Overall guard for a single model run. Two independent timers race the run:
+ *  - a HARD total cap (never reset), and
+ *  - an INACTIVITY timer that resets on each streamed chunk/event.
+ * `onActivity` lets the caller report progress to reset the inactivity timer.
  */
 async function withTimeout<T>(
   promise: Promise<T>,
   modelLabel: string,
   onActivity?: () => void,
 ): Promise<{ result: T; resetInactivity: () => void }> {
-  let timer: NodeJS.Timeout | undefined;
+  let hardTimer: NodeJS.Timeout | undefined;
+  let inactTimer: NodeJS.Timeout | undefined;
   let reject: (reason?: any) => void;
-  const arm = () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      reject(new Error(
-        `模型 \`${modelLabel}\` 在 ${MODEL_RUN_TIMEOUT_MS / 1000}s 内无响应（疑似上游服务挂起）。请稍后重试，或切换到其它模型。`
-      ));
-    }, MODEL_RUN_TIMEOUT_MS);
+
+  const fire = (msg: string) => {
+    if (reject) reject(new Error(msg));
   };
+
+  // Hard total cap — set once, never reset.
+  hardTimer = setTimeout(() => {
+    fire(`模型 \`${modelLabel}\` 单次运行超过 ${MODEL_RUN_HARD_TIMEOUT_MS / 60000} 分钟被强制终止（疑似模型陷入死循环或上游挂起）。请稍后重试，或拆分问题。`);
+  }, MODEL_RUN_HARD_TIMEOUT_MS);
+
+  // Inactivity timer — reset on activity.
+  const armInactivity = () => {
+    if (inactTimer) clearTimeout(inactTimer);
+    inactTimer = setTimeout(() => {
+      fire(`模型 \`${modelLabel}\` 在 ${MODEL_RUN_INACTIVITY_MS / 60000} 分钟内无输出（疑似上游服务挂起）。请稍后重试，或切换到其它模型。`);
+    }, MODEL_RUN_INACTIVITY_MS);
+  };
+  armInactivity();
+
   const timeout: Promise<never> = new Promise((_reject) => {
     reject = _reject;
-    arm();
   });
+
   const activity = () => {
     if (onActivity) onActivity();
-    arm();
+    armInactivity();
   };
+
   try {
     const result = await Promise.race([promise, timeout]);
     return { result, resetInactivity: activity };
   } finally {
-    if (timer) clearTimeout(timer);
+    if (hardTimer) clearTimeout(hardTimer);
+    if (inactTimer) clearTimeout(inactTimer);
   }
 }
 
@@ -323,10 +348,54 @@ export async function processMessage(
   let isDone = false;
   let isThinkingFinalized = false;
   let activeUpdatePromise: Promise<any> = Promise.resolve();
+  // Incremental finalization: how much of answerBuffer has already been
+  // materialized into real (persisted) messages during streaming.
+  let committedLen = 0;
+
+  const CHUNK_FINALIZE_THRESHOLD = 3900;
 
   const capabilities = getModelCapabilities(session.model);
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
   const isRichSingleMessage = !!reply.sendRichDraft && (capabilities.supportsThinkingSummary || parseMode === 'RichText');
+
+  // Materialize the leading portion of the not-yet-committed answer text into a
+  // real persisted message, so long replies land incrementally instead of waiting
+  // for the full response. The current draft is "promoted" to a real message
+  // (head) and a fresh tail draft is started for the remainder — keeping the
+  // active draft always at the bottom and preserving top-to-bottom order.
+  const finalizePendingChunks = async (isFinal: boolean) => {
+    const pending = answerBuffer.slice(committedLen);
+    if (!isFinal && pending.length < CHUNK_FINALIZE_THRESHOLD) return;
+    if (isFinal && pending.trim().length === 0) return;
+
+    let cut = pending.length;
+    if (!isFinal && cut > CHUNK_FINALIZE_THRESHOLD) {
+      cut = formatter.findSafeCutPoint(pending, CHUNK_FINALIZE_THRESHOLD);
+    }
+    const toSend = pending.slice(0, cut);
+    const remainder = pending.slice(cut);
+    if (!toSend.trim()) return;
+
+    const headMsg: StructuredMessage = { content: toSend, thought: '' };
+    try {
+      if (currentMessageId && reply.editRich) {
+        const realId = await reply.editRich(currentMessageId, headMsg);
+        if (typeof realId === 'number') currentMessageId = realId;
+      } else if (reply.sendRich) {
+        currentMessageId = await reply.sendRich(headMsg);
+      }
+      if (currentMessageId && answerBuffer.trim()) {
+        messageCache.set(currentMessageId, answerBuffer.trim());
+      }
+      committedLen += toSend.length;
+      // Start a fresh tail draft for the remainder (kept at the bottom).
+      if (remainder.trim() && reply.sendRichDraft) {
+        currentMessageId = await reply.sendRichDraft({ content: remainder, thought: '' });
+      }
+    } catch (e) {
+      logger.warn(`[messageLoop] Failed to materialize streamed chunk: ${e}`);
+    }
+  };
 
   // Stream editing helper
   const updateMessageStream = async (isFinal = false) => {
@@ -341,19 +410,27 @@ export async function processMessage(
       if (isFinished && !isFinal) return;
       try {
         if (isRichSingleMessage) {
-          const structuredMsg: StructuredMessage = {
-            content: answerBuffer,
-            thought: thoughtBuffer,
-          };
-
-          if (!structuredMsg.content.trim() && !structuredMsg.thought?.trim()) {
-            logger.debug(`[DEBUG-STAGE-6] structuredMsg is empty, skipping update.`);
+          const pending = answerBuffer.slice(committedLen);
+          if (!pending.trim() && !thoughtBuffer.trim()) {
+            logger.debug(`[DEBUG-STAGE-6] pending empty, skipping update.`);
             return;
           }
 
+          // Promote committed head chunks into real messages when the pending
+          // tail has grown past the threshold (boundary-safe cut inside).
+          if (pending.length >= CHUNK_FINALIZE_THRESHOLD && currentMessageId) {
+            await finalizePendingChunks(false);
+            return;
+          }
+
+          const structuredMsg: StructuredMessage = {
+            content: pending,
+            thought: thoughtBuffer,
+          };
+
           const truncatedContent = formatter.truncateForStream(structuredMsg.content);
           const truncatedThought = structuredMsg.thought ? formatter.truncateForEdit(structuredMsg.thought) : undefined;
-          
+
           const structuredTruncMsg: StructuredMessage = {
             content: truncatedContent,
             thought: truncatedThought,
@@ -631,21 +708,43 @@ export async function processMessage(
         thoughtAndStatsHtmlChunks.push(...chunks);
       }
 
-      // Both modes must lead with the answer body so that the FIRST message in
-      // the chat window shows the opening title / first paragraph. In RichText
-      // mode the first message is the streaming draft: editing it to the footer
-      // or thinking summary would "swallow" the start of the real answer. The
-      // thought summary and stats footer always trail at the end.
+      // Finalize. Body text was already materialized incrementally during
+      // streaming when committedLen > 0 (each head chunk became a real message,
+      // the active draft holds only the remaining tail). So at the end we only
+      // need to: (1) promote the final tail draft to a real message, and
+      // (2) append the thought summary + stats footer. For short replies where
+      // nothing was committed incrementally, fall back to the original full-body
+      // path so the draft is materialized as the first (real) message.
       const finalHtmlMessages = [
         ...bodyHtmlChunks,
         ...thoughtAndStatsHtmlChunks
       ];
 
       if (finalResult.exitCode === 0 && finalHtmlMessages.length > 0) {
-        if (currentMessageId) {
+        if (committedLen > 0) {
+          // Long reply: body already sent incrementally. The final streaming draft
+          // (currentMessageId) still holds the remaining tail — promote it to a real
+          // message, then append the thought summary + stats footer below it.
+          const tailText = answerBuffer.slice(committedLen);
+          if (currentMessageId && reply.editRich) {
+            try {
+              const realId = await reply.editRich(currentMessageId, { content: tailText.trim() || ' ', thought: '' });
+              if (typeof realId === 'number') currentMessageId = realId;
+              if (currentMessageId && answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim());
+            } catch (e) {
+              logger.warn(`[messageLoop] Failed to finalize trailing draft: ${e}`);
+            }
+          }
+          for (const msgText of thoughtAndStatsHtmlChunks) {
+            try {
+              const msgId = await reply.send(msgText);
+              if (msgId && answerBuffer.trim()) messageCache.set(msgId, answerBuffer.trim());
+            } catch (e) {
+              logger.warn(`[messageLoop] Failed to send footer chunk: ${e}`);
+            }
+          }
+        } else if (currentMessageId) {
           try {
-            // In RichText mode this materializes the ephemeral draft into a real
-            // persisted message and returns its new id; in other modes it edits in place.
             const finalizedId = await reply.edit(currentMessageId, finalHtmlMessages[0]);
             if (typeof finalizedId === 'number') {
               currentMessageId = finalizedId;
@@ -670,7 +769,7 @@ export async function processMessage(
             }
           }
         }
-        
+
         if (finalResult.conversationId) {
           await detectAndSendNewArtifacts(session, finalResult.conversationId, turnStartTime);
         }
