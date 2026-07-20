@@ -476,12 +476,62 @@ export async function processMessage(
       session._busySince = Date.now();
       session.turnCount++;
 
-      let modelToUse = session.model;
+      // Build the ordered fallback chain starting from the session's model:
+      // [model0, model1, … modelN] where each entry's FALLBACK_MAP value is
+      // the next entry. Used to drive a deterministic, exhaustive retry.
+      const chain: string[] = [];
+      {
+        let m = session.model;
+        while (m) {
+          chain.push(m);
+          const n = getFallbackModel(m);
+          if (!n) break;
+          m = n;
+        }
+      }
+
+      // Retry policy (per the agreed design):
+      //   • Each model is attempted up to RETRIES_PER_MODEL times.
+      //   • On exhausting a model's retries, downgrade to the next-weaker
+      //     model in the fallback chain (starting from the session's model).
+      //   • The chain is walked exactly ONE full loop: from the starting
+      //     model through every weaker model, ending at the model that sits
+      //     right before the starting model. When that LAST model also
+      //     exhausts its retries, the session terminates with an error — we
+      //     do NOT wrap back to the start for a second pass.
+      // So the total attempt budget is one full loop = chain.length * RETRIES.
+      const RETRIES_PER_MODEL = 3;
+      const maxAttempts = chain.length * RETRIES_PER_MODEL;
+
+      let modelToUse = chain[0];
+      let chainIdx = 0;          // index into `chain`
+      let failsForModel = 0;     // consecutive failures on the current model
       let attempts = 0;
-      const maxAttempts = 3;
       let success = false;
       let lastResult: any = null;
       let lastErrorMessage = '';
+
+      const escReason = (s: string) =>
+        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
+
+      // Step to the next model in the chain, walking exactly ONE pass with
+      // NO wrap-around. Returns true if we moved to a weaker model (caller
+      // continues), or false if we are already at the LAST model in the chain
+      // (the one that sits right before the starting model in the loop) — in
+      // which case there is no further downgrade and the caller terminates.
+      const advanceModel = async (reason: string): Promise<boolean> => {
+        const prevModel = modelToUse;
+        if (chainIdx + 1 >= chain.length) {
+          logger.warn(`[messageLoop] Model "${prevModel}" failed (${reason}). No further fallback available — terminating (attempt ${attempts}/${maxAttempts}).`);
+          return false;
+        }
+        chainIdx++;
+        modelToUse = chain[chainIdx];
+        failsForModel = 0;
+        logger.warn(`[messageLoop] Model "${prevModel}" failed (${reason}). Downgrading to "${modelToUse}" (attempt ${attempts}/${maxAttempts}).`);
+        await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escReason(reason)}），正在自动降级至 \`${modelToUse}\` 重试...`);
+        return true;
+      };
 
       let thoughtEventCount = 0;
       let textEventCount = 0;
@@ -490,16 +540,25 @@ export async function processMessage(
 
       while (attempts < maxAttempts && !success) {
         attempts++;
+        // Reset per-attempt buffers AND the single-draft streaming state so a
+        // new attempt starts from a clean slate (otherwise a failed attempt's
+        // partial blocks would leak into the next attempt's message).
         thoughtBuffer = '';
         answerBuffer = '';
         isDone = false;
+        currentMessageId = null;
+        blocks = [];
+        phase = 'thinking';
+        thinkingBlockIndex = -1;
+        footerBlockIndex = -1;
+        convertedBodyLen = 0;
         thoughtEventCount = 0;
         textEventCount = 0;
 
         let rawStreamBuffer = '';
 
         try {
-          logger.info(`[messageLoop] Attempt ${attempts}: Running prompt with model="${modelToUse}"`);
+          logger.info(`[messageLoop] Attempt ${attempts}/${maxAttempts}: Running prompt with model="${modelToUse}" (model retry ${failsForModel + 1}/${RETRIES_PER_MODEL})`);
           turnStartTime = Date.now();
           let resetInactivity: (() => void) | undefined;
           const { result } = await withTimeout(runAgyPrint({
@@ -569,39 +628,31 @@ export async function processMessage(
           const stderr = result.stderr || '';
           const output = result.output || answerBuffer;
 
-          if (isRateLimitOrUnavailableError(stderr, output)) {
-            const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
-            if (nextModel && attempts < maxAttempts) {
-              logger.warn(`[messageLoop] Model "${modelToUse}" hit rate limit/unavailable. Stderr: "${stderr}". Output: "${output}". Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
-              
-              await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 遭遇频控或不可用，正在自动降级至 \`${nextModel}\` 重试...`);
-              
-              currentMessageId = null; // Fresh message for next model stream
-              modelToUse = nextModel;
-              continue;
-            }
-          }
-
-          break; // Non-fallback error, or max attempts reached
+          // ANY non-success is eligible for a retry/downgrade (rate-limit,
+          // auth error, process termination, hard timeout, generic error).
+          const reason = isRateLimitOrUnavailableError(stderr, output)
+            ? '频控或上游不可用'
+            : (stderr.trim() || output.trim() || '未知错误');
+          failsForModel++;
+          if (failsForModel < RETRIES_PER_MODEL) continue; // retry same model
+          if (await advanceModel(reason)) continue;          // downgrade to next
+          break;                                            // last model failed → terminate
         } catch (e: any) {
           logger.error(`[messageLoop] Attempt ${attempts} error: ${e?.message || e}`);
           if (signal.aborted) throw e;
 
+          // ANY thrown error is eligible for a retry/downgrade (including
+          // hard-timeout / inactivity kills from withTimeout, auth errors,
+          // process termination, and generic failures) — not just rate-limits.
           const errMsg = e?.message || String(e);
-          if (isRateLimitOrUnavailableError(errMsg, '')) {
-            const nextModel = modelToUse ? getFallbackModel(modelToUse) : null;
-            if (nextModel && attempts < maxAttempts) {
-              logger.warn(`[messageLoop] Model "${modelToUse}" threw rate-limit/unavailable error. Falling back to "${nextModel}" (Attempt ${attempts}/${maxAttempts}).`);
-              await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${modelToUse}\` 出现调用异常，正在自动降级至 \`${nextModel}\` 重试...`);
-              currentMessageId = null;
-              modelToUse = nextModel;
-              continue;
-            }
-          }
-          // Capture the error so the final render block can surface a clear,
-          // user-facing message instead of leaving the chat silently unanswered.
           lastErrorMessage = errMsg;
-          break;
+          const reason = isRateLimitOrUnavailableError(errMsg, '')
+            ? '频控或上游不可用'
+            : errMsg;
+          failsForModel++;
+          if (failsForModel < RETRIES_PER_MODEL) continue; // retry same model
+          if (await advanceModel(reason)) continue;          // downgrade to next
+          break;                                            // last model failed → terminate
         }
       }
 
@@ -692,7 +743,9 @@ export async function processMessage(
         // duplicate table rows / list items.
         const remaining = convertedBodyLen === 0
           ? markdownToRichBlocks(answerBuffer)
-          : markdownToRichBlocksDelta(answerBuffer.slice(0, convertedBodyLen), answerBuffer);
+          // This is the FINAL completion pass on the whole answer: never drop
+          // the trailing block, even if `answerBuffer` has no trailing newline.
+          : markdownToRichBlocksDelta(answerBuffer.slice(0, convertedBodyLen), answerBuffer, { dropIncompleteTail: false });
         if (remaining.length > 0) {
           if (footerBlockIndex >= 0) blocks.splice(footerBlockIndex, 0, ...remaining);
           else blocks.push(...remaining);
@@ -713,13 +766,11 @@ export async function processMessage(
           }
         }
 
-        // Hoist the first heading above the thinking block (if present)
+        // Hoist the first heading above the thinking block (only if it is the very first body block)
         if (thinkingBlockIndex >= 0) {
-          const firstHeadingIdx = blocks.findIndex(
-            (b, i) => i !== thinkingBlockIndex && (b as any).type === 'heading',
-          );
-          if (firstHeadingIdx > thinkingBlockIndex) {
-            const [headingBlock] = blocks.splice(firstHeadingIdx, 1);
+          const nextBlockIdx = thinkingBlockIndex + 1;
+          if (nextBlockIdx < blocks.length && (blocks[nextBlockIdx] as any).type === 'heading') {
+            const [headingBlock] = blocks.splice(nextBlockIdx, 1);
             blocks.unshift(headingBlock);
             thinkingBlockIndex = 1;
             if (footerBlockIndex >= 0) footerBlockIndex++;
@@ -885,48 +936,7 @@ export async function processMessage(
         }
       }
 
-    // 6. Handle Autopilot autonomous loops
-    if (session.autopilot?.active) {
-      const config = session.autopilot;
-      
-      // Check if maximum iterations reached
-      if (config.currentIteration >= config.maxIterations) {
-        session.autopilot.active = false;
-        await reply.send(`${ICONS.warning} [Autopilot] 已达到最大自主迭代次数限制 (${config.maxIterations} 次)，自主循环已停止。`);
-        return;
-      }
 
-      // Check for stop keywords in AI response
-      const lowercaseOutput = answerBuffer.toLowerCase();
-      const triggeredStop = config.stopKeywords.find(kw => lowercaseOutput.includes(kw.toLowerCase()));
-      if (triggeredStop) {
-        session.autopilot.active = false;
-        await reply.send(`${ICONS.success} [Autopilot] 检测到终止关键字 "${triggeredStop}"，自主循环优雅结束。`);
-        return;
-      }
-
-      // Proceed with next iteration
-      config.currentIteration++;
-      const nextIterationStatusMsg = await reply.send(
-        `${ICONS.processing} *[Autopilot 自主迭代 ${config.currentIteration}/${config.maxIterations}]*\n` +
-        `正在评估并开始执行下一阶段目标: \`"${config.goal}"\` ...`
-      );
-
-      // Auto-trigger next processMessage step recursively
-      const nextPrompt = `请继续推进您的工作并执行下一步。当前总目标是："${config.goal}"。\n` +
-        `如果您觉得已经完美达成该目标，或者已经无法继续前行，请务必在您的回答中包含 "TASK_COMPLETE" 关键字以结束本轮循环。`;
-
-      // Delay slightly for better UX feel
-      await new Promise(r => setTimeout(r, 1500));
-      await reply.delete(nextIterationStatusMsg);
-
-      await processMessage(
-        session,
-        { text: nextPrompt },
-        reply,
-        formatter
-      );
-    }
 
   } catch (e: any) {
     logger.error(`[messageLoop] Error running prompt: ${e?.message || e}`);
@@ -950,11 +960,18 @@ const FALLBACK_MAP: Record<string, string> = {
   'Gemini 3.1 Pro (Low)': 'Gemini 3.5 Flash (Medium)',
   'Gemini 3.5 Flash (High)': 'Gemini 3.5 Flash (Medium)',
   'Gemini 3.5 Flash (Medium)': 'Gemini 3.5 Flash (Low)',
+  // 跨通道兜底:agy 官方通道用尽后,切到 cookie 免费通道的 AUTO(自动选模)。
+  // 注意 `Gemini Auto` 是 Google AUTO 模式,不固定底层模型,此处仅作"最终保底通道",
+  // 不代表它是最弱模型。
   'Gemini 3.5 Flash (Low)': 'Web2API: Gemini Auto',
-  'Web2API: Gemini 3.5 Flash Thinking': 'Web2API: Gemini 3.5 Flash Thinking Lite',
-  'Web2API: Gemini 3.5 Flash Thinking Lite': 'Web2API: Gemini 3.1 Pro',
-  'Web2API: Gemini 3.1 Pro': 'Web2API: Gemini 3.5 Flash',
-  'Web2API: Gemini 3.5 Flash': 'Web2API: Gemini Flash Lite',
+  // ── Web2API(cookie 通道)内部子链:按 Google 实际能力 强→弱 排列 ──
+  // 综合能力梯队:Pro / Flash Thinking(一档) > 3.5 Flash(二档,工具调用/Agent 甚至超 Pro)
+  // > Flash Thinking Lite / Flash Lite(三档) > Auto(动态路由,非固定档)。
+  // 3.1 Pro → 3.5 Flash Thinking → 3.5 Flash → 3.5 Flash Thinking Lite → Flash Lite → Auto。
+  'Web2API: Gemini 3.1 Pro': 'Web2API: Gemini 3.5 Flash Thinking',
+  'Web2API: Gemini 3.5 Flash Thinking': 'Web2API: Gemini 3.5 Flash',
+  'Web2API: Gemini 3.5 Flash': 'Web2API: Gemini 3.5 Flash Thinking Lite',
+  'Web2API: Gemini 3.5 Flash Thinking Lite': 'Web2API: Gemini Flash Lite',
   'Web2API: Gemini Flash Lite': 'Web2API: Gemini Auto',
 };
 

@@ -1312,6 +1312,29 @@ export function normalizeMarkdownStructure(markdown: string): string {
   // `###1.` / `## 2.1` already spaced is fine; fix `###1.`, `#### 3.1`,
   // `##标题` where the hash run is immediately followed by a non-space char.
   text = text.replace(/^(#{1,6})(?=[^\s#>])/gm, '$1 ');
+  // Convert LaTeX display/inline delimiters \[...\] and \(...\) into the
+  // LATEX* markers so BOTH the HTML and RichBlocks paths treat them as
+  // math. (DeepSeek Pro Thinking emits these rather than $...$ / $$...$$.)
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, 'LATEXBLOCKSTART$1LATEXBLOCKEND');
+  text = text.replace(/\\\(([\s\S]+?)\\\)/g, 'LATEXINLINESTART$1LATEXINLINEEND');
+  // Bullet markers missing the required space after the marker (e.g. `*2022年`
+  // or `-foo`) are parsed by markdown-it as emphasis/inline text, not list
+  // items. Insert the missing space so they become real bullets. We skip
+  // `**`/`++`/`--` (already-valid emphasis/strikethrough markers) by rejecting
+  // a second marker char in the lookahead.
+  text = text.replace(/^([ \t]*)([*+\-])(?=[^\s*+\-])/gm, '$1$2 ');
+  // Consecutive bullet items glued onto ONE line, separated only by `* ` (or
+  // `- ` / `+ `) with NO newlines between them — e.g. the model emits
+  //   * 2026年…）* 2022年…）* 2018年…）
+  //   * 2014年…）
+  // markdown-it then collapses the first three into a single list item. Split
+  // each mid-line bullet marker onto its own line. We only act when the
+  // marker is preceded by a non-space, non-marker, non-alphanumeric char
+  // (so a real line-start bullet, the dashes inside a `---` rule, and math
+  // like `2 * 3` are all untouched) and followed by content that looks like
+  // a list item (CJK / digit / colon), which avoids breaking emphasis
+  // `*bold*` (no space after the marker) or math.
+  text = text.replace(/([^\n\s*+\-0-9a-zA-Z])(\s*)([*+\-])(\s+)(?=[㐀-鿿0-9：:])/g, '$1\n$2$3$4');
   // Horizontal rules `---` / `———` emitted by the model are often glued to the
   // surrounding text (e.g. `正文---### 4.` or `---` without blank lines), so
   // markdown-it does not treat them as <hr>. Only lines that consist solely of
@@ -1734,19 +1757,42 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): Ric
   type Open = { type: RichTextEntity['type']; href?: string; start: number };
   const stack: Open[] = [];
 
-  const pushPlain = (s: string) => {
-    // Convert $...$ (inline) and $$...$$ (block) LaTeX into native
-    // mathematical_expression RichText entities so formulas render natively.
-    const mathRe = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^$\n\r]*?[^\s$])?)\$/g;
+  const pushPlainInner = (s: string) => {
+    // Convert LaTeX delimiters into native mathematical_expression RichText
+    // entities so formulas render natively. Handles $...$ / $$...$$
+    // plus \(...\) / \[...\] (DeepSeek Pro Thinking emits these) and the
+    // LATEXINLINE/LATEXBLOCK markers that normalizeMarkdownStructure
+    // emits from them — otherwise those markers leak as literal text.
+    const mathRe = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^\$\n\r]*?[^\s$])?)\$|LATEXBLOCKSTART([\s\S]+?)LATEXBLOCKEND|LATEXINLINESTART([\s\S]+?)LATEXINLINEEND|\\\[\s*([\s\S]+?)\s*\\\]|\\\(\s*([\s\S]+?)\s*\\\)/g;
     let last = 0;
     let m: RegExpExecArray | null;
     while ((m = mathRe.exec(s)) !== null) {
       if (m.index > last) textBuf.push(s.slice(last, m.index));
-      const expr = (m[1] ?? m[2]).trim();
+      const expr = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? '').trim();
       if (expr) out.push({ type: 'mathematical_expression', expression: expr });
       last = m.index + m[0].length;
     }
     if (last < s.length) textBuf.push(s.slice(last));
+  };
+
+  // Math formulas are extracted into private-use-area placeholders BEFORE
+  // markdown-it parses the text (see markdownToRichBlocks / extractMath), so
+  // the parser never splits formula internals like ( ) { } across tokens.
+  // Here we swap each placeholder back to a native mathematical_expression
+  // entity; any leftover $...$ / \(...\) (e.g. from the HTML path, which does
+  // not pre-extract) is still handled by pushPlainInner below.
+  const pushPlain = (s: string) => {
+    const phRe = new RegExp(`${MATH_OPEN}(\\d+)${MATH_CLOSE}`, 'g');
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = phRe.exec(s)) !== null) {
+      if (m.index > last) pushPlainInner(s.slice(last, m.index));
+      const idx = Number(m[1]);
+      const expr = (mathPlaceholderStore[idx] ?? '').trim();
+      if (expr) out.push({ type: 'mathematical_expression', expression: expr });
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) pushPlainInner(s.slice(last));
   };
   const open = (type: Open['type'], href?: string) => {
     flush();
@@ -1824,6 +1870,32 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): Ric
   return out as RichText;
 }
 
+// --- Math placeholder extraction (RichBlocks path) -------------------------
+// DeepSeek Pro Thinking emits standard LaTeX delimiters \(...\) / \[...\].
+// markdown-it's inline tokenizer splits formula internals containing ( ) { }
+// across multiple text tokens, so the math regex in inlineToRichText never
+// sees a complete delimiter pair and rendering fails. To avoid that we extract
+// every formula into a private-use-area placeholder BEFORE parsing, then
+// restore it as a native `mathematical_expression` entity afterwards.
+// Synchronous execution makes a module-level store safe: markdownToRichBlocks
+// populates it and inlineToRichText consumes it within the same call.
+const MATH_OPEN = '';
+const MATH_CLOSE = '';
+let mathPlaceholderStore: string[] = [];
+
+const MATH_EXTRACT_RE = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^\$\n\r]*?[^\s$])?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+
+function extractMath(source: string): { text: string; math: string[] } {
+  const math: string[] = [];
+  const text = source.replace(MATH_EXTRACT_RE, (_full, dBlock, dInline, bBlock, bInline) => {
+    const expr = (dBlock ?? dInline ?? bBlock ?? bInline ?? '').trim();
+    const idx = math.length;
+    math.push(expr);
+    return `${MATH_OPEN}${idx}${MATH_CLOSE}`;
+  });
+  return { text, math };
+}
+
 /**
  * Convert markdown to Bot API 10.2 `InputRichBlock<never>[]` (media-free).
  *
@@ -1878,7 +1950,17 @@ function tryHtmlBlockToRichBlock(
 }
 
 export function markdownToRichBlocks(markdown: string): RichBlock[] {
-  const tokens = md.parse(markdown ?? '', {}) as any as MarkdownToken[];
+  // Extract every LaTeX formula into a private-use-area placeholder BEFORE
+  // parsing so markdown-it never splits formula internals ( ) { } across
+  // tokens. Restored as mathematical_expression entities in inlineToRichText.
+  const { text: placeholderText, math } = extractMath(markdown ?? '');
+  mathPlaceholderStore = math;
+  // Normalize structure (heading/bullet spacing, mid-line bullet splits,
+  // glued `---` separators) BEFORE parsing — without this the streaming
+  // render path parsed the raw markdown directly and collapsed bullets
+  // that the model joined on a single line. The HTML path already runs
+  // its own normalization; this keeps the RichBlocks path consistent.
+  const tokens = md.parse(normalizeMarkdownStructure(placeholderText), {}) as any as MarkdownToken[];
   const blocks: RichBlock[] = [];
 
   for (let i = 0; i < tokens.length; i++) {
@@ -1924,15 +2006,39 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         break;
       }
       case 'blockquote_open': {
-        // Telegram does NOT allow blockquote nested inside details.
-        // Render as plain paragraphs instead to avoid nesting conflicts.
         let j = i + 1;
+        let isDetails = false;
+        let detailsSummary = '点击展开';
+        const blockquoteInnerBlocks: RichBlock[] = [];
+
         while (j < tokens.length && tokens[j].type !== 'blockquote_close') {
-          if (tokens[j].type === 'inline' && tokens[j].children) {
-            const rt = trimRichText(inlineToRichText(tokens[j].children));
-            if (rt) blocks.push({ type: 'paragraph', text: rt });
+          const nextToken = tokens[j];
+          if (nextToken.type === 'inline' && nextToken.children) {
+            const rt = trimRichText(inlineToRichText(nextToken.children));
+            if (rt) {
+              const rawText = String(rt).trim();
+              if (blockquoteInnerBlocks.length === 0 && rawText.startsWith('[details]')) {
+                isDetails = true;
+                detailsSummary = rawText.replace(/^\[details\]\s*/i, '') || '点击展开';
+              } else {
+                blockquoteInnerBlocks.push({ type: 'paragraph', text: rt });
+              }
+            }
           }
           j++;
+        }
+
+        if (isDetails) {
+          blocks.push({
+            type: 'details',
+            summary: detailsSummary,
+            blocks: blockquoteInnerBlocks.length > 0 ? blockquoteInnerBlocks : [{ type: 'paragraph', text: ' ' }],
+          });
+        } else {
+          blocks.push({
+            type: 'blockquote',
+            blocks: blockquoteInnerBlocks,
+          });
         }
         i = j;
         break;
@@ -2010,6 +2116,7 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
     blocks.push({ type: 'paragraph', text: markdown.trim() });
   }
 
+  mathPlaceholderStore = [];
   return blocks;
 }
 
@@ -2030,19 +2137,70 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
 export function markdownToRichBlocksDelta(
   alreadyConverted: string,
   full: string,
+  opts?: { dropIncompleteTail?: boolean },
 ): RichBlock[] {
+  const dropIncompleteTail = opts?.dropIncompleteTail ?? true;
   if (!full || full.length <= alreadyConverted.length) return [];
   if (alreadyConverted.length === 0) {
-    return markdownToRichBlocks(full);
+    // FIRST convert: only emit COMPLETE lines. If the last line of `full` is
+    // still being streamed (no trailing newline yet — e.g. a long heading like
+    // "# 🌐5.多云与容器化开发协同（Tanzu融合）**面向开发者的现代" split across
+    // chunks), emitting it now would render a half-finished heading that then
+    // appears AGAIN once the line completes — a duplicate / garbled title.
+    // Drop the trailing incomplete line and wait for it to finish first.
+    const lastNl = full.lastIndexOf('\n');
+    if (lastNl < 0) return [];
+    return markdownToRichBlocks(full.slice(0, lastNl));
   }
-  // Find a safe cut in the overlap (the last blank line before the end of the
-  // already-converted portion) so we re-convert from a block boundary.
+  // Find a safe cut in the overlap so we re-convert from a block boundary.
+  // Prefer the last BLANK line (\n\n) — that is a true paragraph boundary.
+  // If none exists (e.g. the cut fell inside a single-line heading like
+  // "# 历届世界杯冠军全景解析"), fall back to the last single newline so we
+  // restart at a LINE boundary instead of mid-line. Restarting mid-line would
+  // lose the heading marker and split the title across two blocks.
   const overlap = full.slice(0, alreadyConverted.length);
-  const cut = overlap.lastIndexOf('\n\n');
-  const safe = cut < 0 ? alreadyConverted.length : cut;
-  const delta = full.slice(safe).replace(/^\n+/, '');
+  let cut = overlap.lastIndexOf('\n\n');
+  let safe: number;
+  let dropFirstLine = false;
+  if (cut < 0) {
+    cut = overlap.lastIndexOf('\n');
+    if (cut < 0) {
+      // No newline at all: the entire already-converted text is one partial
+      // line (e.g. "# 历届世界杯冠军全"). Restart from the very beginning and
+      // drop the first line of the re-parse, which is exactly this partial line.
+      safe = 0;
+      dropFirstLine = true;
+    } else {
+      safe = cut;
+      dropFirstLine = true; // the line up to `cut` was already converted/sent
+    }
+  } else {
+    safe = cut;
+  }
+  let delta = full.slice(safe).replace(/^\n+/, '');
+  if (dropFirstLine) {
+    // Drop the first line of the delta: it is the already-sent tail of the
+    // previous line, not genuinely new content.
+    const nl = delta.indexOf('\n');
+    delta = nl < 0 ? '' : delta.slice(nl + 1);
+  }
   if (!delta.trim()) return [];
-  return markdownToRichBlocks(delta);
+  const blocks = markdownToRichBlocks(delta);
+  // Drop a trailing SINGLE-LINE block (heading / paragraph) that is still on
+  // an INCOMPLETE source line: when `full` does NOT end with a newline,
+  // its last line is still being streamed, so emitting that half-done
+  // heading/paragraph now would re-appear once the line completes — the
+  // duplicate-title bug (e.g. "## 核心要素" emitted early, then
+  // "## 核心要素对比" again). Multi-line structures (list / table) are
+  // KEPT so already-finished items/rows are not lost mid-stream.
+  if (dropIncompleteTail) {
+    const last = blocks[blocks.length - 1];
+    if (full.length > 0 && full[full.length - 1] !== '\n' && last &&
+        (last.type === 'heading' || last.type === 'paragraph')) {
+      blocks.pop();
+    }
+  }
+  return blocks;
 }
 
 /**

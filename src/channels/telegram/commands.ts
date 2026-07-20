@@ -7,7 +7,8 @@
 import type { Bot, Context } from 'grammy';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import * as fs from 'node:fs/promises';
+import * as fs from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 function getDisplayString(model: string): string {
   const displayNames: Record<string, string> = {
     'gemini-1.5-pro': 'Gemini 1.5 Pro',
@@ -25,7 +26,7 @@ function getDisplayString(model: string): string {
   return displayNames[model] || model;
 }
 import type { SessionManager } from '../../core/session.js';
-import type { SessionOptions } from '../../core/types.js';
+import type { SessionOptions, DaemonSession } from '../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../core/resume.js';
 import { logger } from '../../utils/logger.js';
 import { messageCache } from '../../utils/messageCache.js';
@@ -56,6 +57,7 @@ export function registerCommands(
   bot: Bot,
   sessionManager: SessionManager,
   defaultOptions: SessionOptions,
+  triggerAutopilot?: (session: DaemonSession, ctx: Context) => Promise<void>,
 ): void {
   
   // ── Start Command ──
@@ -163,13 +165,18 @@ export function registerCommands(
           return;
         }
 
-        const sessionItems = sessions.slice(-10).map((s) => ({
-          id: s.index.toString(),
+        const sessionItems = sessions.slice(0, 10).map((s) => ({
+          id: s.id,
           title: s.title,
           index: s.index,
+          relativeTime: s.relativeTime,
         }));
 
-        await ctx.reply(`${ICONS.resume} <b>Restore Session</b>\n\nChoose a previous session to resume:`, {
+        const sessionListText = sessionItems.map((s) => 
+          `<b>${s.index}.</b> ${escapeHtml(s.title)}\n  └ <i>${s.relativeTime} · <code>${s.id.slice(0, 8)}</code></i>`
+        ).join('\n\n');
+
+        await ctx.reply(`${ICONS.resume} <b>Restore Session</b>\n\n${sessionListText}\n\n<i>Send <code>/resume &lt;index&gt;</code> to switch, or tap a button below:</i>`, {
           parse_mode: 'HTML',
           reply_markup: buildResumeKeyboard(sessionItems),
         });
@@ -240,30 +247,7 @@ export function registerCommands(
     }
   });
 
-  // ── Compact ──
-  bot.command('compact', async (ctx: Context) => {
-    const chatId = ctx.chat?.id;
-    if (!chatId) return;
 
-    const session = sessionManager.getSession(chatId);
-    if (!session) {
-      await ctx.reply(`${ICONS.warning} <b>No active session.</b>`);
-      return;
-    }
-
-    try {
-      await session.geminiClient.tryCompressChat(
-        `daemon-${session.sessionId}`,
-        true,
-      );
-      await ctx.reply(`${ICONS.compact} <b>Context Optimized</b>\n\nI've summarized the conversation to save tokens and maintain focus.`, {
-        reply_markup: buildMainKeyboard(),
-      });
-    } catch (e) {
-      logger.error(`Error compacting chat for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} <b>Optimization failed.</b>`);
-    }
-  });
 
   // ── Status ──
   bot.command('status', async (ctx: Context) => {
@@ -477,48 +461,43 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
     if (!chatId) return;
 
     const replyToMessage = ctx.message?.reply_to_message;
-    if (!replyToMessage) {
-      await ctx.reply(`${ICONS.warning} <b>Please reply to a message you want to save.</b>`, { parse_mode: 'HTML' });
-      return;
-    }
+    let answerMarkdown = '';
+    let thinkingMarkdown = '';
+    let title = '';
 
     try {
-      let answerMarkdown = '';
-      let thinkingMarkdown = '';
-      let title = '';
-
-      // ReplyContext is the primary and direct source of truth
-      const replyContext: ReplyContext | null = messageCache.getReplyContext(replyToMessage.message_id);
-      if (replyContext) {
-        answerMarkdown = replyContext.answerMarkdown;
-        thinkingMarkdown = replyContext.thinkingMarkdown;
-        title = replyContext.title || extractTitleFromMarkdown(answerMarkdown);
+      if (replyToMessage) {
+        // Option A: Save specific replied message
+        const replyContext: ReplyContext | null = messageCache.getReplyContext(replyToMessage.message_id);
+        if (replyContext) {
+          answerMarkdown = replyContext.answerMarkdown;
+          thinkingMarkdown = replyContext.thinkingMarkdown;
+          title = replyContext.title || extractTitleFromMarkdown(answerMarkdown);
+        } else {
+          let textToSave = messageCache.get(replyToMessage.message_id) || replyToMessage.text || '';
+          if (textToSave.startsWith('___RAW_HTML___')) {
+            textToSave = textToSave.substring('___RAW_HTML___'.length);
+          }
+          if (/<[a-z][\s\S]*>/i.test(textToSave)) {
+            textToSave = htmlToMarkdown(textToSave);
+          }
+          const parsed = extractThoughtAndContent(textToSave);
+          answerMarkdown = parsed.content;
+          thinkingMarkdown = parsed.thought;
+          title = extractTitleFromMarkdown(answerMarkdown);
+        }
       } else {
-        // Fallback for older messages / messages saved before restart
-        let textToSave = messageCache.get(replyToMessage.message_id);
-        if (!textToSave) {
-          textToSave = replyToMessage.text || '';
+        // Option B: Auto-save latest AI response in session
+        const lastContext = messageCache.getLastReplyContext();
+        if (lastContext) {
+          answerMarkdown = lastContext.answerMarkdown;
+          thinkingMarkdown = lastContext.thinkingMarkdown;
+          title = lastContext.title || extractTitleFromMarkdown(answerMarkdown);
         }
-        if (!textToSave.trim()) {
-          await ctx.reply(`${ICONS.warning} <b>The replied message has no content to save.</b>`, { parse_mode: 'HTML' });
-          return;
-        }
-
-        if (textToSave.startsWith('___RAW_HTML___')) {
-          textToSave = textToSave.substring('___RAW_HTML___'.length);
-        }
-        if (/<[a-z][\s\S]*>/i.test(textToSave)) {
-          textToSave = htmlToMarkdown(textToSave);
-        }
-
-        const parsed = extractThoughtAndContent(textToSave);
-        answerMarkdown = parsed.content;
-        thinkingMarkdown = parsed.thought;
-        title = extractTitleFromMarkdown(answerMarkdown);
       }
 
       if (!answerMarkdown.trim() && !thinkingMarkdown.trim()) {
-        await ctx.reply(`${ICONS.warning} <b>The replied message has no content to save.</b>`, { parse_mode: 'HTML' });
+        await ctx.reply(`${ICONS.warning} <b>No content found to save.</b>\n\nReply to a message with /save or generate an AI response first.`, { parse_mode: 'HTML' });
         return;
       }
 
@@ -563,10 +542,10 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
       const filePath = path.join(folderPath, fileName);
 
       // Ensure directory exists
-      await fs.mkdir(folderPath, { recursive: true });
+      await fsPromises.mkdir(folderPath, { recursive: true });
 
       // Save content
-      await fs.writeFile(filePath, reassembledMarkdown, 'utf8');
+      await fsPromises.writeFile(filePath, reassembledMarkdown, 'utf8');
 
       await ctx.reply(`${ICONS.success} <b>Saved to Notebook</b>\n\nSaved successfully to:\n<code>${escapeHtml(filePath)}</code>`, {
         parse_mode: 'HTML',
@@ -624,12 +603,12 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
       const isActive = session.sessionId === target.id;
 
       // Delete files
-      await fs.unlink(sessionFilePath);
+      await fsPromises.unlink(sessionFilePath);
 
       const logsDir = path.join(session.config.storage.getProjectTempDir(), 'logs');
       const logPath = path.join(logsDir, `session-${target.id}.jsonl`);
       try {
-        await fs.unlink(logPath);
+        await fsPromises.unlink(logPath);
       } catch {
         // Ignore if file doesn't exist
       }
@@ -847,7 +826,7 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
     // Start autopilot
     if (!arg) {
       await ctx.reply(
-        `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until done (max 10 iterations)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately\n\n<b>Best for:</b> Refactoring, writing tests, fixing bugs, and research.`,
+        `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until goal achieved (Timeout: 30 mins)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately\n\n<b>Best for:</b> Refactoring, writing tests, fixing bugs, and research.`,
         {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
@@ -858,25 +837,28 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
 
     const session = await sessionManager.getOrCreate(chatId, defaultOptions);
 
-    // Set autopilot config
+    // Set autopilot config (unlimited iterations, 30 min timeout)
     session.autopilot = {
       goal: arg,
-      maxIterations: 10,
+      maxIterations: Infinity,
       currentIteration: 0,
       active: true,
       stopKeywords: ['AUTOPILOT_COMPLETE', 'AUTOPILOT_STOP'],
+      startTime: Date.now(),
+      timeoutMs: 30 * 60 * 1000, // 30 minutes
     };
 
     await ctx.reply(
-      `${ICONS.bot} <b>Autopilot Initialized</b>\n\n${ICONS.thinking} <b>Goal:</b> <i>${arg}</i>\n${ICONS.arrow} <b>Limit:</b> 10 iterations\n\n${ICONS.loading} <i>Working on the first step...</i>`,
+      `${ICONS.bot} <b>Autopilot Initialized</b>\n\n${ICONS.thinking} <b>Goal:</b> <i>${escapeHtml(arg)}</i>\n${ICONS.clock} <b>Timeout:</b> 30 minutes (Unlimited steps)\n\n${ICONS.loading} <i>Working on the first step...</i>`,
       {
         parse_mode: 'HTML',
       },
     );
 
-    // Trigger the first message to start the loop
-    // The user's goal becomes the first prompt
-    // Autopilot will handle subsequent iterations
+    // Auto-ignite the loop immediately!
+    if (triggerAutopilot) {
+      triggerAutopilot(session, ctx).catch(e => logger.error(`Autopilot auto-trigger failed: ${e}`));
+    }
   });
 
   // ── Projects ──
@@ -1002,6 +984,9 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
 
   // ── Callback Query Handler ──
   bot.on('callback_query:data', async (ctx) => {
+    // Answer immediately to dismiss Telegram UI loading state
+    ctx.answerCallbackQuery().catch(() => {});
+
     const data = ctx.callbackQuery.data;
     const chatId = ctx.chat?.id;
     
@@ -1089,12 +1074,64 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
       return;
     }
 
-    if (data === '/resume') {
-      ctx.answerCallbackQuery('Loading sessions...').catch(e => logger.error(`Failed callback: ${e}`));
+    if (data === '/save') {
+      ctx.answerCallbackQuery('Saving latest response...').catch(e => logger.error(`Failed callback: ${e}`));
+      const lastContext = messageCache.getLastReplyContext();
+      if (!lastContext || (!lastContext.answerMarkdown.trim() && !lastContext.thinkingMarkdown.trim())) {
+        await ctx.reply(`${ICONS.warning} <b>No AI response found to save.</b>\n\nGenerate a response first or reply to a message with <code>/save</code>.`, { parse_mode: 'HTML' });
+        return;
+      }
+      try {
+        const answerMarkdown = lastContext.answerMarkdown;
+        const thinkingMarkdown = lastContext.thinkingMarkdown;
+        const title = lastContext.title || extractTitleFromMarkdown(answerMarkdown);
+        let reassembledMarkdown = '';
+        if (title) reassembledMarkdown += `# ${title}\n\n`;
+        if (thinkingMarkdown && thinkingMarkdown.trim()) {
+          reassembledMarkdown += `<details>\n<summary>Thinking Process</summary>\n\n${thinkingMarkdown.trim()}\n\n</details>\n\n`;
+        }
+        reassembledMarkdown += answerMarkdown;
+
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const sanitizeTitle = (title || 'untitled').replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, '_').substring(0, 30);
+        const filename = `${dateStr}_${sanitizeTitle}.md`;
+        const homeDir = process.env['HOME'] || '/root';
+        const inboxDir = `${homeDir}/Documents/Obsidian/Inbox`;
+        if (!fs.existsSync(inboxDir)) {
+          fs.mkdirSync(inboxDir, { recursive: true });
+        }
+        const filePath = `${inboxDir}/${filename}`;
+        fs.writeFileSync(filePath, reassembledMarkdown, 'utf8');
+
+        await ctx.reply(`${ICONS.save} <b>Saved Latest Response</b>\n\nFile: <code>${escapeHtml(filename)}</code>`, { parse_mode: 'HTML' });
+      } catch (e) {
+        logger.error(`Error saving message via callback: ${e}`);
+        await ctx.reply(`${ICONS.error} <b>Failed to save:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
+      }
+      return;
+    }
+
+    if (data === '/resume' || data.startsWith('/resume ')) {
+      ctx.answerCallbackQuery('Loading session...').catch(e => logger.error(`Failed callback: ${e}`));
       let session;
       try {
         session = await sessionManager.getOrCreate(chatId, defaultOptions);
       } catch {
+        return;
+      }
+
+      if (data.startsWith('/resume ')) {
+        const targetIdx = data.replace('/resume ', '').trim();
+        try {
+          const resultMsg = await resumeSession(session, targetIdx);
+          await ctx.reply(`${ICONS.success} <b>Session Switched Successfully</b>\n\n${escapeHtml(resultMsg)}`, {
+            parse_mode: 'HTML',
+            reply_markup: buildMainKeyboard(),
+          });
+        } catch (e) {
+          logger.error(`Failed to resume session: ${e}`);
+          await ctx.reply(`${ICONS.error} <b>Failed to Switch Session:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
+        }
         return;
       }
 
@@ -1108,14 +1145,19 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
           return;
         }
 
-        const sessionItems = sessions.slice(-10).map((s) => ({
-          id: s.index.toString(),
+        const sessionItems = sessions.slice(0, 10).map((s) => ({
+          id: s.id,
           title: s.title,
           index: s.index,
+          relativeTime: s.relativeTime,
         }));
 
+        const sessionListText = sessionItems.map((s) => 
+          `<b>${s.index}.</b> ${escapeHtml(s.title)}\n  └ <i>${s.relativeTime} · <code>${s.id.slice(0, 8)}</code></i>`
+        ).join('\n\n');
+
         await ctx.editMessageText(
-          `${ICONS.resume} <b>Restore Session</b>\n\nChoose a previous session to resume:`,
+          `${ICONS.resume} <b>Restore Session</b>\n\n${sessionListText}\n\n<i>Send <code>/resume &lt;index&gt;</code> to switch, or tap a button below:</i>`,
           {
             parse_mode: 'HTML',
             reply_markup: buildResumeKeyboard(sessionItems),
@@ -1292,7 +1334,7 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
     if (data === '/autopilot') {
       ctx.answerCallbackQuery('Autopilot Mode').catch(e => logger.error(`Failed callback: ${e}`));
       await ctx.editMessageText(
-        `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until done (max 10 iterations)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately`,
+        `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until goal achieved (Timeout: 30 mins)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately`,
         {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),

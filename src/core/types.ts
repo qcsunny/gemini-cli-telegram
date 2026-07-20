@@ -94,6 +94,10 @@ export interface AutopilotConfig {
   active: boolean;
   /** Stop keywords that should end autopilot */
   stopKeywords: string[];
+  /** Timestamp when autopilot started (ms) */
+  startTime?: number;
+  /** Maximum execution time allowed (ms) */
+  timeoutMs?: number;
 }
 
 /**

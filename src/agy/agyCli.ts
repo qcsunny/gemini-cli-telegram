@@ -1138,6 +1138,7 @@ function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefine
   return undefined;
 }
 
+// agy(本地 antigravity cli)模型保持原展示顺序;Web2API Gemini 与 DeepSeek 按能力 强→弱 排列。
 export const AVAILABLE_MODELS = [
   'Gemini 3.5 Flash (Medium)',
   'Gemini 3.5 Flash (High)',
@@ -1147,18 +1148,19 @@ export const AVAILABLE_MODELS = [
   'Claude Sonnet 4.6 (Thinking)',
   'Claude Opus 4.6 (Thinking)',
   'GPT-OSS 120B (Medium)',
-  'Web2API: Gemini 3.5 Flash',
-  'Web2API: Gemini 3.5 Flash Thinking',
-  'Web2API: Gemini 3.5 Flash Thinking Lite',
+  // 代理模型(web2api Gemini + DeepSeek)按指定顺序:
   'Web2API: Gemini 3.1 Pro',
+  'Web2API: Gemini 3.5 Flash Thinking',
+  'DeepSeek: Pro Thinking',
+  'Web2API: Gemini 3.5 Flash',
+  'DeepSeek: Pro',
+  'DeepSeek: Flash Thinking Search',
+  'DeepSeek: Flash Thinking',
+  'Web2API: Gemini 3.5 Flash Thinking Lite',
+  'DeepSeek: Flash Search',
+  'DeepSeek: Flash',
   'Web2API: Gemini Flash Lite',
   'Web2API: Gemini Auto',
-  'DeepSeek: Flash',
-  'DeepSeek: Flash Thinking',
-  'DeepSeek: Flash Search',
-  'DeepSeek: Flash Thinking Search',
-  'DeepSeek: Pro',
-  'DeepSeek: Pro Thinking',
 ];
 
 export async function getAvailableModels(): Promise<string[]> {

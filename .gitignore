@@ -22,7 +22,7 @@ run_tests.sh
 scripts/cleanup_sessions.sh
 scripts/mirror_response.sh
 experts/
-.antigravity.md
+AGENTS.md
 .superpowers/
 docs/superpowers/
 .agents/

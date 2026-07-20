@@ -68,6 +68,16 @@ export class MessageCache {
     return entry.replyContext || null;
   }
 
+  getLastReplyContext(): ReplyContext | null {
+    let latest: { timestamp: number; context: ReplyContext } | null = null;
+    for (const entry of this.cache.values()) {
+      if (entry.replyContext && (!latest || entry.timestamp > latest.timestamp)) {
+        latest = { timestamp: entry.timestamp, context: entry.replyContext };
+      }
+    }
+    return latest ? latest.context : null;
+  }
+
   private cleanup(): void {
     const now = Date.now();
     for (const [key, entry] of this.cache.entries()) {

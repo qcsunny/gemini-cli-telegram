@@ -105,14 +105,16 @@ describe('processMessage', () => {
     expect(setConversation).toHaveBeenCalledWith(123456, 'updated-conv-id', '/test/project/path', 'test-model');
   });
 
-  it('should automatically fallback to a lower model when rate limit (429) is hit', async () => {
+  it('should retry the same model 3x then downgrade to a lower model when rate limit (429) is hit', async () => {
     mockSession.model = 'Gemini 3.1 Pro (High)';
     const input: MultimodalInput = { text: 'hello fallback' };
 
     let callCount = 0;
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       callCount++;
-      if (callCount === 1) {
+      if (callCount <= 3) {
+        // First 3 attempts on the ORIGINAL model fail (rate limit); the
+        // retry policy retries the same model up to 3 times before downgrading.
         return {
           output: '',
           stderr: 'Error: Resource exhausted (429) - Quota limit reached.',
@@ -120,6 +122,7 @@ describe('processMessage', () => {
           exitCode: 1,
         };
       } else {
+        // 4th call is on the fallback model and succeeds.
         if (options.onEvent) {
           options.onEvent({ type: 'text', content: 'Hi fallback!' });
           options.onEvent({ type: 'done' });
@@ -134,26 +137,26 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // Should have called runAgyPrint twice
-    expect(runAgyPrint).toHaveBeenCalledTimes(2);
+    // 3 failed attempts on the original model + 1 success on the fallback = 4 calls.
+    expect(runAgyPrint).toHaveBeenCalledTimes(4);
 
-    // First call uses original model
+    // First three calls use the original model.
     expect(runAgyPrint).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({
-        model: 'Gemini 3.1 Pro (High)',
-      })
+      expect.objectContaining({ model: 'Gemini 3.1 Pro (High)' })
     );
-
-    // Second call uses fallback model
     expect(runAgyPrint).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        model: 'Gemini 3.5 Flash (High)',
-      })
+      3,
+      expect.objectContaining({ model: 'Gemini 3.1 Pro (High)' })
     );
 
-    // Warning should have been sent to channel
+    // Fourth call uses the fallback model.
+    expect(runAgyPrint).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({ model: 'Gemini 3.5 Flash (High)' })
+    );
+
+    // Warning should have been sent to channel (original + fallback models).
     expect(mockReply.send).toHaveBeenCalledWith(
       expect.stringContaining('Gemini 3.1 Pro (High)')
     );
@@ -172,6 +175,39 @@ describe('processMessage', () => {
       '/test/project/path',
       'Gemini 3.5 Flash (High)'
     );
+  });
+
+  it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
+    // Chain from Web2API: Gemini Flash Lite is exactly 2 long:
+    //   [Web2API: Gemini Flash Lite, Web2API: Gemini Auto]
+    // Each model is retried 3x, then downgraded. When the LAST model
+    // (Web2API: Gemini Auto) also fails its 3 retries, the session must
+    // terminate — it must NOT wrap back to the first model for a 2nd pass.
+    mockSession.model = 'Web2API: Gemini Flash Lite';
+    const input: MultimodalInput = { text: 'hello full loop' };
+
+    vi.mocked(runAgyPrint).mockResolvedValue({
+      output: '',
+      stderr: 'Error: Resource exhausted (429) - Quota limit reached.',
+      conversationId: 'test-conv-id',
+      exitCode: 1,
+    });
+
+    await processMessage(mockSession, input, mockReply, mockFormatter);
+
+    // chain.length (2) * RETRIES_PER_MODEL (3) = 6 total attempts, one loop.
+    expect(runAgyPrint).toHaveBeenCalledTimes(6);
+    // First 3 attempts: original model.
+    expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
+    // Next 3 attempts: downgraded last model.
+    expect(runAgyPrint).toHaveBeenNthCalledWith(4, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(6, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
+    // NO 7th call: the loop did NOT wrap back to the first model.
+    // Session model is unchanged (it never succeeded).
+    expect(mockSession.model).toBe('Web2API: Gemini Flash Lite');
+    // An error/termination message must have been surfaced to the channel.
+    expect(mockReply.send).toHaveBeenCalled();
   });
 
   it('should format multimodal input into the prompt', async () => {
