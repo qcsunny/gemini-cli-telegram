@@ -347,6 +347,47 @@ describe('processMessage', () => {
     );
   });
 
+  it('should NOT drop the trailing paragraph when the stream ends without a trailing newline (rich path)', async () => {
+    const input: MultimodalInput = { text: 'test' };
+
+    // Build a 3-paragraph answer whose FINAL paragraph has NO trailing newline.
+    const full =
+      '第一段内容。\n\n第二段内容。\n\n第三段（末尾没有换行，易被吞掉）';
+
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      if (options.onEvent) {
+        options.onEvent({ type: 'text', content: full.slice(0, 18) });
+        options.onEvent({ type: 'text', content: full.slice(18, 30) });
+        options.onEvent({ type: 'text', content: full.slice(30) }); // ends mid-last-paragraph, no \n
+        options.onEvent({ type: 'done' });
+      }
+      return { output: full, conversationId: 'conv-rich', exitCode: 0 };
+    });
+
+    // Rich path requires the rich primitives on the reply object.
+    const richReply = {
+      ...mockReply,
+      sendRichDraftBlocks: vi.fn().mockResolvedValue(789),
+      editRichBlocks: vi.fn().mockResolvedValue(789),
+      sendRich: vi.fn().mockResolvedValue(790),
+    };
+
+    await processMessage(mockSession, input, richReply, mockFormatter);
+
+    expect(richReply.sendRichDraftBlocks).toHaveBeenCalled();
+    expect(richReply.editRichBlocks).toHaveBeenCalled();
+    const finalBlocks = richReply.editRichBlocks.mock.calls[0][1] as any[];
+    const flatten = (bs: any[]): string =>
+      bs
+        .map((b) => (Array.isArray(b.text) ? b.text.join('') : b.text || ''))
+        .join('');
+    const rendered = flatten(finalBlocks);
+    expect(rendered).toContain('第一段内容。');
+    expect(rendered).toContain('第二段内容。');
+    // The regression: the trailing paragraph must NOT be silently dropped.
+    expect(rendered).toContain('第三段（末尾没有换行，易被吞掉）');
+  });
+
   it('should NOT split on ---split--- delimiters (single message only)', async () => {
     const input: MultimodalInput = { text: 'split test' };
 

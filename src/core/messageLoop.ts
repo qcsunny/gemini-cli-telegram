@@ -433,7 +433,15 @@ export async function processMessage(
         }
 
         // phase === 'body' (or footer): append new body blocks before footer.
-        const delta = markdownToRichBlocksDelta(convertedBodyLen === 0 ? '' : answerBuffer.slice(0, convertedBodyLen), answerBuffer);
+        // On the FINAL tick (isFinal) we must NOT drop the trailing block even
+        // if `answerBuffer` lacks a trailing newline — otherwise the last
+        // paragraph/heading is silently lost (the final completion pass can't
+        // recover it because `convertedBodyLen` already equals the full length).
+        const delta = markdownToRichBlocksDelta(
+          convertedBodyLen === 0 ? '' : answerBuffer.slice(0, convertedBodyLen),
+          answerBuffer,
+          { dropIncompleteTail: !isFinal },
+        );
         if (delta.length > 0) {
           // Merge a leading paragraph in `delta` into the previous trailing
           // paragraph block when the stream was cut mid-paragraph (no blank
@@ -735,22 +743,21 @@ export async function processMessage(
         }
       }
 
-      // (b) Convert any leftover body markdown (the delta not yet streamed).
+      // (b) Rebuild the body from the COMPLETE answerBuffer. We deliberately
+      // re-parse the whole body here instead of trusting the append-only
+      // streaming deltas. The per-tick deltas use `dropIncompleteTail: true`
+      // and only PUSH new blocks, so any block the streaming pass dropped —
+      // most notably a trailing paragraph/heading when the stream ended
+      // without a trailing newline, or a paragraph wrongly merged into its
+      // predecessor mid-stream — would otherwise be permanently missing from
+      // the final message. Rebuilding from the full buffer guarantees the
+      // final content is complete and correctly structured. (The non-streaming
+      // path already uses exactly this `markdownToRichBlocks` call.)
       if (answerBuffer.trim()) {
-        // When no streaming occurred at all (convertedBodyLen===0), parse the full
-        // answerBuffer in one shot with markdownToRichBlocks to avoid the delta
-        // overlap-split logic which would re-parse already-converted rows and produce
-        // duplicate table rows / list items.
-        const remaining = convertedBodyLen === 0
-          ? markdownToRichBlocks(answerBuffer)
-          // This is the FINAL completion pass on the whole answer: never drop
-          // the trailing block, even if `answerBuffer` has no trailing newline.
-          : markdownToRichBlocksDelta(answerBuffer.slice(0, convertedBodyLen), answerBuffer, { dropIncompleteTail: false });
-        if (remaining.length > 0) {
-          if (footerBlockIndex >= 0) blocks.splice(footerBlockIndex, 0, ...remaining);
-          else blocks.push(...remaining);
-          convertedBodyLen = answerBuffer.length;
-        }
+        const bodyBlocks = markdownToRichBlocks(answerBuffer);
+        const bodyStart = thinkingBlockIndex >= 0 ? thinkingBlockIndex + 1 : 0;
+        blocks.splice(bodyStart, blocks.length - bodyStart, ...bodyBlocks);
+        convertedBodyLen = answerBuffer.length;
       }
 
       // (b2) Post-body cleanup: strip any blockquote blocks introduced in (b),
