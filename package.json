@@ -1,10 +1,10 @@
 {
   "name": "gemini-cli-telegram",
-  "version": "0.2.2",
+  "version": "1.0.0",
   "description": "Connect Gemini CLI to Telegram",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ibidathoillah/gemini-cli-telegram.git"
+    "url": "git+https://github.com/qcsunny/gemini-cli-telegram.git"
   },
   "license": "Apache-2.0",
   "type": "module",
