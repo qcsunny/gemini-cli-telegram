@@ -136,9 +136,8 @@ export interface DaemonSession {
   sendMedia?: SendMediaFn;
   /** Autopilot / self-reply until configuration */
   autopilot?: AutopilotConfig;
-  /** Compatibility fields for config and geminiClient */
+  /** Compatibility field for config */
   config?: any;
-  geminiClient?: any;
   /** PID of the currently running agy child process (set by agyCli onSpawn, cleared on close). */
   childPid?: number;
   /** Timestamp (ms) when session.busy was set to true — used by health check for stuck detection. */

@@ -422,16 +422,6 @@ export class SessionManager {
         storage: {
           getProjectTempDir: () => path.join(os.tmpdir(), 'gemini-cli-telegram'),
         }
-      },
-      geminiClient: {
-        getHistory: () => [],
-        setHistory: (history: any[]) => {
-          logger.info(`[Session compatibility] setHistory called with ${history.length} items`);
-        },
-        getChatRecordingService: () => null,
-        tryCompressChat: async (sessId: string, force: boolean) => {
-          logger.info(`[Session compatibility] tryCompressChat called: ${sessId}, force=${force}`);
-        }
       }
     };
 
