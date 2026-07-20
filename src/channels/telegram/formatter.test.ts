@@ -125,6 +125,18 @@ Thanks for reading! 🚀
     expect(blocks.length).toBeGreaterThan(0);
   });
 
+  it('should preserve text preceding inline LaTeX formula in correct order', () => {
+    const blocks = markdownToRichBlocks('Prefix text: \\( x + 1 = 2 \\) suffix text');
+    expect(blocks).toHaveLength(1);
+    const para = blocks[0] as any;
+    expect(para.type).toBe('paragraph');
+    expect(para.text).toEqual([
+      'Prefix text: ',
+      { type: 'mathematical_expression', expression: 'x + 1 = 2' },
+      ' suffix text',
+    ]);
+  });
+
   it('should format footers with standard Telegram tags', () => {
     const input = 'This is the main response.\n\n[footer: Gemini 3.5 Flash (Medium) | 120 | 250 | $0.000084]';
     const html = markdownToHtml(input);
