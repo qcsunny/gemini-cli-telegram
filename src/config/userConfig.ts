@@ -7,6 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import type { ProjectInfo } from '../core/types.js';
 
 export const CONFIG_DIR = path.join(os.homedir(), '.gemini-cli-telegram');
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
@@ -21,6 +22,9 @@ export interface UserConfig {
   notebookPath?: string;
   geminiApiKey?: string;
   deepseekApiKey?: string;
+  /** Solidified project list (id/name/path/description). Kept in the local,
+   *  gitignored config so personal directory paths never reach the remote repo. */
+  projects?: ProjectInfo[];
 }
 
 export function configExists(): boolean {
