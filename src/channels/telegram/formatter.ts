@@ -1769,7 +1769,10 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): Ric
     while ((m = mathRe.exec(s)) !== null) {
       if (m.index > last) textBuf.push(s.slice(last, m.index));
       const expr = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? '').trim();
-      if (expr) out.push({ type: 'mathematical_expression', expression: expr });
+      if (expr) {
+        flush();
+        out.push({ type: 'mathematical_expression', expression: expr });
+      }
       last = m.index + m[0].length;
     }
     if (last < s.length) textBuf.push(s.slice(last));
@@ -1789,7 +1792,10 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): Ric
       if (m.index > last) pushPlainInner(s.slice(last, m.index));
       const idx = Number(m[1]);
       const expr = (mathPlaceholderStore[idx] ?? '').trim();
-      if (expr) out.push({ type: 'mathematical_expression', expression: expr });
+      if (expr) {
+        flush();
+        out.push({ type: 'mathematical_expression', expression: expr });
+      }
       last = m.index + m[0].length;
     }
     if (last < s.length) pushPlainInner(s.slice(last));
