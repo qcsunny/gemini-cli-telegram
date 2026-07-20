@@ -13,6 +13,7 @@ import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd } from '../agy/conversationStore.js';
 import { clearWeb2ApiHistory, clearDeepSeekHistory } from '../agy/agyCli.js';
+import { loadUserConfig } from '../config/userConfig.js';
 
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
 
@@ -31,38 +32,10 @@ export class ProjectManager {
     await fs.mkdir(this.configDir, { recursive: true });
     await this.loadProjects();
 
-    const solidified = [
-      {
-        id: "c0723167-918e-4a7b-bf0a-53c876398dd4",
-        name: "通用知识专家",
-        path: "/home/user/Documents/通用知识专家",
-        description: "通用知识专家 - 2.1 基础版"
-      },
-      {
-        id: "d0723167-918e-4a7b-bf0a-53c876398dd4",
-        name: "通用知识专家_MarkdownV2",
-        path: "/home/user/Documents/通用知识专家_MarkdownV2",
-        description: "通用知识专家 - 2.1 MarkdownV2版"
-      },
-      {
-        id: "b0723167-918e-4a7b-bf0a-53c876398dd4",
-        name: "通用知识专家_RichText",
-        path: "/home/user/Documents/通用知识专家_RichText",
-        description: "通用知识专家 - 10.1 富文本渲染版"
-      },
-      {
-        id: "2a489922-6c17-420a-9612-f751a64facb8",
-        name: "基于第一性原理的多视角决策分析专家",
-        path: "/home/user/Documents/基于第一性原理的多视角决策分析专家",
-        description: "多视角决策分析专家 - 遵循第一性原理"
-      },
-      {
-        id: "24483651-746e-43a4-9790-a43fe337b378",
-        name: "Jack Notes",
-        path: "/mnt/pool/1000/jack",
-        description: "个人笔记库 - PARA 结构"
-      }
-    ];
+    // Solidified project list is loaded from the local, gitignored config.json
+    // so personal directory paths never reach the remote repository.
+    const cfg = loadUserConfig();
+    const solidified: ProjectInfo[] = (cfg?.projects ?? []) as ProjectInfo[];
 
     // Filter projects to only retain solidified ones (preserving their loaded fields like lastUsed)
     const filteredProjects: Map<string, ProjectInfo> = new Map();

@@ -29,3 +29,8 @@ docs/superpowers/
 patches/
 playground/
 scratch/
+
+# Local dev scripts + test fixtures: contain personal absolute paths and sample
+# chat/stream data; never publish to the remote repository.
+scripts/
+events_test.txt
