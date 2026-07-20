@@ -740,7 +740,8 @@ export async function processMessage(
           if (currentMessageId !== null && blocks.length > 0) {
             phase = 'footer';
             try {
-              await reply.editRichBlocks!(currentMessageId, blocks);
+              const realId = await reply.editRichBlocks!(currentMessageId, blocks);
+              if (typeof realId === 'number' && realId > 0) currentMessageId = realId;
               if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
             } catch (e) {
               logger.warn(`[messageLoop] Failed to commit final blocks, falling back to sendRich: ${e}`);

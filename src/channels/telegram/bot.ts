@@ -499,7 +499,7 @@ export function buildChannelReply(
     },
     editRichBlocks: async (messageId: number, blocks: unknown[]): Promise<number | void> => {
       try {
-        if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
+        if (activeDraftIds.has(messageId) || draftIds.get(chatId) === messageId) {
           const res: any = await (ctx.api.raw as any).sendRichMessage({
             chat_id: chatId,
             message_thread_id: messageThreadId,
@@ -540,10 +540,10 @@ export function buildChannelReply(
       // (not another sendRichMessageDraft, which would just refresh the preview
       // and leave the first message swallowed once the draft expires). The draft
       // bubble is abandoned and cleaned up by Telegram automatically.
-      if (activeDraftIds.has(messageId) || draftIds.has(chatId)) {
+      if (activeDraftIds.has(messageId) || draftIds.get(chatId) === messageId) {
         logger.info(`[FINALIZE] materializing draft into a real persisted message via sendRich (was draft messageId=${messageId})`);
         activeDraftIds.delete(messageId);
-        draftIds.delete(chatId);
+        if (draftIds.get(chatId) === messageId) draftIds.delete(chatId);
         const realId = await replyObj.sendRich!(originalText);
         logger.info(`[FINALIZE] sent real message id=${realId} for chat ${chatId}; first message preserved`);
         return realId;

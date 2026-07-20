@@ -445,7 +445,13 @@ function unescapeHtmlEntities(str: string): string {
 }
 
 function extractTitleFromMarkdown(answerMarkdown: string): string {
-  const lines = answerMarkdown.split('\n').map(l => l.trim()).filter(Boolean);
+  // Skip a leading YAML frontmatter block (--- ... ---) if present, so the
+  // title extraction doesn't pick up frontmatter delimiters or metadata.
+  let md = answerMarkdown;
+  const fmMatch = md.match(/^---\s*\n[\s\S]*?\n---\s*\n?/);
+  if (fmMatch) md = md.slice(fmMatch[0].length);
+
+  const lines = md.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length === 0) return '';
 
   // 1. Try first level-1 heading: ^#\s+(.+)$

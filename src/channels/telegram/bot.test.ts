@@ -302,11 +302,11 @@ describe('TelegramBot', () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
 
       // Simulate draft is active (this sets a draft ID in draftIds map for the chatId)
-      await reply.sendRichDraft!('some draft');
+      const draftId = await reply.sendRichDraft!('some draft');
       expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(1);
 
       // Now call editRich (simulating finalization edit)
-      const finalizedId = await reply.editRich!(9999, 'final text');
+      const finalizedId = await reply.editRich!(draftId, 'final text');
 
       // A streamed draft is an ephemeral preview that is NOT persisted by Telegram.
       // Finalization MUST materialize it into a real message via sendRichMessage

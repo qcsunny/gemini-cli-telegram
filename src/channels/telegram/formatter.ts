@@ -1853,7 +1853,10 @@ function tryHtmlBlockToRichBlock(
   const anchorMatch = content.match(/^<a\s+name="([^"]*)"\s*\/?>\s*<\/a>\s*$/i)
     ?? content.match(/^<a\s+name="([^"]*)"\s*>\s*<\/a>\s*$/i);
   if (anchorMatch) {
-    return { block: { type: 'anchor', name: anchorMatch[1] }, advance: 1 };
+    // Telegram's API server requires a `url` field on anchor blocks even though
+    // @grammyjs/types does not declare it; cast to include it so the payload is
+    // accepted (otherwise the whole message 400s and falls back to HTML).
+    return { block: { type: 'anchor', name: anchorMatch[1], url: '' } as RichBlock, advance: 1 };
   }
 
   // `<tg-math-block>...</tg-math-block>` → native math block.
