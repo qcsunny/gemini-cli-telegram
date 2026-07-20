@@ -435,11 +435,28 @@ export async function processMessage(
         // phase === 'body' (or footer): append new body blocks before footer.
         const delta = markdownToRichBlocksDelta(convertedBodyLen === 0 ? '' : answerBuffer.slice(0, convertedBodyLen), answerBuffer);
         if (delta.length > 0) {
-          if (footerBlockIndex >= 0) {
-            blocks.splice(footerBlockIndex, 0, ...delta);
-            footerBlockIndex += delta.length;
+          // Merge a leading paragraph in `delta` into the previous trailing
+          // paragraph block when the stream was cut mid-paragraph (no blank
+          // line between chunks). Without this, each streamed chunk becomes
+          // its own paragraph block and renders as a spurious line break —
+          // e.g. "这两个函数" / "虽然都能..." / "壤之别...".
+          const insertAt = footerBlockIndex >= 0 ? footerBlockIndex : blocks.length;
+          const prev = insertAt > 0 ? blocks[insertAt - 1] : undefined;
+          const firstDelta = delta[0] as any;
+          if (prev && (prev as any).type === 'paragraph' && firstDelta.type === 'paragraph') {
+            const prevText = (prev as any).text;
+            const prevArr = Array.isArray(prevText) ? prevText : [prevText];
+            const deltaArr = Array.isArray(firstDelta.text) ? firstDelta.text : [firstDelta.text];
+            (prev as any).text = [...prevArr, ...deltaArr];
+            blocks.splice(insertAt, 0, ...delta.slice(1));
+            if (footerBlockIndex >= 0) footerBlockIndex += delta.length - 1;
           } else {
-            blocks.push(...delta);
+            if (footerBlockIndex >= 0) {
+              blocks.splice(footerBlockIndex, 0, ...delta);
+              footerBlockIndex += delta.length;
+            } else {
+              blocks.push(...delta);
+            }
           }
           convertedBodyLen = answerBuffer.length;
           await flushBlocks();
