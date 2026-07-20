@@ -358,21 +358,7 @@ export class SessionManager {
     }
 
     if (!project && !savedCwd) {
-      let found = this.projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
-      if (!found) {
-        const hardcodedPath = '/home/user/Documents/通用知识专家_RichText';
-        try {
-          await fs.access(hardcodedPath);
-          found = await this.projectManager.addProject({
-            name: '通用知识专家_RichText',
-            path: hardcodedPath,
-            description: '通用知识专家 - 10.1 富文本渲染版',
-          });
-          logger.info(`[SessionManager] Discovered and added missing default project from physical path: ${hardcodedPath}`);
-        } catch {
-          // Ignore if directory does not exist or cannot be accessed
-        }
-      }
+      const found = this.projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
       if (found) {
         project = found;
         logger.info(`[SessionManager] Automatically set default project: 通用知识专家_RichText (${project.path})`);

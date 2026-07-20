@@ -1,6 +1,6 @@
 #!/bin/bash
-# Load .env if it exists
-if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
-fi
-exec node dist/cli.js start
+# Build (if needed) and (re)start the bot via systemd.
+set -e
+if [ ! -d dist ]; then npm run build; fi
+sudo systemctl restart gemini-telegram.service
+echo "Bot restarted. Logs: sudo journalctl -u gemini-telegram -f"

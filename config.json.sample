@@ -1,0 +1,17 @@
+{
+  "telegramBotToken": "YOUR_BOT_TOKEN",
+  "allowedUsers": [123456789],
+  "model": "Gemini 3.5 Flash (Medium)",
+  "proxy": "http://127.0.0.1:7890",
+  "notebookPath": "",
+  "geminiApiKey": "",
+  "deepseekApiKey": "",
+  "projects": [
+    {
+      "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "name": "示例项目",
+      "path": "/abs/path/to/your/project",
+      "description": "项目描述"
+    }
+  ]
+}
