@@ -65,14 +65,15 @@ export const ICONS = {
 export function buildMainKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text(`${ICONS.new} New`, '/new')
+    .text(`${ICONS.model} Model`, '/model')
+    .text(`${ICONS.stats} Status`, '/status')
+    .row()
+    .text(`${ICONS.save} Save`, '/save')
     .text(`${ICONS.resume} Resume`, '/resume')
     .text(`${ICONS.project} Projects`, '/projects')
     .row()
     .text(`${ICONS.clock} Schedule`, '/schedule')
     .text(`${ICONS.bot} Autopilot`, '/autopilot')
-    .row()
-    .text(`${ICONS.model} Model`, '/model')
-    .text(`${ICONS.stats} Status`, '/status')
     .text(`${ICONS.help} Help`, '/help');
 }
 
@@ -122,11 +123,49 @@ export function buildProjectKeyboard(projects: ProjectInfo[], hasMore = false, p
   return keyboard;
 }
 
-export function buildResumeKeyboard(sessions: Array<{ id: string; title: string; index: number }>): InlineKeyboard {
+function getVisualWidth(str: string): number {
+  let width = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if ((code >= 0x4e00 && code <= 0x9fa5) || (code >= 0xff00 && code <= 0xffef)) {
+      width += 2;
+    } else {
+      width += 1;
+    }
+  }
+  return width;
+}
+
+function truncateToWidth(str: string, maxWidth: number): string {
+  if (getVisualWidth(str) <= maxWidth) return str;
+  let currentWidth = 0;
+  let res = '';
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    const code = char.charCodeAt(0);
+    const charWidth = ((code >= 0x4e00 && code <= 0x9fa5) || (code >= 0xff00 && code <= 0xffef)) ? 2 : 1;
+    if (currentWidth + charWidth + 2 > maxWidth) {
+      return res + '…';
+    }
+    currentWidth += charWidth;
+    res += char;
+  }
+  return res + '…';
+}
+
+export function buildResumeKeyboard(sessions: Array<{ id: string; title: string; index: number; relativeTime?: string }>): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   
   for (const session of sessions) {
-    keyboard.text(`${ICONS.resume} ${session.title.substring(0, 35)}`, `/resume ${session.index}`).row();
+    const rawTitle = (session.title || session.id.slice(0, 8)).trim();
+    const timeTag = session.relativeTime ? ` (${session.relativeTime})` : '';
+    const prefix = `${session.index}. `;
+    
+    // Total visual width target = 38 (equivalent to 19 Chinese characters)
+    const availableWidthForTitle = 38 - getVisualWidth(prefix) - getVisualWidth(timeTag);
+    const cleanTitle = truncateToWidth(rawTitle, Math.max(10, availableWidthForTitle));
+
+    keyboard.text(`${prefix}${cleanTitle}${timeTag}`, `/resume ${session.index}`).row();
   }
   
   keyboard.text(`${ICONS.back} Main Menu`, '/start');
@@ -142,19 +181,20 @@ export function buildConfirmationKeyboard(action: string, data: string): InlineK
 // ── Message Formatting ──
 
 export function formatWelcome(userName?: string): string {
-  const greeting = userName ? `Welcome back, <b>${userName}</b>!` : 'Welcome!';
+  const greeting = userName ? `Welcome back, <b>${escapeHtml(userName)}</b>!` : 'Welcome!';
   return [
-    `${ICONS.sparkles} ${greeting}`,
+    `${ICONS.sparkles} <b>${greeting}</b>`,
     '',
-    `I am <b>Gemini CLI</b>, your expert coding assistant and workspace companion.`,
+    `I am <b>Gemini CLI</b>, your autonomous AI coding and workspace companion.`,
     '',
-    `<b>Available Capabilities:</b>`,
-    `${ICONS.code} <b>Coding</b> — Refactor, debug, and review code`,
-    `${ICONS.project} <b>Workspace</b> — Navigate and manage projects`,
-    `${ICONS.bot} <b>Autopilot</b> — Autonomous problem solving`,
-    `${ICONS.clock} <b>Automation</b> — Schedule recurring tasks`,
+    `<b>Core Capabilities & Features:</b>`,
+    `${ICONS.model} <b>Native 10.2 Streaming</b> — Collapsible thinking blocks & rich formatting`,
+    `${ICONS.code} <b>Deep Refactoring</b> — Code analysis, debugging & system architecture`,
+    `${ICONS.project} <b>Workspace Manager</b> — Effortless project & folder navigation`,
+    `${ICONS.save} <b>Obsidian Integration</b> — Save responses directly with /save`,
+    `${ICONS.clock} <b>Automated Tasks</b> — Schedule one-shot and recurring cron tasks`,
     '',
-    `${ICONS.arrow} <i>Send a message or use the menu below to start.</i>`,
+    `${ICONS.arrow} <i>Send a prompt to begin, or use the menu below:</i>`,
   ].join('\n');
 }
 
@@ -180,16 +220,16 @@ export function formatSessionStats(session: {
   const seconds = uptime % 60;
   
   return [
-    `${ICONS.stats} <b>Session Overview</b>`,
+    `${ICONS.stats} <b>Session Overview & Metrics</b>`,
     '',
     `<b>Configuration</b>`,
-    `  ${ICONS.model} <b>Model:</b> <code>${escapeHtml(session.model)}</code>`,
-    `  ${ICONS.project} <b>Project:</b> ${session.project ? `<code>${escapeHtml(session.project.name)}</code>` : 'None'}`,
+    `  ${ICONS.model} <b>Active Brain:</b> <code>${escapeHtml(session.model)}</code>`,
+    `  ${ICONS.project} <b>Workspace:</b> ${session.project ? `<code>${escapeHtml(session.project.name)}</code>` : 'None'}`,
     '',
-    `<b>Activity</b>`,
-    `  ${ICONS.session} <b>Session ID:</b> <code>${escapeHtml(session.sessionId.slice(0, 8))}</code>`,
+    `<b>Activity Metrics</b>`,
+    `  ${ICONS.session} <b>Session ID:</b> <code>${escapeHtml(session.sessionId.slice(0, 8))}...</code>`,
     `  ${ICONS.clock} <b>Uptime:</b> ${minutes}m ${seconds}s`,
-    `  ${ICONS.arrow} <b>Turns:</b> ${session.turnCount}`,
+    `  ${ICONS.arrow} <b>Conversation Turns:</b> ${session.turnCount}`,
     `  ${ICONS.bot} <b>Active Sessions:</b> ${session.activeSessions}`,
   ].join('\n');
 }
@@ -198,27 +238,26 @@ export function formatHelp(): string {
   return [
     `${ICONS.bot} <b>Gemini CLI Help Center</b>`,
     '',
-    '<b>Main Commands</b>',
-    `  /new — Start fresh session ${ICONS.new}`,
-    `  /resume — Pick up a session ${ICONS.resume}`,
-    `  /cancel — Stop AI thinking ${ICONS.cancel}`,
-    `  /projects — Manage workspaces ${ICONS.project}`,
+    '<b>Core Commands</b>',
+    `  /new — Start a fresh session ${ICONS.new}`,
+    `  /resume — Restore previous conversation ${ICONS.resume}`,
+    `  /cancel — Stop AI generation ${ICONS.cancel}`,
+    `  /save — Export response as Obsidian-compatible Markdown ${ICONS.save}`,
+    `  /projects — Switch & manage workspaces ${ICONS.project}`,
     '',
     '<b>Automation</b>',
-    `  /autopilot — Autonomous mode ${ICONS.bot}`,
-    `  /schedule — Recurring tasks ${ICONS.clock}`,
+    `  /autopilot — Autonomous problem solving ${ICONS.bot}`,
+    `  /schedule — Manage recurring & timed tasks ${ICONS.clock}`,
     '',
-    '<b>Tools & Settings</b>',
-    `  /model — Change AI brain ${ICONS.model}`,
-    `  /compact — Optimize context ${ICONS.compact}`,
-    `  /addfolder — Grant access ${ICONS.folder}`,
-    `  /status — Session metrics ${ICONS.stats}`,
-    `  /help — Show this guide ${ICONS.help}`,
+    '<b>Models & Settings</b>',
+    `  /model — Change AI model ${ICONS.model}`,
+    `  /status — View session metrics ${ICONS.stats}`,
+    `  /help — Show command reference ${ICONS.help}`,
     '',
-    '<b>Quick Tips</b>',
-    `• Paste code for instant review`,
-    `• Upload files for deep analysis`,
-    `• Talk to me like a peer programmer`,
+    '<b>Pro Tips</b>',
+    `• Supports Telegram 10.2 native collapsible thinking blocks`,
+    `• Paste code snippets or upload files for deep analysis`,
+    `• Use /new to clear conversation history and reset context`,
   ].join('\n');
 }
 

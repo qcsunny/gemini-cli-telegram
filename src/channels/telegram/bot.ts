@@ -28,6 +28,7 @@ import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
+const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = false): string {
   if (typeof originalText === 'string' && originalText.startsWith('___RAW_HTML___')) {
@@ -991,7 +992,17 @@ export class TelegramBot {
     };
 
     this.setupMiddleware(options.allowedUsers);
-    registerCommands(this.bot, this.sessionManager, this.defaultOptions);
+    registerCommands(
+      this.bot,
+      this.sessionManager,
+      this.defaultOptions,
+      async (session, ctx) => {
+        const chatId = ctx.chat?.id;
+        if (!chatId) return;
+        const parseMode = session.settings?.telegram?.parseMode || 'RichText';
+        await this.handleAutopilot(session, buildChannelReply(ctx, chatId, parseMode, session), ctx);
+      },
+    );
     this.setupMessageHandler();
     this.setupScheduler();
   }
@@ -1083,16 +1094,15 @@ export class TelegramBot {
     await this.bot.api.setMyCommands([
       { command: 'start', description: 'Start the bot with welcome menu' },
       { command: 'new', description: 'Start a fresh session' },
+      { command: 'model', description: 'Switch model (starts new session)' },
+      { command: 'status', description: 'Show session statistics' },
+      { command: 'save', description: 'Save formatted response to inbox' },
+      { command: 'resume', description: 'List or resume a previous session' },
       { command: 'cancel', description: 'Cancel current operation' },
       { command: 'projects', description: 'Browse and select projects' },
       { command: 'schedule', description: 'Schedule a message' },
       { command: 'autopilot', description: 'Auto-reply until goal achieved' },
-      { command: 'resume', description: 'List or resume a previous session' },
-      { command: 'save', description: 'Save formatted response to inbox' },
-      { command: 'model', description: 'Switch model (starts new session)' },
-      { command: 'compact', description: 'Compress chat history' },
       { command: 'addfolder', description: 'Add a folder for read+write access' },
-      { command: 'status', description: 'Show session statistics' },
       { command: 'id', description: 'Show current session ID' },
       { command: 'help', description: 'Show help message' },
     ]);
@@ -1294,54 +1304,78 @@ export class TelegramBot {
     channelReply: ChannelReply,
     ctx: Context,
   ): Promise<void> {
-    if (!session.autopilot?.active) return;
+    while (session.autopilot?.active) {
+      const autopilot = session.autopilot;
+      const chatId = ctx.chat?.id;
+      if (!chatId) return;
 
-    const autopilot = session.autopilot;
-    const chatId = ctx.chat?.id;
-    if (!chatId) return;
+      // Increment iteration
+      autopilot.currentIteration++;
 
-    // Increment iteration
-    autopilot.currentIteration++;
+      // Check timeout condition
+      const startTime = autopilot.startTime || Date.now();
+      const timeoutMs = autopilot.timeoutMs || 30 * 60 * 1000;
+      if (Date.now() - startTime >= timeoutMs) {
+        await channelReply.send(`${ICONS.warning} <b>Autopilot Timed Out</b>\nExceeded maximum execution time limit (30 minutes). Pausing autopilot.`);
+        autopilot.active = false;
+        return;
+      }
 
-    // Check stop conditions
-    if (autopilot.currentIteration >= autopilot.maxIterations) {
-      await channelReply.send(`${ICONS.info} <b>Autopilot Paused</b>\nReached maximum iterations (${autopilot.maxIterations}).`);
-      autopilot.active = false;
-      return;
-    }
+      // Build the self-reply prompt
+      const selfReplyText = [
+        `<system>`,
+        `You are in autopilot mode. Current Goal: "${autopilot.goal}"`,
+        `Step Count: ${autopilot.currentIteration}`,
+        `Instructions:`,
+        `1. Provide full, detailed answers and complete output for this step. Do NOT truncate or abbreviate your response.`,
+        `2. If you have completely fulfilled the overall goal, provide your full report/answer first, then output "AUTOPILOT_COMPLETE: <summary>" on a new line at the very end.`,
+        `3. If blocked or unable to proceed, output "AUTOPILOT_STOP: <reason>" on a new line at the end.`,
+        `4. Otherwise, state your findings and continue to the next step.`,
+        `</system>`,
+      ].join('\n');
 
-    // Build the self-reply prompt
-    const selfReplyText = [
-      `<system>`,
-      `You are in autopilot mode. Your goal: ${autopilot.goal}`,
-      `Iteration: ${autopilot.currentIteration}/${autopilot.maxIterations}`,
-      `Continue working toward the goal. If the goal is achieved, respond with "AUTOPILOT_COMPLETE: <summary>".`,
-      `If you need to stop, respond with "AUTOPILOT_STOP: <reason>".`,
-      `Otherwise, continue with your next step.`,
-      `</system>`,
-    ].join('\n');
+      // Small delay between iterations
+      await new Promise((r) => setTimeout(r, 2000));
 
-    // Small delay to avoid rate limiting
-    await new Promise((r) => setTimeout(r, 2000));
+      // Check if user cancelled during delay
+      if (!session.autopilot?.active) return;
 
-    // Check if still active after delay
-    if (!session.autopilot?.active) return;
+      try {
+        // Record current cache state before iteration
+        const prevContext = messageCache.getLastReplyContext();
 
-    try {
-      await processMessage(
-        session,
-        { text: selfReplyText },
-        channelReply,
-        telegramFormatter,
-      );
+        await processMessage(
+          session,
+          { text: selfReplyText },
+          channelReply,
+          telegramFormatter,
+        );
 
-      // Check if response contained stop keywords
-      // Note: We can't easily access the response text here since processMessage sends it directly
-      // The autopilot will check on the next iteration based on the conversation history
-    } catch (e) {
-      logger.error(`Autopilot iteration failed: ${e}`);
-      autopilot.active = false;
-      await channelReply.send(`${ICONS.error} <b>Autopilot stopped</b> — error: ${e instanceof Error ? e.message : String(e)}`);
+        // Fetch fresh context after this iteration
+        const currentContext = messageCache.getLastReplyContext();
+        if (currentContext && currentContext !== prevContext) {
+          const fullText = currentContext.answerMarkdown;
+          if (fullText.includes('AUTOPILOT_COMPLETE') || fullText.includes('AUTOPILOT_STOP')) {
+            const isComplete = fullText.includes('AUTOPILOT_COMPLETE');
+            const signalTag = isComplete ? 'AUTOPILOT_COMPLETE' : 'AUTOPILOT_STOP';
+            const summaryMatch = fullText.split(signalTag)[1]?.trim().split('\n')[0] || 'Task finished.';
+
+            autopilot.active = false;
+            // Send additional completion banner AFTER the full AI response has already been displayed
+            await channelReply.send(
+              isComplete
+                ? `${ICONS.success} <b>Autopilot Completed Goal</b>\n\n<b>Summary:</b> <i>${escapeHtml(summaryMatch)}</i>`
+                : `${ICONS.warning} <b>Autopilot Stopped</b>\n\n<b>Reason:</b> <i>${escapeHtml(summaryMatch)}</i>`,
+            );
+            return;
+          }
+        }
+      } catch (e) {
+        logger.error(`Autopilot iteration failed: ${e}`);
+        autopilot.active = false;
+        await channelReply.send(`${ICONS.error} <b>Autopilot stopped</b> — error: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
     }
   }
 

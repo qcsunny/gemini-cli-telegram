@@ -17,23 +17,105 @@ export interface SessionListEntry {
   relativeTime: string;
 }
 
+import { DatabaseSync } from 'node:sqlite';
+
+function getSessionMetadata(uuid: string, defaultMtimeMs: number): { title: string; date: Date } {
+  // 1. Primary: Query conversation_summaries.db for preview and authentic last_modified_time
+  try {
+    const homeDir = process.env['HOME'] || '/root';
+    const dbPath = `${homeDir}/.gemini/antigravity-cli/conversation_summaries.db`;
+    if (fs.existsSync(dbPath)) {
+      const db = new DatabaseSync(dbPath);
+      const row = db.prepare('SELECT title, preview, last_modified_time FROM conversation_summaries WHERE conversation_id = ?').get(uuid) as { title?: string; preview?: string; last_modified_time?: string } | undefined;
+      db.close();
+      if (row) {
+        const text = (row.preview || row.title || '').trim();
+        const title = text ? text.replace(/^[#*`\- >]+/g, '').substring(0, 25) : uuid.slice(0, 8);
+        const date = row.last_modified_time ? new Date(row.last_modified_time) : new Date(defaultMtimeMs);
+        return { title, date };
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  // 2. Secondary fallback: transcript.jsonl
+  let title = uuid.slice(0, 8);
+  try {
+    const homeDir = process.env['HOME'] || '/root';
+    const transcriptPath = `${homeDir}/.gemini/antigravity-cli/brain/${uuid}/.system_generated/logs/transcript.jsonl`;
+    if (fs.existsSync(transcriptPath)) {
+      const content = fs.readFileSync(transcriptPath, 'utf8');
+      const lines = content.split('\n');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.type === 'USER_INPUT' && obj.content) {
+            let text = String(obj.content)
+              .replace(/<USER_REQUEST>/gi, '')
+              .replace(/<\/USER_REQUEST>/gi, '')
+              .replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, '')
+              .replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, '')
+              .trim();
+            const firstLine = text.split('\n').map(l => l.trim()).find(l => l.length > 0);
+            if (firstLine) {
+              title = firstLine.replace(/^[#*`\- >]+/g, '').substring(0, 25);
+              break;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  return { title, date: new Date(defaultMtimeMs) };
+}
+
+function formatShortRelativeTime(date: Date): string {
+  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (diffSec < 60) return 'just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}h ago`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay === 1) return 'Yesterday';
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+import * as fs from 'fs';
+
 /**
  * List available sessions
  */
 export async function listAvailableSessions(config?: any): Promise<SessionListEntry[]> {
   const sessions = getAgySessions();
-  return sessions.map((s, idx) => {
-    const d = new Date(s.mtime);
+  const entries = sessions.map((s) => {
+    const meta = getSessionMetadata(s.uuid, s.mtime);
     return {
-      index: idx + 1,
       id: s.uuid,
       fileName: `${s.uuid}.db`,
-      title: s.uuid,
+      title: meta.title,
       messageCount: 0,
-      lastUpdated: d.toISOString(),
-      relativeTime: d.toLocaleDateString(),
+      lastUpdated: meta.date.toISOString(),
+      relativeTime: formatShortRelativeTime(meta.date),
+      mtimeMs: meta.date.getTime(),
     };
   });
+
+  // Sort by authentic last_modified_time descending (newest first)
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  return entries.map((e, idx) => ({
+    ...e,
+    index: idx + 1,
+  }));
 }
 
 /**
