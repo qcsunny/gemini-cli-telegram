@@ -18,6 +18,8 @@
   <a href="#-全局配置说明">配置指南</a>
 </p>
 
+> 📖 English version: [README.en.md](README.en.md)
+
 </div>
 
 ---
@@ -63,9 +65,13 @@ npm run build
 # 4. 执行初始化配置向导（配置 Google Auth 登录凭证与 Telegram Bot Token）
 node dist/cli.js setup
 
-# 5. 后台常驻启动 Telegram 机器人
-./start.sh
-# 或者使用 node dist/cli.js start
+# 5. 注册并以 systemd 常驻启动 Telegram 机器人（首次）
+sudo ./setup.sh
+# 之后重启/启停统一用 systemctl：
+#   sudo systemctl restart gemini-telegram.service
+#   sudo systemctl stop gemini-telegram.service
+#   systemctl status gemini-telegram.service
+# 或：./start.sh  （内部即 systemctl restart）
 ```
 
 
@@ -77,8 +83,8 @@ node dist/cli.js setup
 通过 systemd 脚本，您可以轻松将 Bot 注册为系统级 service，实现开机自启和异常自动恢复（守护进程会自动崩溃重启）：
 
 ```bash
-# 注册为 systemd 服务
-sudo ./scripts/install-service.sh
+# 注册为 systemd 服务（首次部署直接运行 ./setup.sh 即可，它内部已包含该步骤）
+sudo ./setup.sh
 ```
 
 ### 常用管理指令
