@@ -10,21 +10,12 @@ import * as os from 'node:os';
 
 export type ConversationState = 
   | 'none'
-  | 'awaiting_account_name'
-  | 'awaiting_oauth_redirect';
-
-export interface OAuthSessionContext {
-  codeVerifier: string;
-  state: string;
-  authUrl: string;
-}
+  | 'awaiting_account_name';
 
 export interface ConversationContext {
   state: ConversationState;
   data?: {
     accountName?: string;
-    oauthCodeVerifier?: string;
-    oauthState?: string;
   };
 }
 
@@ -85,27 +76,4 @@ export function isAwaitingAccountName(chatId: number): boolean {
 
 export function getAccountNameFromContext(chatId: number): string | null {
   return getConversationState(chatId).data?.accountName || null;
-}
-
-export function startOAuthRedirect(chatId: number, accountName: string, codeVerifier: string, state: string): void {
-  setConversationState(chatId, {
-    state: 'awaiting_oauth_redirect',
-    data: { accountName, oauthCodeVerifier: codeVerifier, oauthState: state },
-  });
-}
-
-export function isAwaitingOAuthRedirect(chatId: number): boolean {
-  return getConversationState(chatId).state === 'awaiting_oauth_redirect';
-}
-
-export function getOAuthData(chatId: number): { accountName: string; codeVerifier: string; state: string } | null {
-  const ctx = getConversationState(chatId);
-  if (ctx.state === 'awaiting_oauth_redirect' && ctx.data?.accountName && ctx.data?.oauthCodeVerifier && ctx.data?.oauthState) {
-    return { 
-      accountName: ctx.data.accountName, 
-      codeVerifier: ctx.data.oauthCodeVerifier,
-      state: ctx.data.oauthState
-    };
-  }
-  return null;
 }
