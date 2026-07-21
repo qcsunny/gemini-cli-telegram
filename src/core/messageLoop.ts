@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
-import { markdownToRichBlocks, markdownToRichBlocksDelta } from '../channels/telegram/formatter.js';
+import { markdownToRichBlocks, markdownToRichBlocksDelta, isEligibleMainHeading } from '../channels/telegram/formatter.js';
 import { runAgyPrint, extractThoughtAndContent, getModelCapabilities } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
@@ -773,10 +773,10 @@ export async function processMessage(
           }
         }
 
-        // Hoist the first heading above the thinking block (only if it is the very first body block)
+        // Hoist the first heading above the thinking block (only if it is a genuine main heading)
         if (thinkingBlockIndex >= 0) {
           const nextBlockIdx = thinkingBlockIndex + 1;
-          if (nextBlockIdx < blocks.length && (blocks[nextBlockIdx] as any).type === 'heading') {
+          if (nextBlockIdx < blocks.length && isEligibleMainHeading(blocks[nextBlockIdx])) {
             const [headingBlock] = blocks.splice(nextBlockIdx, 1);
             blocks.unshift(headingBlock);
             thinkingBlockIndex = 1;

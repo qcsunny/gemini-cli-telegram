@@ -636,7 +636,7 @@ function appendListPrefix(state: RenderState) {
   const top = state.listStack[state.listStack.length - 1];
   if (!top) return;
   top.index += 1;
-  const indent = '  '.repeat(Math.max(0, state.listStack.length - 1));
+  const indent = '    '.repeat(Math.max(0, state.listStack.length - 1));
   const prefix = top.type === 'ordered' ? `${top.index}. ` : '\u2022 ';
   state.text += `${indent}${prefix}`;
 }
@@ -1308,7 +1308,75 @@ export function normalizeMarkdownFences(markdown: string): string {
  */
 export function normalizeMarkdownStructure(markdown: string): string {
   if (!markdown) return markdown;
-  let text = markdown;
+
+  // Process line-by-line to protect fenced code blocks (```) and auto-close unclosed fences
+  // before next section headings or section dividers, ensuring code block pairing never flips.
+  const lines = markdown.split('\n');
+  const resultLines: string[] = [];
+  const codeBlocks: string[] = [];
+
+  let inBlock = false;
+  let currentBlockLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isFenceLine = /^[ \t]*```/.test(line);
+
+    if (isFenceLine) {
+      if (!inBlock) {
+        inBlock = true;
+        currentBlockLines = [line];
+      } else {
+        currentBlockLines.push(line);
+        inBlock = false;
+        const blockText = currentBlockLines.join('\n');
+        codeBlocks.push(blockText);
+        resultLines.push(`__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length - 1}__`);
+        currentBlockLines = [];
+      }
+    } else {
+      if (inBlock) {
+        if (/^(#{1,6}\s+|---|———)/.test(line.trim())) {
+          currentBlockLines.push('```');
+          const blockText = currentBlockLines.join('\n');
+          codeBlocks.push(blockText);
+          resultLines.push(`__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length - 1}__`);
+          inBlock = false;
+          currentBlockLines = [];
+          resultLines.push(line);
+        } else {
+          currentBlockLines.push(line);
+        }
+      } else {
+        resultLines.push(line);
+      }
+    }
+  }
+
+  if (inBlock) {
+    currentBlockLines.push('```');
+    const blockText = currentBlockLines.join('\n');
+    codeBlocks.push(blockText);
+    resultLines.push(`__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length - 1}__`);
+  }
+
+  let text = resultLines.join('\n');
+
+  // Normalize GFM checklist items `- [x]`, `- [ ]`, `- [x] ☑`, `- [ ] ☐`
+  // into clean checkbox icons `☑ ` and `☐ ` without redundant bullet dots or `[x]` tags.
+  text = text.replace(/^([ \t]*)[*+\-]\s*\[[xX]\]\s*☑?\s*/gm, '$1☑ ');
+  text = text.replace(/^([ \t]*)[*+\-]\s*\[\s*\]\s*☐?\s*/gm, '$1☐ ');
+  text = text.replace(/^([ \t]*)\[[xX]\]\s*☑?\s*/gm, '$1☑ ');
+  text = text.replace(/^([ \t]*)\[\s*\]\s*☐?\s*/gm, '$1☐ ');
+
+  // Convert model-emitted collapsible details prompts like `点击展开...` / `▶ ...` / `▼ ...`
+  // followed by a blockquote `> ...` into `> [details] Summary\n> Content` so they render
+  // as native Telegram <details> elements instead of being rendered as plain text + quote.
+  text = text.replace(/^([ \t]*(?:点击展开|▶|▼|\[details\])[^\n]*)\n+[ \t]*>\s*([^\n]+)/gm, (match, summaryLine, firstQuoteLine) => {
+    const cleanSummary = summaryLine.trim();
+    return `> [details] ${cleanSummary}\n> ${firstQuoteLine}`;
+  });
+
   // `###1.` / `## 2.1` already spaced is fine; fix `###1.`, `#### 3.1`,
   // `##标题` where the hash run is immediately followed by a non-space char.
   text = text.replace(/^(#{1,6})(?=[^\s#>])/gm, '$1 ');
@@ -1317,32 +1385,36 @@ export function normalizeMarkdownStructure(markdown: string): string {
   // math. (DeepSeek Pro Thinking emits these rather than $...$ / $$...$$.)
   text = text.replace(/\\\[([\s\S]+?)\\\]/g, 'LATEXBLOCKSTART$1LATEXBLOCKEND');
   text = text.replace(/\\\(([\s\S]+?)\\\)/g, 'LATEXINLINESTART$1LATEXINLINEEND');
-  // Bullet markers missing the required space after the marker (e.g. `*2022年`
-  // or `-foo`) are parsed by markdown-it as emphasis/inline text, not list
-  // items. Insert the missing space so they become real bullets. We skip
-  // `**`/`++`/`--` (already-valid emphasis/strikethrough markers) by rejecting
-  // a second marker char in the lookahead.
-  text = text.replace(/^([ \t]*)([*+\-])(?=[^\s*+\-])/gm, '$1$2 ');
-  // Consecutive bullet items glued onto ONE line, separated only by `* ` (or
-  // `- ` / `+ `) with NO newlines between them — e.g. the model emits
-  //   * 2026年…）* 2022年…）* 2018年…）
-  //   * 2014年…）
-  // markdown-it then collapses the first three into a single list item. Split
-  // each mid-line bullet marker onto its own line. We only act when the
-  // marker is preceded by a non-space, non-marker, non-alphanumeric char
-  // (so a real line-start bullet, the dashes inside a `---` rule, and math
-  // like `2 * 3` are all untouched) and followed by content that looks like
-  // a list item (CJK / digit / colon), which avoids breaking emphasis
-  // `*bold*` (no space after the marker) or math.
-  text = text.replace(/([^\n\s*+\-0-9a-zA-Z])(\s*)([*+\-])(\s+)(?=[㐀-鿿0-9：:])/g, '$1\n$2$3$4');
+
+  // Normalize indented decimal sub-numbering like `   1.1 ` or `      1.1.1 `
+  // into standard Markdown list items `   1. ` so markdown-it parses them into 3-level lists.
+  text = text.replace(/^([ \t]+)\d+(?:\.\d+)+\s+/gm, '$11. ');
+
+  // Process bullet markers line by line, skipping table lines (containing '|') from bullet splitting
+  // so cell values like `+15.4%`, `-5%`, `+85%` are never broken into newlines or bullet points.
+  // We only split mid-line bullets preceded by sentence-ending punctuation (。！？）；) to avoid breaking inline code `*code*`.
+  text = text.split('\n').map(line => {
+    if (line.includes('|')) return line;
+    let l = line.replace(/^([ \t]*)([*+\-])(?=[^\s*+\-])/g, '$1$2 ');
+    l = l.replace(/([。！？）；])(\s*)([*+\-])(\s*)(?=[㐀-鿿0-9：:])/g, '$1\n$3 ');
+    return l;
+  }).join('\n');
+
   // Horizontal rules `---` / `———` emitted by the model are often glued to the
-  // surrounding text (e.g. `正文---### 4.` or `---` without blank lines), so
-  // markdown-it does not treat them as <hr>. Only lines that consist solely of
-  // the separator (with optional surrounding whitespace) are normalized, and a
-  // separator glued to a heading on the same line is split onto its own line.
-  // This avoids touching `---` that appears inside words or code.
-  text = text.replace(/(\n|^)([ \t]*---[ \t]*|[ \t]*———[ \t]*)(?=\n|#|$)/g, '$1\n\n$2\n\n');
-  text = text.replace(/([^\n#])(---|———)(?=\s*#)/g, '$1\n\n$2\n\n');
+  // surrounding text without newlines (e.g. `问句？---总结来说` or `正文---### 4.`).
+  // Split them onto their own line with surrounding blank lines so markdown-it parses them as <hr>.
+  // We skip table and ASCII diagram lines (containing `|`, `+`, `-->`, `<--`) and word-internal dashes (`a---b`).
+  text = text.split('\n').map(line => {
+    if (line.includes('|') || line.includes('+') || line.includes('-->') || line.includes('<--')) return line;
+    return line.replace(/([^\n])(---|———)(?=[^\n])/g, (match, p1, p2, offset, string) => {
+      const nextChar = string[offset + match.length];
+      if (/[a-zA-Z0-9]/.test(p1) && /[a-zA-Z0-9]/.test(nextChar || '')) {
+        return match;
+      }
+      return p1 + '\n\n' + p2 + '\n\n';
+    });
+  }).join('\n');
+  text = text.replace(/(\n|^)([ \t]*---[ \t]*|[ \t]*———[ \t]*)(?=\n|$)/g, '$1\n\n$2\n\n');
   // A heading (`#`..`######` + space) glued to the end of the previous line
   // (e.g. `## 1. 范式转移...AGI）### 1.1 大模型...`) is not recognized by the
   // parser because the `#` is not at line start. Split it onto its own line so
@@ -1351,6 +1423,10 @@ export function normalizeMarkdownStructure(markdown: string): string {
   text = text.replace(/([^\n\s#])(#{1,6}\s+[^\n]+)/g, '$1\n$2');
   // Collapse the excessive blank lines we may have introduced.
   text = text.replace(/\n{3,}/g, '\n\n');
+
+  // Restore protected code blocks
+  text = text.replace(/__CODE_BLOCK_PLACEHOLDER_(\d+)__/g, (_, idx) => codeBlocks[parseInt(idx, 10)]);
+
   return text;
 }
 
@@ -1365,10 +1441,49 @@ function markdownToHtmlSnippet(markdown: string): string {
     }
   }
 
-  html = html.replace(/<blockquote>([\s\S]*?)\[details\]\s*([^\n<]*)(?:<br\s*\/?>|\n)?([\s\S]*?)<\/blockquote>/gi, (match, p1, p2, p3) => {
-    const summary = p2.trim() || '点击展开';
-    const cleanContent = p3.replace(/<\/?blockquote>/gi, '').trim();
-    return `<details><summary>${summary}</summary>${cleanContent}</details>`;
+  // Unescape native Telegram Bot API 10.1 HTML tags (<details>, <summary>, <aside>, <tg-thinking>, etc.)
+  // that were escaped by markdown-it when html: false was set.
+  html = html
+    .replace(/&lt;details(\s+open)?&gt;/gi, '<details$1>')
+    .replace(/&lt;\/details&gt;/gi, '</details>')
+    .replace(/&lt;summary&gt;/gi, '<summary>')
+    .replace(/&lt;\/summary&gt;/gi, '</summary>')
+    .replace(/&lt;aside&gt;/gi, '<aside>')
+    .replace(/&lt;\/aside&gt;/gi, '</aside>')
+    .replace(/&lt;tg-thinking&gt;/gi, '<tg-thinking>')
+    .replace(/&lt;\/tg-thinking&gt;/gi, '</tg-thinking>')
+    .replace(/&lt;tg-math(-block)?&gt;/gi, '<tg-math$1>')
+    .replace(/&lt;\/tg-math(-block)?&gt;/gi, '</tg-math$1>')
+    .replace(/&lt;kbd&gt;/gi, '<kbd>')
+    .replace(/&lt;\/kbd&gt;/gi, '</kbd>')
+    .replace(/&lt;u&gt;/gi, '<u>')
+    .replace(/&lt;\/u&gt;/gi, '</u>');
+
+  html = html.replace(/<blockquote>([\s\S]*?)<\/blockquote>/gi, (fullMatch, innerContent) => {
+    if (/\[details\]/i.test(innerContent)) {
+      const detailsMatch = innerContent.match(/\[details\]\s*([^\n<]*)(?:<br\s*\/?>|\n)?([\s\S]*)/i);
+      if (detailsMatch) {
+        const summary = detailsMatch[1].trim() || '点击展开';
+        const content = detailsMatch[2].replace(/<\/?blockquote>/gi, '').trim();
+        return `<details><summary>${summary}</summary>${content}</details>`;
+      }
+    }
+    return fullMatch;
+  });
+
+  // Ensure <details> and <blockquote> are never directly nested per Telegram Bot API spec.
+  html = html.replace(/<details(\s+open)?>([\s\S]*?)<\/details>/gi, (match, openAttr, inner) => {
+    const cleanInner = inner.replace(/(?:<\/blockquote>|<blockquote[^>]*>|&lt;\/?blockquote&gt;)/gi, '');
+    return `<details${openAttr || ''}>${cleanInner}</details>`;
+  });
+
+  // Strip auto-linked filenames (e.g. user.py, formatter.py, README.md) generated by markdown-it linkify
+  // when the link text is a filename rather than an explicit http(s) URL.
+  html = html.replace(/<a\s+href="http:\/\/(.*?)"\s*>([^<]+)<\/a>/gi, (match, url, text) => {
+    if (/\.(py|md|js|ts|json|yml|yaml|css|html|cpp|h|c|go|rs|java|sh)$/i.test(text) && !/^https?:\/\//i.test(text) && !/^www\./i.test(text)) {
+      return text;
+    }
+    return match;
   });
 
   html = html.replace(/\[footer:\s*(.*?)\|\s*(.*?)\|\s*(.*?)\|\s*(.*?)(?:\s*\|\s*(.*?)\|\s*(.*?))?\]/gi, (match, model, inputTokens, outputTokens, cost, cachedTokens, thinkingTokens) => {
@@ -1406,7 +1521,7 @@ function renderThoughtBlockToHtml(
 ): string {
   const isOpen = isStreaming || !isClosed;
   const detailsTag = isOpen ? '<details open>' : '<details>';
-  
+
   let finalContent = trimHtmlBr(markdownToHtmlSnippet(content));
   if (isStreaming) {
     const maxThoughtLength = Math.max(200, 3900 - nonThoughtHtmlLength);
@@ -1418,12 +1533,11 @@ function renderThoughtBlockToHtml(
   }
 
   const innerHtml = finalContent;
-
   let summary = '🧠 思考过程 (Thinking Process)';
   let infoBlock = '';
 
   if (time !== undefined || tokens !== undefined) {
-    summary = formatSummaryWithMetadata(time, tokens, isOpen && !isClosed);
+    summary = formatSummaryWithMetadata(time, tokens, isOpen);
     const infoLines: string[] = [];
     if (time && Number(time) > 0) {
       infoLines.push(`Thinking Time: ${time} s`);
@@ -1435,7 +1549,7 @@ function renderThoughtBlockToHtml(
       infoBlock = `<i>${infoLines.join('\n')}</i>\n\n`;
     }
   } else {
-    summary = isClosed ? '🧠 思考过程 (Thinking Process)' : '🧠 正在思考... (Thinking...)';
+    summary = isOpen ? '🧠 正在思考... (Thinking...)' : '🧠 思考过程 (Thinking Process)';
   }
 
   return `${detailsTag}<summary>${summary}</summary>${infoBlock}${innerHtml}</details>`;
@@ -1741,7 +1855,7 @@ function trimRichText(rt: RichText): RichText {
   return out as RichText;
 }
 
-function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): RichText {
+function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, mathStore: string[] = []): RichText {
   if (!inlineTokens || inlineTokens.length === 0) return '';
 
   const out: RichText[] = [];
@@ -1791,7 +1905,7 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined): Ric
     while ((m = phRe.exec(s)) !== null) {
       if (m.index > last) pushPlainInner(s.slice(last, m.index));
       const idx = Number(m[1]);
-      const expr = (mathPlaceholderStore[idx] ?? '').trim();
+      const expr = ((mathStore && mathStore[idx]) ?? (mathPlaceholderStore && mathPlaceholderStore[idx]) ?? '').trim();
       if (expr) {
         flush();
         out.push({ type: 'mathematical_expression', expression: expr });
@@ -1955,6 +2069,56 @@ function tryHtmlBlockToRichBlock(
   return { block: null, advance: 1 };
 }
 
+function parseRichListToken(
+  tokens: MarkdownToken[],
+  startIndex: number,
+  math: string[]
+): { block: RichBlock; nextIndex: number } {
+  const openToken = tokens[startIndex];
+  const closeType = openToken.type.replace('open', 'close');
+  const items: Array<{ blocks: RichBlock[] }> = [];
+
+  let idx = startIndex + 1;
+  while (idx < tokens.length && tokens[idx].type !== closeType) {
+    if (tokens[idx].type === 'list_item_open') {
+      idx++;
+      const itemBlocks: RichBlock[] = [];
+      while (idx < tokens.length && tokens[idx].type !== 'list_item_close') {
+        const tk = tokens[idx];
+        if (tk.type === 'bullet_list_open' || tk.type === 'ordered_list_open') {
+          const res = parseRichListToken(tokens, idx, math);
+          itemBlocks.push(res.block);
+          idx = res.nextIndex;
+        } else if (tk.type === 'inline' && tk.children) {
+          const rt = trimRichText(inlineToRichText(tk.children, math));
+          if (rt) {
+            itemBlocks.push({ type: 'paragraph', text: rt });
+          }
+          idx++;
+        } else {
+          idx++;
+        }
+      }
+      if (idx < tokens.length && tokens[idx].type === 'list_item_close') {
+        idx++;
+      }
+      if (itemBlocks.length > 0) {
+        items.push({ blocks: itemBlocks });
+      }
+    } else {
+      idx++;
+    }
+  }
+
+  const openType = tokens[startIndex].type;
+  const isOrdered = openType === 'ordered_list_open';
+
+  return {
+    block: { type: 'list', ...(isOrdered ? { is_ordered: true } : {}), items },
+    nextIndex: idx,
+  };
+}
+
 export function markdownToRichBlocks(markdown: string): RichBlock[] {
   // Extract every LaTeX formula into a private-use-area placeholder BEFORE
   // parsing so markdown-it never splits formula internals ( ) { } across
@@ -1983,9 +2147,17 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         const level = Math.min(6, Math.max(1, Number(token.tag.slice(1)) || 1));
         const inline = tokens[i + 1];
         if (inline?.type === 'inline') {
-          const text = trimRichText(inlineToRichText(inline.children));
+          const text = trimRichText(inlineToRichText(inline.children, math));
           if (text) {
-            blocks.push({ type: 'heading', size: level as 1 | 2 | 3 | 4 | 5 | 6, text });
+            const plainStr = extractStringFromRichText(text).trim();
+            // Lines ending with punctuation (full stops/colons/exclamation) or longer than 40 chars
+            // are intro paragraphs/sentences wrongly prefixed with `## `, not true short titles.
+            const isSentenceOrParagraph = /[。！？!?：:]$/.test(plainStr) || plainStr.length > 40;
+            if (isSentenceOrParagraph) {
+              blocks.push({ type: 'paragraph', text });
+            } else {
+              blocks.push({ type: 'heading', size: level as 1 | 2 | 3 | 4 | 5 | 6, text });
+            }
           }
           i += 2;
         }
@@ -1994,7 +2166,7 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
       case 'paragraph_open': {
         const inline = tokens[i + 1];
         if (inline?.type === 'inline') {
-          const text = trimRichText(inlineToRichText(inline.children));
+          const text = trimRichText(inlineToRichText(inline.children, math));
           if (text) {
             blocks.push({ type: 'paragraph', text });
           }
@@ -2020,9 +2192,9 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         while (j < tokens.length && tokens[j].type !== 'blockquote_close') {
           const nextToken = tokens[j];
           if (nextToken.type === 'inline' && nextToken.children) {
-            const rt = trimRichText(inlineToRichText(nextToken.children));
+            const rt = trimRichText(inlineToRichText(nextToken.children, math));
             if (rt) {
-              const rawText = String(rt).trim();
+              const rawText = extractStringFromRichText(rt).trim();
               if (blockquoteInnerBlocks.length === 0 && rawText.startsWith('[details]')) {
                 isDetails = true;
                 detailsSummary = rawText.replace(/^\[details\]\s*/i, '') || '点击展开';
@@ -2055,30 +2227,9 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
       }
       case 'bullet_list_open':
       case 'ordered_list_open': {
-        const items: Array<{ blocks: RichBlock[] }> = [];
-        let j = i + 1;
-        while (j < tokens.length && tokens[j].type !== (token.type.replace('open', 'close'))) {
-          if (tokens[j].type === 'list_item_open') {
-            let k = j + 1;
-            const itemInner: RichText[] = [];
-            while (k < tokens.length && tokens[k].type !== 'list_item_close') {
-              if (tokens[k].type === 'inline' && tokens[k].children) {
-                const rt = trimRichText(inlineToRichText(tokens[k].children));
-                if (rt) itemInner.push(rt);
-              }
-              k++;
-            }
-            if (itemInner.length > 0) {
-              items.push({ blocks: itemInner.map((rt) => ({ type: 'paragraph', text: rt })) });
-            }
-            j = k;
-          }
-          j++;
-        }
-        if (items.length > 0) {
-          blocks.push({ type: 'list', items });
-        }
-        i = j;
+        const res = parseRichListToken(tokens, i, math);
+        blocks.push(res.block);
+        i = res.nextIndex - 1;
         break;
       }
       case 'table_open': {
@@ -2093,7 +2244,7 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
             cells.push(currentRow);
           } else if (tk.type === 'td_open' || tk.type === 'th_open') {
             const inline = tokens[j + 1];
-            const text = inline?.type === 'inline' ? trimRichText(inlineToRichText(inline.children)) : '';
+            const text = inline?.type === 'inline' ? trimRichText(inlineToRichText(inline.children, math)) : '';
             currentRow.push({
               text: text || undefined,
               is_header: tk.type === 'th_open' ? true : undefined,
@@ -2216,7 +2367,36 @@ export function markdownToRichBlocksDelta(
  * - The thinking/thought text (if any) is appended as a native collapsible
  *   `details` block ("🧠 思考过程") at the END of the message, matching the
  *   existing UX decision. Optional time/tokens metadata is shown in the summary.
- *
+ */
+function extractStringFromRichText(rt: any): string {
+  if (!rt) return '';
+  if (typeof rt === 'string') return rt;
+  if (Array.isArray(rt)) return rt.map(extractStringFromRichText).join('');
+  if (typeof rt === 'object' && 'text' in rt) return extractStringFromRichText(rt.text);
+  return '';
+}
+
+export function isEligibleMainHeading(blk: RichBlock | undefined): boolean {
+  if (!blk || blk.type !== 'heading') return false;
+  // 1. Only H1 and H2 (size 1 or 2) can be main titles. H3..H6 (size >= 3) are sub-headings.
+  if (blk.size > 2) return false;
+
+  const trimmed = extractStringFromRichText(blk.text).trim();
+
+  // 2. Titles cannot be excessively long (> 40 chars). Long text is an intro paragraph.
+  if (trimmed.length > 40) return false;
+
+  // 3. Sentences/lead-in lines ending with full stops, exclamation marks, or colons are body text, not titles.
+  if (/[。！？!?：:]$/.test(trimmed)) return false;
+
+  // 4. Numbered list headers (e.g. `1.`, `2.`, `一、`, `（一）`, `(1)`, `第1`) are item section headers, not overall titles.
+  if (/^(\d+[\.\、\)]|[一二三四五六七八九十]+[\、\)]|[\(\（]\d+[\)\）]|第\d+)/.test(trimmed)) return false;
+
+  return true;
+}
+
+/**
+ * Format a structured message with optional thought into Telegram RichBlocks.
  * The returned blocks array is suitable for `sendRichMessage` / `editMessageText`
  * (final, persisted messages). For streaming drafts use
  * `buildStreamingBlocks` instead.
@@ -2230,9 +2410,9 @@ export function buildFinalBlocks(
 
   const body = markdownToRichBlocks(content);
 
-  // Extract first heading to hoist above thinking block
+  // Extract first heading to hoist above thinking block ONLY if it is a genuine overall title
   let mainHeading: RichBlock | undefined;
-  if (body.length > 0 && body[0].type === 'heading') {
+  if (body.length > 0 && isEligibleMainHeading(body[0])) {
     mainHeading = body.shift() as RichBlock;
   }
 
@@ -2251,10 +2431,11 @@ export function buildFinalBlocks(
     if (opts?.tokens && Number(opts.tokens) > 0) infoLines.push(`Thinking Tokens: ${opts.tokens}`);
     if (infoLines.length > 0) summary = `${summary} · ${infoLines.join(' · ')}`;
 
+    const thoughtBlocks = markdownToRichBlocks(thoughtText);
     blocks.push({
       type: 'details',
       summary,
-      blocks: [{ type: 'paragraph', text: thoughtText }],
+      blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thoughtText }],
     });
   }
 
@@ -2315,10 +2496,11 @@ export function buildNativeFooterBlocks(opts: {
 
   const thoughtText = (opts.thought ?? '').trim();
   if (thoughtText) {
+    const thoughtBlocks = markdownToRichBlocks(thoughtText);
     blocks.push({
       type: 'details',
       summary: '🧠 思考过程 (Thinking Process)',
-      blocks: [{ type: 'paragraph', text: thoughtText }],
+      blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thoughtText }],
     });
   }
 
@@ -2356,12 +2538,26 @@ export function buildFooterBlocksFromHtml(html: string): RichBlock[] {
     // Strip the trailing stats line if it was appended inside the details by the
     // old renderer; the native footer block carries stats separately.
     inner = inner.replace(/<i>[\s\S]*?<\/i>/gi, '');
-    const text = inner.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
-    if (text) {
+    
+    // Convert HTML tags to markdown syntax so markdownToRichBlocks produces RichTextBold/RichTextItalic etc.
+    let md = inner
+      .replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**')
+      .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
+      .replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*')
+      .replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
+      .replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<p[^>]*>/gi, '')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<[^>]+>/g, '')
+      .trim();
+
+    if (md) {
+      const thoughtBlocks = markdownToRichBlocks(md);
       blocks.push({
         type: 'details',
         summary: '🧠 思考过程 (Thinking Process)',
-        blocks: [{ type: 'paragraph', text }],
+        blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: md }],
       });
     }
   }

@@ -227,8 +227,27 @@ export function buildChannelReply(
         : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
       try {
-        // Option A (10.2): Native structured blocks. Thinking rendered as a
-        // native collapsible `details` block at the end (see buildFinalBlocks).
+        // Option A (AGENTS.md Mandate): Native Rich HTML via sendRichMessage.
+        // Telegram server parses HTML natively into full Rich Blocks (including
+        // tables, details with bold text, headings, and LaTeX formulas).
+        try {
+          let html = getHtmlPayload(originalText);
+          if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
+            html = '正在思考...<br><br>' + html;
+          }
+          logger.debug(`[TELEGRAM PAYLOAD] sendRich Option A html.length=${html.length}`);
+          const res: any = await (ctx.api.raw as any).sendRichMessage({
+            chat_id: chatId,
+            message_thread_id: messageThreadId,
+            rich_message: { html },
+          });
+          messageCache.set(res.message_id, safeMarkdown);
+          return res.message_id;
+        } catch (err: any) {
+          logger.warn(`sendRich Option A (HTML) failed: ${err.message || err}. Trying Option B (blocks)...`);
+        }
+
+        // Option B: Native structured blocks payload fallback
         try {
           const blocks = getBlocksPayload(originalText);
           if (blocks.length > 0) {
@@ -241,25 +260,7 @@ export function buildChannelReply(
             return res.message_id;
           }
         } catch (err: any) {
-          logger.warn(`sendRich Option A (blocks) failed: ${err.message || err}. Trying Option B...`);
-        }
-
-        // Option B: Native Rich HTML (Telegram parses this on the server)
-        try {
-          let html = getHtmlPayload(originalText);
-          if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
-            html = '正在思考...<br><br>' + html;
-          }
-          logger.debug(`[TELEGRAM PAYLOAD] sendRich originalText.length=${textLen} html.length=${html.length} containsDetails=${html.includes('<details')} containsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')} containsBodyTitle=${html.includes('证明') || html.includes('Proof')}`);
-          const res: any = await (ctx.api.raw as any).sendRichMessage({
-            chat_id: chatId,
-            message_thread_id: messageThreadId,
-            rich_message: { html },
-          });
-          messageCache.set(res.message_id, safeMarkdown);
-          return res.message_id;
-        } catch (err: any) {
-          logger.warn(`sendRich Option B failed: ${err.message || err}. Trying Option C...`);
+          logger.warn(`sendRich Option B (blocks) failed: ${err.message || err}. Trying Option C...`);
         }
 
         // Option C: Rich Markdown
