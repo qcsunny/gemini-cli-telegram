@@ -166,7 +166,7 @@ describe('TelegramBot', () => {
       };
     });
 
-    it('should successfully send Rich blocks (Option A) and clear draft ID', async () => {
+    it('should successfully send Rich HTML (Option A) and clear draft ID', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('**bold** text');
 
@@ -175,7 +175,7 @@ describe('TelegramBot', () => {
         rich_message: expect.any(Object),
       });
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
-      expect(parsed).toHaveProperty('blocks');
+      expect(parsed).toHaveProperty('html');
       expect(msgId).toBe(888);
     });
 
@@ -187,7 +187,7 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
         chat_id: chatId,
         message_thread_id: 42,
-        rich_message: { blocks: expect.any(Array) }
+        rich_message: { html: expect.any(String) }
       }));
 
       await reply.sendRichDraft!('Hello Draft!');
@@ -198,9 +198,9 @@ describe('TelegramBot', () => {
       }));
     });
 
-    it('should fallback to Option B (HTML) if Option A (blocks) throws', async () => {
+    it('should fallback to Option B (blocks) if Option A (HTML) throws', async () => {
       // Option A throws error
-      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('blocks not supported'));
+      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('HTML not supported'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('some text');
@@ -211,7 +211,7 @@ describe('TelegramBot', () => {
         rich_message: expect.any(Object),
       });
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[1][0].rich_message;
-      expect(parsed).toHaveProperty('html');
+      expect(parsed).toHaveProperty('blocks');
       expect(msgId).toBe(888);
     });
 
@@ -319,7 +319,7 @@ describe('TelegramBot', () => {
         expect.objectContaining({
           chat_id: chatId,
           rich_message: expect.objectContaining({
-            blocks: expect.any(Array),
+            html: expect.any(String),
           }),
         })
       );

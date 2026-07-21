@@ -9,6 +9,8 @@ import {
   markdownToHtml, 
   markdownToMarkdownV2, 
   markdownToRichBlocks, 
+  buildFinalBlocks,
+  isEligibleMainHeading,
   telegramFormatter,
   splitTextWithOpenTags,
   splitCodeBlock,
@@ -137,6 +139,144 @@ Thanks for reading! 🚀
     ]);
   });
 
+  it('should correctly filter eligible main headings for hoisting', () => {
+    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '物理学十大未解难题' })).toBe(true);
+    expect(isEligibleMainHeading({ type: 'heading', size: 3, text: '1. 暗物质与暗能量的本质' })).toBe(false);
+    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '1. 暗物质与暗能量的本质' })).toBe(false);
+    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '同样不会。' })).toBe(false);
+    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '物理学十大未解难题尽管现代物理学在解释宇宙运行规律方面取得了巨大成就，但仍有一些根本性的未知谜团困扰着顶尖科学家。以下是目前物理学界公认的十大未解难题：' })).toBe(false);
+    expect(isEligibleMainHeading({ type: 'heading', size: 1, text: '架构说明' })).toBe(true);
+  });
+
+  it('should downgrade long intro text starting with ## or ending with colon to paragraph block', () => {
+    const longIntro = '## 物理学十大未解难题尽管现代物理学在解释宇宙运行规律方面取得了巨大成就，但仍有一些根本性的未知谜团困扰着顶尖科学家。以下是目前物理学界公认的十大未解难题：';
+    const blocks = markdownToRichBlocks(longIntro);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('paragraph');
+  });
+
+  it('should split glued horizontal rules and mid-line bullets correctly', () => {
+    const text1 = '究竟是什么，我们至今一无所知。---总结来说';
+    const blocks1 = markdownToRichBlocks(text1);
+    expect(blocks1).toHaveLength(3);
+    expect(blocks1[1].type).toBe('divider');
+
+    const text2 = '剩下的95%（约27%的暗物质68%的暗能量）究竟是什么，我们至今一无所知。*影响：这极其深远';
+    const blocks2 = markdownToRichBlocks(text2);
+    expect(blocks2).toHaveLength(2);
+    expect(blocks2[1].type).toBe('list');
+  });
+
+  it('should preserve markdown table separators |---|---| without breaking lines', () => {
+    const tableMd = '| 属性 | 说明 |\n|---|---|\n| 值1 | 值2 |';
+    const blocks = markdownToRichBlocks(tableMd);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('table');
+  });
+
+  it('should parse details blockquotes without swallowing earlier blockquotes or intervening text', () => {
+    const mdInput = '> 引用1\n\n正文段落\n\n> [details] 展开标题\n> 展开内容';
+    const html = markdownToHtml(mdInput);
+    expect(html).toContain('<blockquote>');
+    expect(html).toContain('正文段落');
+    expect(html).toContain('<details><summary>展开标题</summary>');
+  });
+
+  it('should convert preceding Click-to-expand prompt lines into native details elements', () => {
+    const mdInput = '点击展开查看事故描述\n> 事故发生在 `192.168.1.105` 节点';
+    const html = markdownToHtml(mdInput);
+    expect(html).toContain('<details><summary>点击展开查看事故描述</summary>');
+    expect(html).toContain('事故发生在 <code>192.168.1.105</code> 节点');
+  });
+
+  it('should preserve raw Telegram Bot API 10.1 details HTML tags', () => {
+    const rawDetailsInput = '<details open><summary>官方 API 折叠框</summary>展开内容</details>';
+    const html = markdownToHtml(rawDetailsInput);
+    expect(html).toContain('<details open><summary>官方 API 折叠框</summary>');
+    expect(html).toContain('展开内容</details>');
+  });
+
+  it('should strip nested blockquotes inside details blocks per Telegram Bot API spec', () => {
+    const nestedInput = '<details><summary>标题</summary><blockquote>引用内容</blockquote></details>';
+    const html = markdownToHtml(nestedInput);
+    expect(html).not.toContain('<blockquote>');
+    expect(html).toContain('<details><summary>标题</summary>引用内容</details>');
+  });
+
+  it('should preserve tables with cell values containing + or - signs like +15.4% or -70%', () => {
+    const tableMd = '| 季度 | 增长率 |\n| :---: | :---: |\n| 2025 Q1 | +15.4% |\n| 2025 Q2 | -70.0% |';
+    const html = markdownToHtml(tableMd);
+    expect(html).toContain('<table bordered striped>');
+    expect(html).toContain('+15.4%');
+    expect(html).toContain('-70.0%');
+    expect(html).not.toContain('• 15.4%');
+  });
+
+  it('should normalize indented decimal list sub-numbering 1.1 and 1.1.1 into standard 3-level ordered lists', () => {
+    const listMd = '1. 第一级\n   1.1 第二级\n       1.1.1 第三级';
+    const html = markdownToHtml(listMd);
+    expect(html).toContain('1. 第一级');
+    expect(html).toContain('1. 第二级');
+    expect(html).toContain('1. 第三级');
+  });
+
+  it('should auto-close unclosed code blocks and prevent swallowing subsequent sections', () => {
+    const unclosedMd = '```python\ndef foo():\n    pass\n\n### 下一章节';
+    const html = markdownToHtml(unclosedMd);
+    expect(html).toContain('<pre><code class="language-python">');
+    expect(html).toContain('🔹 <b>下一章节</b>');
+  });
+
+  it('should not auto-link plain filenames like user.py, formatter.py, README.md', () => {
+    const textMd = '文件列表：user.py 和 formatter.py 以及 README.md';
+    const html = markdownToHtml(textMd);
+    expect(html).not.toContain('href="http://user.py"');
+    expect(html).toContain('user.py');
+  });
+
+  it('should normalize GFM checklist items - [x] and - [ ] into clean checkbox icons', () => {
+    const todoMd = '- [x] ☑ 已完成任务\n- [ ] ☐ 未完成任务\n- [x] 完成项2';
+    const html = markdownToHtml(todoMd);
+    expect(html).toContain('☑ 已完成任务');
+    expect(html).toContain('☐ 未完成任务');
+    expect(html).toContain('☑ 完成项2');
+    expect(html).not.toContain('• [x]');
+    expect(html).not.toContain('• [ ]');
+  });
+
+  it('should not split inline code with asterisks like `*斜体文本*` onto new lines or insert extra bullets', () => {
+    const inlineMd = '* **斜体文本**：使用 `*斜体文本*` 渲染为 *倾斜文本效果*。';
+    const html = markdownToHtml(inlineMd);
+    expect(html).toContain('<code>*斜体文本*</code>');
+    expect(html).not.toContain('• 斜体文本');
+  });
+
+  it('should preserve 3-level ordered lists containing inline code without turning 3rd level into bullet items', () => {
+    const listMd = '1. 第一级\n   1. 第二级\n      1. 执行 `uname -r` 确认\n      2. 校验 CPU';
+    const html = markdownToHtml(listMd);
+    expect(html).toContain('1. 第一级');
+    expect(html).toContain('1. 第二级');
+    expect(html).toContain('1. 执行 <code>uname -r</code> 确认');
+    expect(html).not.toContain('• 执行');
+  });
+
+  it('should parse markdown formatting inside thinking details block', () => {
+    const blocks = buildFinalBlocks('Body content', '**AssessingPaceofProgress**');
+    const detailsBlock = blocks.find(b => b.type === 'details') as any;
+    expect(detailsBlock).toBeDefined();
+    expect(detailsBlock.blocks[0].type).toBe('paragraph');
+    expect(detailsBlock.blocks[0].text[0].type).toBe('bold');
+  });
+
+  it('should preserve bold tags in buildFooterBlocksFromHtml for thinking details', () => {
+    const html = '<details><summary>🧠 思考过程</summary><b>AssessingPaceofProgress</b></details>';
+    const blocks = buildFooterBlocksFromHtml(html);
+    const detailsBlock = blocks.find((b: any) => b.type === 'details') as any;
+    expect(detailsBlock).toBeDefined();
+    expect(detailsBlock.blocks[0].type).toBe('paragraph');
+    expect(detailsBlock.blocks[0].text[0].type).toBe('bold');
+  });
+
   it('should format footers with standard Telegram tags', () => {
     const input = 'This is the main response.\n\n[footer: Gemini 3.5 Flash (Medium) | 120 | 250 | $0.000084]';
     const html = markdownToHtml(input);
@@ -225,7 +365,7 @@ Thanks for reading! 🚀
     it('should format completed thought blocks with <details open> when isStreaming=true', () => {
       const input = 'Pre-text\n<thought>\nThinking content\n</thought>\nPost-text';
       const html = markdownToHtml(input, true);
-      expect(html).toContain('<details open><summary>🧠 思考过程 (Thinking Process)</summary>');
+      expect(html).toContain('<details open><summary>🧠 正在思考... (Thinking...)</summary>');
     });
   });
 
