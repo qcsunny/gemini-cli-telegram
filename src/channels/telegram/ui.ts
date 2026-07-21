@@ -84,7 +84,8 @@ export function buildModelKeyboard(models: Array<{ id: string; display: string; 
   for (let i = 0; i < models.length; i += chunkSize) {
     const chunk = models.slice(i, i + chunkSize);
     for (const model of chunk) {
-      const label = `${model.active ? '● ' : '○ '}${model.display}`;
+      const activeMarker = model.active ? '● ' : '○ ';
+      const label = `${activeMarker}${model.display}`;
       keyboard.text(label, `/model ${model.id}`);
     }
     keyboard.row();
@@ -170,12 +171,6 @@ export function buildResumeKeyboard(sessions: Array<{ id: string; title: string;
   
   keyboard.text(`${ICONS.back} Main Menu`, '/start');
   return keyboard;
-}
-
-export function buildConfirmationKeyboard(action: string, data: string): InlineKeyboard {
-  return new InlineKeyboard()
-    .text(`${ICONS.success} Confirm`, `${action}_confirm ${data}`)
-    .text(`${ICONS.cancel} Cancel`, '/start');
 }
 
 // ── Message Formatting ──
@@ -283,55 +278,5 @@ export function escapeHtml(text: string): string {
 
 export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength - 3) + '...';
-}
-
-// ── Status Formatting ──
-
-export interface ToolStatus {
-  name: string;
-  status: 'pending' | 'running' | 'success' | 'error';
-  error?: string;
-}
-
-export function formatThinkingStatus(currentStatus: string, details?: string): string {
-  return `${ICONS.thinking} <b>AI is thinking...</b>\n${ICONS.step} ${currentStatus}${details ? `\n   └ <i>${details}</i>` : ''}`;
-}
-
-export function formatToolExecution(tools: ToolStatus[]): string {
-  if (tools.length === 0) return '';
-
-  const statusIcon = (status: ToolStatus['status']): string => {
-    switch (status) {
-      case 'pending': return ICONS.pending;
-      case 'running': return ICONS.executing;
-      case 'success': return ICONS.success;
-      case 'error': return ICONS.error;
-    }
-  };
-
-  const lines = tools.map(tool => {
-    const icon = statusIcon(tool.status);
-    const name = tool.name.length > 40 ? tool.name.substring(0, 37) + '...' : tool.name;
-    if (tool.status === 'error' && tool.error) {
-      const errorMsg = tool.error.length > 50 ? tool.error.substring(0, 47) + '...' : tool.error;
-      return `${icon} <code>${name}</code>\n   └ ${ICONS.error} <i>${errorMsg}</i>`;
-    }
-    return `${icon} <code>${name}</code>`;
-  });
-
-  return [
-    `${ICONS.processing} <b>Executing ${tools.length} tool(s)</b>`,
-    '',
-    ...lines,
-  ].join('\n');
-}
-
-export function formatStepProgress(currentStep: number, totalSteps: number, stepName?: string): string {
-  const progress = '█'.repeat(currentStep) + '░'.repeat(totalSteps - currentStep);
-  return `${ICONS.processing} <b>Step ${currentStep}/${totalSteps}</b> <code>${progress}</code>${stepName ? `\n${ICONS.step} ${stepName}` : ''}`;
-}
-
-export function formatReasoningStatus(reasoning?: string): string {
-  return `${ICONS.reasoning} <b>Analyzing context...</b>${reasoning ? `\n   └ <i>${reasoning.substring(0, 100)}${reasoning.length > 100 ? '...' : ''}</i>` : ''}`;
+  return text.slice(0, maxLength - 1) + '…';
 }

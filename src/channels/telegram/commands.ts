@@ -20,8 +20,14 @@ function getDisplayString(model: string): string {
     'gemini-3.5-flash-high': 'Gemini 3.5 Flash (High)',
     'gemini-3.5-flash-medium': 'Gemini 3.5 Flash (Medium)',
     'gemini-3.5-flash-low': 'Gemini 3.5 Flash (Low)',
+    'gemini-3.6-flash-high': 'Gemini 3.6 Flash (High)',
+    'gemini-3.6-flash-medium': 'Gemini 3.6 Flash (Medium)',
+    'gemini-3.6-flash-low': 'Gemini 3.6 Flash (Low)',
     'claude-3-5-sonnet': 'Claude Sonnet 4.6 (Thinking)',
     'claude-3-opus': 'Claude Opus 4.6 (Thinking)',
+    'claude-sonnet-4-6': 'Claude Sonnet 4.6 (Thinking)',
+    'claude-opus-4-6-thinking': 'Claude Opus 4.6 (Thinking)',
+    'gpt-oss-120b-medium': 'GPT-OSS 120B (Medium)',
   };
   return displayNames[model] || model;
 }
@@ -89,10 +95,10 @@ export function registerCommands(
       await sessionManager.reset(chatId, {
         ...defaultOptions,
         project: defaultProj,
-        model: 'Gemini 3.1 Pro (High)',
+        model: 'Gemini 3.6 Flash (High)',
       });
       await ctx.reply(
-        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.1 Pro (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
+        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.6 Flash (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
       );
     } catch (e) {
@@ -213,7 +219,7 @@ export function registerCommands(
 
       const modelItems = AVAILABLE_MODELS.map((m, i) => ({
         id: (i + 1).toString(),
-        display: getDisplayString(m) !== m ? `${m} — ${getDisplayString(m)}` : m,
+        display: getDisplayString(m),
         active: m === currentModel,
       }));
 
@@ -617,9 +623,9 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
       if (isActive) {
         await sessionManager.reset(chatId, {
           ...defaultOptions,
-          model: 'Gemini 3.1 Pro (High)',
+          model: 'Gemini 3.6 Flash (High)',
         });
-        activeResetMsg = ` This was the active session, so your session has been reset and set to <code>Gemini 3.1 Pro (High)</code>.`;
+        activeResetMsg = ` This was the active session, so your session has been reset and set to <code>Gemini 3.6 Flash (High)</code>.`;
       }
 
       await ctx.reply(`${ICONS.success} <b>Session Deleted</b>\n\nDeleted session ${idx}: "${target.title}".${activeResetMsg}`, {
@@ -1010,10 +1016,10 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
         await sessionManager.reset(chatId, {
           ...defaultOptions,
           project: defaultProj,
-          model: 'Gemini 3.1 Pro (High)',
+          model: 'Gemini 3.6 Flash (High)',
         });
         await ctx.editMessageText(
-          `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.1 Pro (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
+          `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.6 Flash (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
           { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
         );
       } catch (e) {
@@ -1060,7 +1066,7 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
 
       const modelItems = AVAILABLE_MODELS.map((m, i) => ({
         id: (i + 1).toString(),
-        display: getDisplayString(m) !== m ? `${m} — ${getDisplayString(m)}` : m,
+        display: getDisplayString(m),
         active: m === currentModel,
       }));
 

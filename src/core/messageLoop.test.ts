@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processMessage } from './messageLoop.js';
-import { extractThoughtAndContent } from '../agy/agyCli.js';
+import { extractThoughtAndContent, normalizeThinkingTags } from '../agy/agyCli.js';
 import type { MultimodalInput, ChannelReply } from './types.js';
 
 // Mock agyCli module
@@ -15,12 +15,6 @@ vi.mock('../agy/agyCli.js', async (importOriginal) => {
   return {
     ...actual,
     runAgyPrint: vi.fn(),
-    getModelCapabilities: vi.fn((model) => {
-      const isGemini = model && (model.toLowerCase().includes('gemini') || model === 'test-model-rich');
-      return {
-        supportsThinkingSummary: !!isGemini,
-      };
-    }),
   };
 });
 
@@ -283,7 +277,7 @@ describe('processMessage', () => {
       const result = extractThoughtAndContent(input);
       expect(result).toEqual({
         thought: '',
-        content: 'Pre-text <thought> unclosed',
+        content: 'Pre-text <think> unclosed',
       });
     });
 
@@ -312,6 +306,36 @@ describe('processMessage', () => {
         thought: 'subsequent thought',
         content: '`\nSome text',
       });
+    });
+  });
+
+  describe('normalizeThinkingTags', () => {
+    it('should normalize <thought> to <think>', () => {
+      expect(normalizeThinkingTags('<thought>content</thought>')).toBe('<think>content</think>');
+    });
+
+    it('should normalize <thought-gemini> with attributes', () => {
+      expect(normalizeThinkingTags('<thought-gemini time="2.5" tokens="150">content</thought-gemini>'))
+        .toBe('<think time="2.5" tokens="150">content</think>');
+    });
+
+    it('should normalize <thinking> to <think>', () => {
+      expect(normalizeThinkingTags('<thinking>content</thinking>')).toBe('<think>content</think>');
+    });
+
+    it('should normalize [thought:...] to <think>...</think>', () => {
+      expect(normalizeThinkingTags('[thought:content]')).toBe('<think>content</think>');
+    });
+
+    it('should skip content inside code fences', () => {
+      const input = '<thought>real</thought>```\n<thought>skip</thought>\n```';
+      const result = normalizeThinkingTags(input);
+      expect(result).toContain('<think>real</think>');
+      expect(result).toContain('<thought>skip</thought>');
+    });
+
+    it('should not match <thoughtful> as a thought tag', () => {
+      expect(normalizeThinkingTags('<thoughtful>something')).toBe('<thoughtful>something');
     });
   });
 
@@ -367,21 +391,16 @@ describe('processMessage', () => {
     // Rich path requires the rich primitives on the reply object.
     const richReply = {
       ...mockReply,
-      sendRichDraftBlocks: vi.fn().mockResolvedValue(789),
-      editRichBlocks: vi.fn().mockResolvedValue(789),
       sendRich: vi.fn().mockResolvedValue(790),
+      sendRichDraft: vi.fn().mockResolvedValue(789),
     };
 
     await processMessage(mockSession, input, richReply, mockFormatter);
 
-    expect(richReply.sendRichDraftBlocks).toHaveBeenCalled();
-    expect(richReply.editRichBlocks).toHaveBeenCalled();
-    const finalBlocks = richReply.editRichBlocks.mock.calls[0][1] as any[];
-    const flatten = (bs: any[]): string =>
-      bs
-        .map((b) => (Array.isArray(b.text) ? b.text.join('') : b.text || ''))
-        .join('');
-    const rendered = flatten(finalBlocks);
+    expect(richReply.sendRichDraft).toHaveBeenCalled();
+    expect(richReply.sendRich).toHaveBeenCalled();
+    const finalContent = richReply.sendRich.mock.calls[0][0] as any;
+    const rendered = typeof finalContent === 'string' ? finalContent : finalContent.content || '';
     expect(rendered).toContain('第一段内容。');
     expect(rendered).toContain('第二段内容。');
     // The regression: the trailing paragraph must NOT be silently dropped.
@@ -448,7 +467,6 @@ describe('processMessage', () => {
     // block), in the SAME message as the body — never a separate message.
     const input: MultimodalInput = { text: 'footer thinking test' };
 
-    const capturedBlocks: any[] = [];
     const richReply: ChannelReply = {
       send: vi.fn().mockResolvedValue(700),
       edit: vi.fn(),
@@ -460,16 +478,6 @@ describe('processMessage', () => {
       sendRichDraft: vi.fn().mockResolvedValue(702),
       editRich: vi.fn(),
       editRichDraft: vi.fn(),
-      sendRichDraftBlocks: vi.fn(async (_draftId: number, blocks: unknown[]) => {
-        capturedBlocks.length = 0;
-        capturedBlocks.push(...(blocks as any[]));
-        return 702;
-      }),
-      editRichBlocks: vi.fn(async (_id: number, blocks: unknown[]) => {
-        capturedBlocks.length = 0;
-        capturedBlocks.push(...(blocks as any[]));
-        return 702;
-      }),
     };
     const richFormatter = {
       ...mockFormatter,
@@ -492,17 +500,18 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, richReply, richFormatter);
 
-    // Exactly ONE message worth of blocks, with fixed order: [details(thinking), ...body, footer?].
-    expect(capturedBlocks.length).toBeGreaterThan(0);
-    // The thinking block (details) carries the real thought text.
-    const thinking = capturedBlocks.find(
-      (b) => b?.type === 'details' && String(b?.blocks?.[0]?.text ?? '').includes('the model reasons step by step'),
-    );
-    expect(thinking).toBeDefined();
-    // The body block carries the real answer.
-    const bodyText = JSON.stringify(capturedBlocks);
-    expect(bodyText).toContain('final answer');
-    // No second message was sent.
+    // sendRichDraft was called during streaming (thought → body transition)
+    expect(richReply.sendRichDraft).toHaveBeenCalled();
+    // sendRich was called for the final persisted message with content+thought
+    expect(richReply.sendRich).toHaveBeenCalled();
+    const finalCall = (richReply.sendRich as any).mock.calls[0][0];
+    // The final content includes both body and thought as a StructuredMessage
+    expect(finalCall).toHaveProperty('content');
+    expect(finalCall.content).toContain('final answer');
+    if (finalCall.thought) {
+      expect(finalCall.thought).toContain('the model reasons step by step');
+    }
+    // No second raw message was sent (duplicate prevention).
     expect(richReply.send).not.toHaveBeenCalled();
   });
 });

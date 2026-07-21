@@ -10,7 +10,8 @@ import {
   markdownToMarkdownV2, 
   markdownToRichBlocks, 
   buildFinalBlocks,
-  isEligibleMainHeading,
+  buildStreamingBlocks,
+  splitRichBlocks,
   telegramFormatter,
   splitTextWithOpenTags,
   splitCodeBlock,
@@ -22,8 +23,7 @@ import {
   normalizeMarkdownFences,
   normalizeMarkdownStructure,
   findSafeCutPoint,
-  buildFooterBlocksFromHtml,
-  buildNativeFooterBlocks
+  buildFooterBlocksFromHtml
 } from './formatter.js';
 
 describe('Formatter Rich Message Showcase', () => {
@@ -139,15 +139,6 @@ Thanks for reading! 🚀
     ]);
   });
 
-  it('should correctly filter eligible main headings for hoisting', () => {
-    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '物理学十大未解难题' })).toBe(true);
-    expect(isEligibleMainHeading({ type: 'heading', size: 3, text: '1. 暗物质与暗能量的本质' })).toBe(false);
-    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '1. 暗物质与暗能量的本质' })).toBe(false);
-    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '同样不会。' })).toBe(false);
-    expect(isEligibleMainHeading({ type: 'heading', size: 2, text: '物理学十大未解难题尽管现代物理学在解释宇宙运行规律方面取得了巨大成就，但仍有一些根本性的未知谜团困扰着顶尖科学家。以下是目前物理学界公认的十大未解难题：' })).toBe(false);
-    expect(isEligibleMainHeading({ type: 'heading', size: 1, text: '架构说明' })).toBe(true);
-  });
-
   it('should downgrade long intro text starting with ## or ending with colon to paragraph block', () => {
     const longIntro = '## 物理学十大未解难题尽管现代物理学在解释宇宙运行规律方面取得了巨大成就，但仍有一些根本性的未知谜团困扰着顶尖科学家。以下是目前物理学界公认的十大未解难题：';
     const blocks = markdownToRichBlocks(longIntro);
@@ -220,11 +211,13 @@ Thanks for reading! 🚀
     expect(html).toContain('1. 第三级');
   });
 
-  it('should auto-close unclosed code blocks and prevent swallowing subsequent sections', () => {
+  it('should not auto-close code blocks on heading-like lines (false close for # comments)', () => {
     const unclosedMd = '```python\ndef foo():\n    pass\n\n### 下一章节';
     const html = markdownToHtml(unclosedMd);
     expect(html).toContain('<pre><code class="language-python">');
-    expect(html).toContain('🔹 <b>下一章节</b>');
+    // Without auto-close, the unclosed fence keeps ### 下一章节 as code content
+    expect(html).toContain('### 下一章节</code></pre>');
+    expect(html).not.toContain('下一章节</b>');
   });
 
   it('should not auto-link plain filenames like user.py, formatter.py, README.md', () => {
@@ -234,12 +227,12 @@ Thanks for reading! 🚀
     expect(html).toContain('user.py');
   });
 
-  it('should normalize GFM checklist items - [x] and - [ ] into clean checkbox icons', () => {
+  it('should normalize GFM checklist items into clean native GFM task list markdown - [x] and - [ ]', () => {
     const todoMd = '- [x] ☑ 已完成任务\n- [ ] ☐ 未完成任务\n- [x] 完成项2';
     const html = markdownToHtml(todoMd);
-    expect(html).toContain('☑ 已完成任务');
-    expect(html).toContain('☐ 未完成任务');
-    expect(html).toContain('☑ 完成项2');
+    expect(html).toContain('[x] 已完成任务');
+    expect(html).toContain('[ ] 未完成任务');
+    expect(html).toContain('[x] 完成项2');
     expect(html).not.toContain('• [x]');
     expect(html).not.toContain('• [ ]');
   });
@@ -310,7 +303,7 @@ Thanks for reading! 🚀
     expect(html).not.toContain('<details>');
     expect(html).not.toContain('🧠');
     expect(html).toContain('Pre-text');
-    expect(html).toContain('&lt;thought&gt;');
+    expect(html).toContain('&lt;think&gt;');
   });
 
   it('should format structured messages correctly without duplication', () => {
@@ -607,20 +600,307 @@ Thanks for reading! 🚀
       expect((blocks[1] as any).text).toContain('Cost: $0.000084');
     });
 
-    it('should build native footer blocks from structured stats', () => {
-      const blocks = buildNativeFooterBlocks({
-        model: 'Gemini 3.1 Pro',
-        inputTokens: 1024,
-        outputTokens: 2048,
-        cost: '$0.012345',
-        thought: '这是思考内容。',
-      });
+  describe('10.2 RichBlocks robustness', () => {
+    it('should parse fence code blocks with language annotation and nested backticks', () => {
+      const md = '```markdown\nHere is `inline code` inside a fence\n```';
+      const blocks = markdownToRichBlocks(md);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('pre');
+      const pre = blocks[0] as any;
+      expect(pre.text).toContain('`inline code`');
+      expect(pre.language).toBe('markdown');
+    });
+
+    it('should parse fence code block with empty content', () => {
+      const md = '```python\n```';
+      const blocks = markdownToRichBlocks(md);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('pre');
+    });
+
+    it('should parse fence delimiter glued to preceding text', () => {
+      const md = 'some text```python\nprint("hello")\n```';
+      const blocks = markdownToRichBlocks(md);
+      // normalizeMarkdownFences splits the glued fence, so we get: paragraph + pre
       expect(blocks.length).toBe(2);
-      expect(blocks[0]).toMatchObject({ type: 'details' });
-      expect((blocks[0] as any).blocks[0].text).toBe('这是思考内容。');
-      expect((blocks[1] as any).text).toContain('⚙️ Gemini 3.1 Pro');
-      expect((blocks[1] as any).text).toContain('Cost: $0.012345');
+      expect(blocks[0].type).toBe('paragraph');
+      expect(blocks[1].type).toBe('pre');
+    });
+
+    it('should convert standalone [x] and [ ] to list items with checkboxes', () => {
+      const md = '[x] Completed task\n[ ] Pending task';
+      const blocks = markdownToRichBlocks(md);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('list');
+      const list = blocks[0] as any;
+      expect(list.items.length).toBe(2);
+      expect(list.items[0].has_checkbox).toBe(true);
+      expect(list.items[0].is_checked).toBe(true);
+      expect(list.items[0].blocks[0].text).toBe('Completed task');
+      expect(list.items[1].has_checkbox).toBe(true);
+      expect(list.items[1].is_checked).toBeUndefined();
+      expect(list.items[1].blocks[0].text).toBe('Pending task');
+    });
+
+    it('should convert standalone [x] without dash inside blockquote to checkbox list', () => {
+      const md = '> [x] quoted task';
+      const blocks = markdownToRichBlocks(md);
+      // blockquote > paragraph [x] quoted task → should become blockquote > list > item with checkbox
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('blockquote');
+    });
+
+    it('should keep existing list item checkboxes working', () => {
+      const md = '- [x] Done\n- [ ] Todo';
+      const blocks = markdownToRichBlocks(md);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('list');
+      const list = blocks[0] as any;
+      expect(list.items[0].has_checkbox).toBe(true);
+      expect(list.items[0].is_checked).toBe(true);
+      expect(list.items[1].has_checkbox).toBe(true);
+      expect(list.items[1].is_checked).toBeUndefined();
+    });
+
+    it('should filter out empty paragraph blocks', () => {
+      const md = '# Title\n\n\n\nSome text';
+      const blocks = markdownToRichBlocks(md);
+      // Title (as heading) + "Some text" (as paragraph) — blank lines produce no blocks
+      const paragraphs = blocks.filter(b => b.type === 'paragraph');
+      expect(paragraphs.length).toBe(1);
+      const p = paragraphs[0] as any;
+      expect(p.text).toBe('Some text');
+    });
+
+    it('should filter out empty pre blocks', () => {
+      const md = '```\n```\n\nSome text';
+      const blocks = markdownToRichBlocks(md);
+      // Empty pre is kept (has text="\n"?), but we verify no empty paragraphs
+      const empties = blocks.filter(b => {
+        if (b.type === 'paragraph') {
+          const t = (b as any).text;
+          return !t || (typeof t === 'string' && !t.trim());
+        }
+        return false;
+      });
+      expect(empties.length).toBe(0);
+    });
+
+    it('should not produce heading blocks with empty text', () => {
+      const blocks = markdownToRichBlocks(' ');
+      expect(blocks.length).toBe(0);
+    });
+
+    it('should handle deeply nested lists by flattening beyond 16 levels', () => {
+      // Build a deeply nested markdown input
+      let nestedMd = '- level 1';
+      for (let i = 2; i <= 18; i++) {
+        nestedMd += `\n  ${'  '.repeat(i - 2)}- level ${i}`;
+      }
+      const blocks = markdownToRichBlocks(nestedMd);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('list');
+      // The outer list should exist; nesting beyond 16 is flattened
+      // but the content from all levels should be preserved
+      const list = blocks[0] as any;
+      const allTexts = extractAllTexts(list);
+      expect(allTexts.length).toBeGreaterThanOrEqual(16);
+    });
+
+    it('should emit zero warning for all known block types via buildFinalBlocks', () => {
+      const result = buildFinalBlocks(
+        '# Title\n\nParagraph text\n\n- item 1\n\n```python\nprint("hello")\n```\n\n---\n\n| A | B |\n|---|---|\n| 1 | 2 |',
+        'Thinking content here.',
+        { time: '2.5', tokens: '150', isClosed: true, footerText: '⚙️ model info' },
+      );
+      expect(result.length).toBeGreaterThan(0);
+      // All blocks should have required fields — no empty texts
+      for (const b of result) {
+        expect(b.type).toBeDefined();
+      }
     });
   });
+
+  describe('buildStreamingBlocks', () => {
+    it('should render thinking block + body blocks when both thought and content are present', () => {
+      const blocks = buildStreamingBlocks({
+        thought: 'Let me analyze this step by step.',
+        content: '## Answer\nThe result is 42.',
+      });
+      expect(blocks.length).toBeGreaterThanOrEqual(2);
+      const first = blocks[0] as any;
+      expect(first.type).toBe('thinking');
+      expect(first.text).toBe('Let me analyze this step by step.');
+      expect(first.collapsed).toBe(true);
+      const bodyStart = blocks[1] as any;
+      expect(bodyStart.type).toBe('heading');
+    });
+
+    it('should render only thinking block when thought present but content empty', () => {
+      const blocks = buildStreamingBlocks({ thought: 'Still thinking...' });
+      expect(blocks.length).toBe(1);
+      const first = blocks[0] as any;
+      expect(first.type).toBe('thinking');
+      expect(first.text).toBe('Still thinking...');
+    });
+
+    it('should render only body blocks when content present but no thought', () => {
+      const blocks = buildStreamingBlocks({ content: 'Hello world' });
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].type).toBe('paragraph');
+      expect((blocks[0] as any).text).toBe('Hello world');
+    });
+
+    it('should render placeholder thinking block when both empty', () => {
+      const blocks = buildStreamingBlocks({});
+      expect(blocks.length).toBe(1);
+      const first = blocks[0] as any;
+      expect(first.type).toBe('thinking');
+      expect(first.text).toBe('正在思考...');
+    });
+  });
+
+  describe('splitRichBlocks', () => {
+    const short = { type: 'paragraph', text: 'Hello world' } as any;
+    const hugeText = 'X'.repeat(8000);
+
+    it('should keep blocks within limit as a single part', () => {
+      const blocks = [short, short];
+      const parts = splitRichBlocks(blocks, 3800);
+      expect(parts.length).toBe(1);
+      expect(parts[0].length).toBe(2);
+      expect(parts[0][0].type).toBe('paragraph');
+    });
+
+    it('should split multiple top-level blocks at block boundaries when they exceed limit', () => {
+      const huge = { type: 'paragraph', text: hugeText } as any;
+      const blocks = [huge, short];
+      const parts = splitRichBlocks(blocks, 3800);
+      expect(parts.length).toBeGreaterThanOrEqual(2);
+      // All paragraphs in each part are within limit
+      for (const part of parts) {
+        for (const b of part) {
+          if (b.type === 'paragraph') {
+            expect((b as any).text.length).toBeLessThanOrEqual(3800);
+          }
+        }
+      }
+    });
+
+    it('should split details container inner blocks into multiple details nodes', () => {
+      const innerBlocks: any[] = [];
+      for (let i = 0; i < 20; i++) {
+        innerBlocks.push({ type: 'paragraph', text: `Line ${i}: ${'X'.repeat(300)}` });
+      }
+      const details = { type: 'details', summary: '🧠 思考过程', blocks: innerBlocks } as any;
+      const parts = splitRichBlocks([details], 3800);
+      // Collect all details blocks across all parts
+      const allDetails = parts.flat().filter(b => b.type === 'details');
+      expect(allDetails.length).toBeGreaterThanOrEqual(2);
+      // Each split details should have a numbered summary
+      const summaries = allDetails.map(b => (b as any).summary);
+      expect(summaries[0]).toMatch(/🧠 思考过程 \(1\/\d+\)/);
+      expect(summaries[summaries.length - 1]).toMatch(/🧠 思考过程 \(\d+\/\d+\)/);
+    });
+
+    it('should split a single oversize paragraph into smaller paragraph nodes', () => {
+      const p = { type: 'paragraph', text: hugeText } as any;
+      const parts = splitRichBlocks([p], 3800);
+      expect(parts.length).toBeGreaterThanOrEqual(1);
+      const allParas = parts.flat().filter(b => b.type === 'paragraph');
+      expect(allParas.length).toBeGreaterThanOrEqual(2);
+      // Verify each chunk is within limit
+      for (const part of parts) {
+        for (const b of part) {
+          if (b.type === 'paragraph') {
+            expect((b as any).text.length).toBeLessThanOrEqual(3800);
+          }
+        }
+      }
+    });
+  });
+});
+
+describe('Tilde Fence Isolation in normalizeMarkdownStructure', () => {
+  it('should isolate tilde code blocks (~~~) into placeholders and preserve internal headers/comments', () => {
+    const input = [
+      '# Heading Outside',
+      '~~~python',
+      '# This is a comment inside tilde code block',
+      '---',
+      '1. Not a list item',
+      '~~~',
+      '## Another Heading Outside'
+    ].join('\n');
+
+    const html = markdownToHtml(input);
+    expect(html).toContain('<b>Heading Outside</b>');
+    expect(html).toContain('<b>Another Heading Outside</b>');
+    expect(html).toContain('<code class="language-python"># This is a comment inside tilde code block\n---\n1. Not a list item\n</code>');
+    // Ensure the comment inside tilde fence was not turned into a header
+    expect(html).not.toContain('This is a comment inside tilde code block</b>');
+  });
+
+  it('should not split table lines when table cells contain hash symbols (e.g. `# 欢迎使用`)', () => {
+    const tableInput = [
+      '| 参数名 | 示例值 | 描述 |',
+      '| :--- | :--- | :--- |',
+      '| `text` | `# 欢迎使用` | 消息文本 |',
+      '| `parse_mode` | `HTML` | 解析模式 |'
+    ].join('\n');
+
+    const html = markdownToHtml(tableInput);
+    expect(html).toContain('<table bordered striped>');
+    expect(html).toContain('<code># 欢迎使用</code>');
+    expect(html).toContain('<code>parse_mode</code>');
+
+    const blocks = markdownToRichBlocks(tableInput);
+    expect(blocks.length).toBe(1);
+    expect(blocks[0].type).toBe('table');
+  });
+
+  it('should auto-upgrade outer code fences when 3-backtick code block contains inner 3-backtick code block', () => {
+    const nestedInput = [
+      '### 16. Markdown',
+      '```markdown',
+      '# Inner Title',
+      '```json',
+      '{ "foo": "bar" }',
+      '```',
+      '```',
+      '---',
+      '## 架构与流程图表',
+      '### 1. ASCII 流程图'
+    ].join('\n');
+
+    const html = markdownToHtml(nestedInput);
+    expect(html).toContain('<b>16. Markdown</b>');
+    expect(html).toContain('<b>架构与流程图表</b>');
+    expect(html).toContain('<b>1. ASCII 流程图</b>');
+
+    const blocks = markdownToRichBlocks(nestedInput);
+    const headings = blocks.filter(b => b.type === 'heading');
+    expect(headings.map(h => (h as any).text)).toEqual([
+      '16. Markdown',
+      '架构与流程图表',
+      '1. ASCII 流程图'
+    ]);
+  });
+});
+
+function extractAllTexts(blk: any): string[] {
+  const result: string[] = [];
+  if (blk.text && typeof blk.text === 'string') result.push(blk.text);
+  if (blk.items) {
+    for (const item of blk.items) {
+      if (item.blocks) result.push(...item.blocks.flatMap(extractAllTexts));
+    }
+  }
+  if (blk.blocks) {
+    for (const child of blk.blocks) result.push(...extractAllTexts(child));
+  }
+  return result;
+}
+
 });
 

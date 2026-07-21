@@ -30,6 +30,8 @@ const WEB2API_API_KEY  = 'sk-gemini-local';
 
 /** Map from display name → actual web2api model ID */
 const WEB2API_MODEL_MAP: Record<string, string> = {
+  'Web2API: Gemini 3.1 Pro Enhanced':         'gemini-3.1-pro-enhanced',
+  'Web2API: Gemini 3.6 Flash':              'gemini-3.6-flash',
   'Web2API: Gemini 3.5 Flash':              'gemini-3.5-flash',
   'Web2API: Gemini 3.5 Flash Thinking':     'gemini-3.5-flash-thinking',
   'Web2API: Gemini 3.5 Flash Thinking Lite':'gemini-3.5-flash-thinking-lite',
@@ -377,51 +379,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
 
 // ── Model Capabilities & Direct Gemini API ─────────────────────────────────────
 
-export interface ModelCapabilities {
-  supportsThinkingSummary: boolean;
-}
-
-const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
-  'Gemini 3.5 Flash (Medium)': { supportsThinkingSummary: true },
-  'Gemini 3.5 Flash (High)': { supportsThinkingSummary: true },
-  'Gemini 3.5 Flash (Low)': { supportsThinkingSummary: true },
-  'Gemini 3.1 Pro (Low)': { supportsThinkingSummary: true },
-  'Gemini 3.1 Pro (High)': { supportsThinkingSummary: true },
-  'Web2API: Gemini 3.5 Flash Thinking': { supportsThinkingSummary: true },
-  'Web2API: Gemini 3.5 Flash Thinking Lite': { supportsThinkingSummary: true },
-  'Web2API: Gemini 3.1 Pro': { supportsThinkingSummary: true },
-  'Web2API: Gemini 3.5 Flash': { supportsThinkingSummary: true },
-  'Web2API: Gemini Flash Lite': { supportsThinkingSummary: true },
-  'Web2API: Gemini Auto': { supportsThinkingSummary: true },
-  // Claude extended-thinking models — must be declared explicitly since they
-  // don't contain 'gemini' in their name (the heuristic below would miss them).
-  'Claude Sonnet 4.6 (Thinking)': { supportsThinkingSummary: true },
-  'Claude Opus 4.6 (Thinking)': { supportsThinkingSummary: true },
-};
-
-export function getModelCapabilities(modelName?: string): ModelCapabilities {
-  if (!modelName) {
-    return { supportsThinkingSummary: false };
-  }
-  if (MODEL_CAPABILITIES[modelName]) {
-    return MODEL_CAPABILITIES[modelName];
-  }
-  // Any model routed through the local web2api service is treated as supporting
-  // thinking summary, regardless of its display name. This keeps renamed or
-  // custom web2api models on the rich (Option A/B/C) render path.
-  if (isWeb2ApiModel(modelName)) {
-    return { supportsThinkingSummary: true };
-  }
-  // Heuristic: Any model containing 'gemini' in its name is treated as supporting thinking summary.
-  // This allows extensibility so future models require no Telegram layer modifications.
-  const lower = modelName.toLowerCase();
-  if (lower.includes('gemini') || lower.includes('thinking')) {
-    return { supportsThinkingSummary: true };
-  }
-  return { supportsThinkingSummary: false };
-}
-
-export function mapModelToGeminiId(model: string): string {
+function mapModelToGeminiId(model: string): string {
   const lower = model.toLowerCase();
   if (lower.includes('gemini 3.5 flash') || lower.includes('gemini-2.5-flash') || lower.includes('gemini-2.0-flash')) {
     if (lower.includes('thinking')) {
@@ -1138,18 +1096,22 @@ function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefine
   return undefined;
 }
 
-// agy(本地 antigravity cli)模型保持原展示顺序;Web2API Gemini 与 DeepSeek 按能力 强→弱 排列。
 export const AVAILABLE_MODELS = [
-  'Gemini 3.5 Flash (Medium)',
+  'Gemini 3.6 Flash (High)',
+  'Gemini 3.6 Flash (Medium)',
+  'Gemini 3.6 Flash (Low)',
   'Gemini 3.5 Flash (High)',
+  'Gemini 3.5 Flash (Medium)',
   'Gemini 3.5 Flash (Low)',
-  'Gemini 3.1 Pro (Low)',
   'Gemini 3.1 Pro (High)',
+  'Gemini 3.1 Pro (Low)',
   'Claude Sonnet 4.6 (Thinking)',
   'Claude Opus 4.6 (Thinking)',
   'GPT-OSS 120B (Medium)',
   // 代理模型(web2api Gemini + DeepSeek)按指定顺序:
+  'Web2API: Gemini 3.1 Pro Enhanced',
   'Web2API: Gemini 3.1 Pro',
+  'Web2API: Gemini 3.6 Flash',
   'Web2API: Gemini 3.5 Flash Thinking',
   'DeepSeek: Pro Thinking',
   'Web2API: Gemini 3.5 Flash',
@@ -1159,8 +1121,8 @@ export const AVAILABLE_MODELS = [
   'Web2API: Gemini 3.5 Flash Thinking Lite',
   'DeepSeek: Flash Search',
   'DeepSeek: Flash',
-  'Web2API: Gemini Flash Lite',
   'Web2API: Gemini Auto',
+  'Web2API: Gemini Flash Lite',
 ];
 
 export async function getAvailableModels(): Promise<string[]> {
@@ -1168,7 +1130,7 @@ export async function getAvailableModels(): Promise<string[]> {
 }
 
 interface ParsedBlock {
-  type: 'thought' | 'thought-gemini' | 'thinking' | 'bracket';
+  type: 'thought' | 'thought-gemini' | 'thinking' | 'think' | 'bracket';
   startTagIndex: number;
   contentStartIndex: number;
   contentEndIndex: number;
@@ -1176,6 +1138,96 @@ interface ParsedBlock {
   isClosed: boolean;
   time?: string;
   tokens?: string;
+}
+
+/**
+ * Normalize all thinking-tag variants to the canonical `<think>` / `</think>`.
+ *
+ * Conversion map:
+ *   `<thought-gemini ...>` / `<thought ...>` / `<thinking ...>` / `[thought:`
+ *   → `<think ...>`
+ *   `</thought-gemini>` / `</thought>` / `</thinking>` → `</think>`
+ *   `[thought:content]` → `<think>content</think>`
+ *
+ * Content inside ``` code fences and inline `` code is skipped.
+ */
+export function normalizeThinkingTags(text: string): string {
+  const out: string[] = [];
+  let inCodeBlock = false;
+  let inInlineCode = false;
+  let i = 0;
+
+  const peek = (prefix: string): boolean => {
+    if (i + prefix.length > text.length) return false;
+    for (let k = 0; k < prefix.length; k++) {
+      if (text[i + k].toLowerCase() !== prefix[k].toLowerCase()) return false;
+    }
+    return true;
+  };
+
+  const isTagBreak = (pos: number): boolean => {
+    if (pos >= text.length) return true;
+    const c = text[pos];
+    return c === '>' || c === ' ' || c === '\n' || c === '\r' || c === '\t';
+  };
+
+  while (i < text.length) {
+    // Track code fences
+    if (text.startsWith('```', i)) {
+      inCodeBlock = !inCodeBlock;
+      out.push('```');
+      i += 3;
+      continue;
+    }
+    // Track inline code (reset at newline)
+    if (text[i] === '\n') inInlineCode = false;
+    if (text[i] === '`' && !inCodeBlock) {
+      inInlineCode = !inInlineCode;
+      out.push('`');
+      i++;
+      continue;
+    }
+    if (inCodeBlock || inInlineCode) {
+      out.push(text[i]);
+      i++;
+      continue;
+    }
+
+    // Closing tags
+    if (peek('</thought-gemini>')) { out.push('</think>'); i += 17; continue; }
+    if (peek('</thought>'))        { out.push('</think>'); i += 10; continue; }
+    if (peek('</thinking>'))       { out.push('</think>'); i += 11; continue; }
+
+    // Opening tags (longest prefix first)
+    if (peek('<thought-gemini') && isTagBreak(i + 15)) {
+      const gt = text.indexOf('>', i);
+      if (gt !== -1) { out.push(`<think${text.slice(i + 15, gt)}>`); i = gt + 1; continue; }
+    }
+    if (peek('<thought') && !peek('<thought-') && isTagBreak(i + 8)) {
+      const gt = text.indexOf('>', i);
+      if (gt !== -1) { out.push(`<think${text.slice(i + 8, gt)}>`); i = gt + 1; continue; }
+    }
+    if (peek('<thinking') && isTagBreak(i + 9)) {
+      const gt = text.indexOf('>', i);
+      if (gt !== -1) { out.push(`<think${text.slice(i + 9, gt)}>`); i = gt + 1; continue; }
+    }
+
+    // Bracket format: [thought:content]
+    if (peek('[thought:')) {
+      const close = text.indexOf(']', i);
+      if (close !== -1) {
+        const content = text.slice(i + 9, close);
+        out.push(`<think>${content}</think>`);
+        i = close + 1;
+        continue;
+      }
+    }
+
+    out.push(text[i]);
+    i++;
+  }
+
+  return out.join('');
 }
 
 function cleanInnerText(rawText: string): string {
@@ -1197,6 +1249,7 @@ function getEndTagLength(type: ParsedBlock['type']): number {
     case 'thought-gemini': return 17; // '</thought-gemini>'
     case 'thought': return 10;        // '</thought>'
     case 'thinking': return 11;       // '</thinking>'
+    case 'think': return 8;           // '</think>'
     case 'bracket': return 1;          // ']'
   }
 }
@@ -1224,19 +1277,22 @@ export function extractThoughtBlocksAndSegments(text: string): {
   thought: string;
   content: string;
 } {
+  // Normalize all thought-tag variants to canonical <think> before parsing.
+  const normalized = normalizeThinkingTags(text);
+
   const blocks: ParsedBlock[] = [];
   let inCodeBlock = false;
   let inInlineCode = false;
   let hasSeenNonWhitespaceContent = false;
   let i = 0;
 
-  while (i < text.length) {
-    const char = text[i];
+  while (i < normalized.length) {
+    const char = normalized[i];
     if (char === '\n') {
       inInlineCode = false;
     }
 
-    if (text.startsWith('```', i)) {
+    if (normalized.startsWith('```', i)) {
       inCodeBlock = !inCodeBlock;
       i += 3;
       hasSeenNonWhitespaceContent = true;
@@ -1263,19 +1319,26 @@ export function extractThoughtBlocksAndSegments(text: string): {
     let matchedPrefix = '';
     let endTagStr = '';
 
-    if (matchTag(text, i, '<thought-gemini')) {
+    // Canonical <think> tag (from normalizeThinkingTags) checked FIRST.
+    if (matchTag(normalized, i, '<think')) {
+      matchedType = 'think';
+      matchedPrefix = '<think';
+      endTagStr = '</think>';
+    } else if (matchTag(normalized, i, '<thought-gemini')) {
+      // Legacy variant — normalizeThinkingTags should have converted these,
+      // but keep as fallback in case an untagged caller bypasses normalization.
       matchedType = 'thought-gemini';
       matchedPrefix = '<thought-gemini';
       endTagStr = '</thought-gemini>';
-    } else if (matchTag(text, i, '<thought')) {
+    } else if (matchTag(normalized, i, '<thought')) {
       matchedType = 'thought';
       matchedPrefix = '<thought';
       endTagStr = '</thought>';
-    } else if (matchTag(text, i, '<thinking')) {
+    } else if (matchTag(normalized, i, '<thinking')) {
       matchedType = 'thinking';
       matchedPrefix = '<thinking';
       endTagStr = '</thinking>';
-    } else if (startsWithIgnoreCase(text, i, '[thought:')) {
+    } else if (startsWithIgnoreCase(normalized, i, '[thought:')) {
       matchedType = 'bracket';
       matchedPrefix = '[thought:';
       endTagStr = ']';
@@ -1291,39 +1354,40 @@ export function extractThoughtBlocksAndSegments(text: string): {
         startTagEnd = i + matchedPrefix.length;
         contentStart = startTagEnd;
       } else {
-        const gtIdx = text.indexOf('>', i);
+        const gtIdx = normalized.indexOf('>', i);
         if (gtIdx !== -1) {
           startTagEnd = gtIdx + 1;
           contentStart = startTagEnd;
 
-          if (matchedType === 'thought-gemini' || matchedType === 'thought' || matchedType === 'thinking') {
-            const startTagContent = text.slice(i + matchedPrefix.length, gtIdx);
+          // Also handle 'think' for metadata extraction
+          if (matchedType === 'thought-gemini' || matchedType === 'thought' || matchedType === 'thinking' || matchedType === 'think') {
+            const startTagContent = normalized.slice(i + matchedPrefix.length, gtIdx);
             const timeMatch = startTagContent.match(/time=(?:"|')([^"']*?)(?:"|')/i);
             const tokensMatch = startTagContent.match(/tokens=(?:"|')([^"']*?)(?:"|')/i);
             if (timeMatch) time = timeMatch[1];
             if (tokensMatch) tokens = tokensMatch[1];
           }
         } else {
-          startTagEnd = text.length;
-          contentStart = text.length;
+          startTagEnd = normalized.length;
+          contentStart = normalized.length;
         }
       }
 
       let endTagIdx = -1;
-      if (startTagEnd < text.length) {
+      if (startTagEnd < normalized.length) {
         let tempCodeBlock = false;
         let tempInlineCode = false;
         let j = startTagEnd;
-        while (j < text.length) {
-          if (text[j] === '\n') {
+        while (j < normalized.length) {
+          if (normalized[j] === '\n') {
             tempInlineCode = false;
           }
-          if (text.startsWith('```', j)) {
+          if (normalized.startsWith('```', j)) {
             tempCodeBlock = !tempCodeBlock;
             j += 3;
             continue;
           }
-          if (text[j] === '`' && !tempCodeBlock) {
+          if (normalized[j] === '`' && !tempCodeBlock) {
             tempInlineCode = !tempInlineCode;
             j++;
             continue;
@@ -1332,7 +1396,7 @@ export function extractThoughtBlocksAndSegments(text: string): {
             j++;
             continue;
           }
-          if (startsWithIgnoreCase(text, j, endTagStr)) {
+          if (startsWithIgnoreCase(normalized, j, endTagStr)) {
             endTagIdx = j;
             break;
           }
@@ -1343,8 +1407,8 @@ export function extractThoughtBlocksAndSegments(text: string): {
       const isClosed = endTagIdx !== -1;
 
       if (isClosed || !hasSeenNonWhitespaceContent) {
-        const contentEnd = isClosed ? endTagIdx : text.length;
-        const endIndex = isClosed ? endTagIdx + endTagStr.length : text.length;
+        const contentEnd = isClosed ? endTagIdx : normalized.length;
+        const endIndex = isClosed ? endTagIdx + endTagStr.length : normalized.length;
         blocks.push({
           type: matchedType,
           startTagIndex: i,
@@ -1371,13 +1435,13 @@ export function extractThoughtBlocksAndSegments(text: string): {
   let lastIdx = 0;
 
   for (const block of blocks) {
-    const preText = text.slice(lastIdx, block.startTagIndex);
+    const preText = normalized.slice(lastIdx, block.startTagIndex);
     if (preText) {
       segments.push({ type: 'text', value: preText });
       cleanContent += preText;
     }
 
-    const rawInner = text.slice(block.contentStartIndex, block.contentEndIndex);
+    const rawInner = normalized.slice(block.contentStartIndex, block.contentEndIndex);
     const cleanedInner = cleanInnerText(rawInner);
     thoughts.push(cleanedInner);
 
@@ -1387,10 +1451,10 @@ export function extractThoughtBlocksAndSegments(text: string): {
       block,
     });
 
-    lastIdx = block.isClosed ? block.endTagIndex + getEndTagLength(block.type) : text.length;
+    lastIdx = block.isClosed ? block.endTagIndex + getEndTagLength(block.type) : normalized.length;
   }
 
-  const postText = text.slice(lastIdx);
+  const postText = normalized.slice(lastIdx);
   if (postText) {
     segments.push({ type: 'text', value: postText });
     cleanContent += postText;
@@ -1413,7 +1477,7 @@ export function extractThoughtAndContent(text: string): {
   let geminiTime: string | undefined;
   let geminiTokens: string | undefined;
   for (const seg of res.segments) {
-    if (seg.type === 'thought' && seg.block?.type === 'thought-gemini') {
+    if (seg.type === 'thought' && (seg.block?.type === 'thought-gemini' || seg.block?.type === 'think')) {
       if (seg.block.time && !geminiTime) geminiTime = seg.block.time;
       if (seg.block.tokens && !geminiTokens) geminiTokens = seg.block.tokens;
     }
