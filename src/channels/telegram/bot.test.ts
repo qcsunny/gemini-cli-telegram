@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TelegramBot, buildChannelReply, clearDraftIds } from './bot.js';
+import { TelegramBot, buildChannelReply, record429Backoff, reset429Backoff, is429Error, get429RetryAfter } from './bot.js';
 import { processMessage } from '../../core/messageLoop.js';
 import * as fs from 'fs/promises';
 
@@ -150,23 +150,47 @@ describe('TelegramBot', () => {
     const chatId = 12345;
 
     beforeEach(() => {
-      clearDraftIds();
+      const mockRaw = {
+        sendRichMessage: vi.fn().mockResolvedValue({ message_id: 888 }),
+        sendRichMessageDraft: vi.fn().mockResolvedValue({}),
+        editMessageText: vi.fn().mockResolvedValue(true),
+      };
       mockCtx = {
         reply: vi.fn().mockResolvedValue({ message_id: 999 }),
         replyWithDocument: vi.fn().mockResolvedValue(undefined),
         api: {
           deleteMessage: vi.fn().mockResolvedValue(true),
-          editMessageText: vi.fn().mockResolvedValue(true),
-          raw: {
-            sendRichMessage: vi.fn().mockResolvedValue({ message_id: 888 }),
-            sendRichMessageDraft: vi.fn().mockResolvedValue({}),
-            editMessageText: vi.fn().mockResolvedValue(true),
-          },
+          editMessageText: vi.fn().mockImplementation((chatId, messageId, textOrRichMessage, other) => {
+            return mockRaw.editMessageText({
+              chat_id: chatId,
+              message_id: messageId,
+              ...(typeof textOrRichMessage === 'string'
+                ? { text: textOrRichMessage }
+                : { rich_message: textOrRichMessage }),
+              ...(other || {}),
+            });
+          }),
+          sendRichMessage: vi.fn().mockImplementation((chatId, richMessage, other) => {
+            return mockRaw.sendRichMessage({
+              chat_id: chatId,
+              rich_message: richMessage,
+              ...(other || {}),
+            });
+          }),
+          sendRichMessageDraft: vi.fn().mockImplementation((chatId, draftId, richMessage, other) => {
+            return mockRaw.sendRichMessageDraft({
+              chat_id: chatId,
+              draft_id: draftId,
+              rich_message: richMessage,
+              ...(other || {}),
+            });
+          }),
+          raw: mockRaw,
         },
       };
     });
 
-    it('should successfully send Rich HTML (Option A) and clear draft ID', async () => {
+    it('should successfully send Rich Blocks (Option A) and clear draft ID', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('**bold** text');
 
@@ -175,7 +199,7 @@ describe('TelegramBot', () => {
         rich_message: expect.any(Object),
       });
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
-      expect(parsed).toHaveProperty('html');
+      expect(parsed).toHaveProperty('blocks');
       expect(msgId).toBe(888);
     });
 
@@ -187,7 +211,7 @@ describe('TelegramBot', () => {
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
         chat_id: chatId,
         message_thread_id: 42,
-        rich_message: { html: expect.any(String) }
+        rich_message: { blocks: expect.any(Array) }
       }));
 
       await reply.sendRichDraft!('Hello Draft!');
@@ -198,9 +222,9 @@ describe('TelegramBot', () => {
       }));
     });
 
-    it('should fallback to Option B (blocks) if Option A (HTML) throws', async () => {
-      // Option A throws error
-      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('HTML not supported'));
+    it('should fallback to Option B (HTML) if Option A (blocks) throws', async () => {
+      // Option A (blocks) throws error
+      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('blocks not supported'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('some text');
@@ -211,7 +235,7 @@ describe('TelegramBot', () => {
         rich_message: expect.any(Object),
       });
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[1][0].rich_message;
-      expect(parsed).toHaveProperty('blocks');
+      expect(parsed).toHaveProperty('html');
       expect(msgId).toBe(888);
     });
 
@@ -319,7 +343,7 @@ describe('TelegramBot', () => {
         expect.objectContaining({
           chat_id: chatId,
           rich_message: expect.objectContaining({
-            html: expect.any(String),
+            blocks: expect.any(Array),
           }),
         })
       );
@@ -390,6 +414,21 @@ describe('TelegramBot', () => {
       mockCtx.api.raw.sendRichMessageDraft.mockClear();
       await reply.sendPlain('stream chunk 3');
       expect(mockCtx.api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
+    });
+
+    it('should detect 429 error and extract retry_after', () => {
+      const err1 = { error_code: 429, parameters: { retry_after: 5 } };
+      expect(is429Error(err1)).toBe(true);
+      expect(get429RetryAfter(err1)).toBe(5);
+
+      const err2 = new Error('Too Many Requests: retry after 3');
+      expect(is429Error(err2)).toBe(true);
+      expect(get429RetryAfter(err2)).toBeUndefined();
+    });
+
+    it('should record 429 backoff and handle reset', () => {
+      expect(() => record429Backoff(12345, 2)).not.toThrow();
+      expect(() => reset429Backoff(12345)).not.toThrow();
     });
   });
 });

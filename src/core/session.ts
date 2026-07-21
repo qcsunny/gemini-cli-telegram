@@ -383,7 +383,7 @@ export class SessionManager {
 
     const conversationId = (await getConversationId(chatId)) || undefined;
     const storedModel = await getStoredModel(chatId);
-    const modelToUse = storedModel || options.model || 'Gemini 3.1 Pro (High)';
+    const modelToUse = storedModel || options.model || 'Gemini 3.6 Flash (High)';
     const sendMedia = this.sendMediaFactory?.(chatId);
 
     const session: DaemonSession = {
@@ -406,7 +406,7 @@ export class SessionManager {
       sendMedia,
       autopilot: undefined,
       config: {
-        getModel: () => session.model || 'Gemini 3.1 Pro (High)',
+        getModel: () => session.model || 'Gemini 3.6 Flash (High)',
         setModel: (modelName: string) => {
           session.model = modelName;
           setConversation(chatId, session.conversationId || '', session.currentProject?.path || process.cwd(), modelName).catch(err => {

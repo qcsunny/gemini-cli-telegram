@@ -8,10 +8,11 @@ import MarkdownIt from 'markdown-it';
 import markdownItCjkFriendly from 'markdown-it-cjk-friendly';
 import type { MessageFormatter, StructuredMessage } from '../../core/types.js';
 import type { RichBlock } from './richMessage.js';
-import type { RichText } from '@grammyjs/types/rich.js';
+import type { RichText, InputRichBlockListItem } from '@grammyjs/types/rich.js';
 import { extractThoughtBlocksAndSegments } from '../../agy/agyCli.js';
 
-const TELEGRAM_MAX_LENGTH = 4096;
+const TELEGRAM_HTML_MAX_LENGTH = 4096;
+export const TELEGRAM_RICH_MAX_LENGTH = 30000;
 
 // ── Types ──
 
@@ -143,7 +144,7 @@ function pushTextTokens(text: string, tokens: HtmlToken[]) {
     if (subPart.toLowerCase().startsWith('<br')) {
       tokens.push({ type: 'break', value: subPart });
     } else {
-      tokens.push({ type: 'text', value: subPart });
+      tokens.push({ type: 'text', value: subPart.replace(/<(?!\/?br\s*\/?>|!\[CDATA\[|!--)/gi, '&lt;') });
     }
   }
 }
@@ -452,24 +453,24 @@ export const telegramFormatter: MessageFormatter = {
   chunkText(text: string): string[] {
     if (text.startsWith('___RAW_HTML___')) {
       const htmlText = text.substring('___RAW_HTML___'.length);
-      return chunkAnswerBody(htmlText, TELEGRAM_MAX_LENGTH).map(c => '___RAW_HTML___' + c);
+      return chunkAnswerBody(htmlText, TELEGRAM_HTML_MAX_LENGTH).map(c => '___RAW_HTML___' + c);
     }
-    if (text.length <= TELEGRAM_MAX_LENGTH) {
+    if (text.length <= TELEGRAM_HTML_MAX_LENGTH) {
       return [text];
     }
     const chunks: string[] = [];
     let remaining = text;
     while (remaining.length > 0) {
-      if (remaining.length <= TELEGRAM_MAX_LENGTH) {
+      if (remaining.length <= TELEGRAM_HTML_MAX_LENGTH) {
         chunks.push(remaining);
         break;
       }
-      let splitAt = remaining.lastIndexOf('\n', TELEGRAM_MAX_LENGTH);
+      let splitAt = remaining.lastIndexOf('\n', TELEGRAM_HTML_MAX_LENGTH);
       if (splitAt <= 0) {
-        splitAt = remaining.lastIndexOf(' ', TELEGRAM_MAX_LENGTH);
+        splitAt = remaining.lastIndexOf(' ', TELEGRAM_HTML_MAX_LENGTH);
       }
       if (splitAt <= 0) {
-        splitAt = TELEGRAM_MAX_LENGTH;
+        splitAt = TELEGRAM_HTML_MAX_LENGTH;
       }
       chunks.push(remaining.substring(0, splitAt));
       remaining = remaining.substring(splitAt).trimStart();
@@ -478,10 +479,10 @@ export const telegramFormatter: MessageFormatter = {
   },
 
   truncateForEdit(text: string): string {
-    if (text.length <= TELEGRAM_MAX_LENGTH) {
+    if (text.length <= TELEGRAM_HTML_MAX_LENGTH) {
       return text;
     }
-    return text.substring(0, TELEGRAM_MAX_LENGTH - 4) + '\n...';
+    return text.substring(0, TELEGRAM_HTML_MAX_LENGTH - 4) + '\n...';
   },
 
   /**
@@ -493,11 +494,11 @@ export const telegramFormatter: MessageFormatter = {
    * short marker in between. The full, correct message replaces this at finalize.
    */
   truncateForStream(text: string): string {
-    if (text.length <= TELEGRAM_MAX_LENGTH) {
+    if (text.length <= TELEGRAM_HTML_MAX_LENGTH) {
       return text;
     }
     const headLen = 1600;
-    const tailLen = TELEGRAM_MAX_LENGTH - headLen - 60;
+    const tailLen = TELEGRAM_HTML_MAX_LENGTH - headLen - 60;
     const head = text.substring(0, headLen);
     const tail = text.substring(text.length - tailLen);
     const omitted = text.length - headLen - tailLen;
@@ -632,12 +633,18 @@ function appendParagraphSeparator(state: RenderState) {
   state.text += '\n\n';
 }
 
-function appendListPrefix(state: RenderState) {
+function appendListPrefix(state: RenderState, nextText?: string) {
   const top = state.listStack[state.listStack.length - 1];
   if (!top) return;
   top.index += 1;
-  const indent = '    '.repeat(Math.max(0, state.listStack.length - 1));
-  const prefix = top.type === 'ordered' ? `${top.index}. ` : '\u2022 ';
+  const indent = '\u00A0\u00A0\u00A0\u00A0'.repeat(Math.max(0, state.listStack.length - 1));
+  let prefix = '';
+  if (top.type === 'ordered') {
+    prefix = `${top.index}. `;
+  } else {
+    const isTask = nextText && /^\s*(?:\[[xX]\]|\[\s*\]|☑|☐|✔|✖)/.test(nextText);
+    prefix = isTask ? '' : '\u2022 ';
+  }
   state.text += `${indent}${prefix}`;
 }
 
@@ -758,9 +765,16 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         state.listStack.pop();
         if (state.listStack.length === 0) state.text += '\n';
         break;
-      case 'list_item_open':
-        appendListPrefix(state);
+      case 'list_item_open': {
+        let nextText = '';
+        if (tokens[i + 1]?.type === 'inline' && tokens[i + 1]?.children?.[0]?.content) {
+          nextText = tokens[i + 1].children![0].content || '';
+        } else if (tokens[i + 2]?.type === 'inline' && tokens[i + 2]?.children?.[0]?.content) {
+          nextText = tokens[i + 2].children![0].content || '';
+        }
+        appendListPrefix(state, nextText);
         break;
+      }
       case 'list_item_close':
         if (!state.text.endsWith('\n')) state.text += '\n';
         break;
@@ -1263,29 +1277,51 @@ export function normalizeMarkdownFences(markdown: string): string {
   //    own line, in both directions:
   //    - opener glued to preceding text: `正文```python` -> `正文\n```python`
   //    - closing fence glued to following text: `code```后面` -> `code\n```\n后面`
-  let text = markdown.replace(/(^|[^`\n])```([a-zA-Z0-9_+#.-]*)/g, '$1\n```$2');
-  text = text.replace(/```([a-zA-Z0-9_+#.-]*)\n?([^\n`])/g, '```$1\n$2');
-  // 2. Isolate every fence delimiter (a line that is only ``` + optional lang)
+  //    Also handles 4+ backtick fences (````markdown, ````` etc) in the same way.
+  let text = markdown.replace(/(^|[^`\n])(`{3,})([a-zA-Z0-9_+#.-]*)/g, '$1\n$2$3');
+  text = text.replace(/(`{3,})([a-zA-Z0-9_+#.-]*)\n?([^\n`])/g, '$1$2\n$3');
+  // 2. Isolate every fence delimiter (a line that is only ````` + optional lang)
   //    with blank lines so markdown-it parses it as a real fence instead of
-  //    leaving raw ``` (which Telegram renders as one giant code block).
+  //    leaving raw ```` (which Telegram renders as one giant code block).
+  //    Fence-count-aware: skips inner fences (lower backtick count) when inside
+  //    an outer fence so that ````markdown` containing ```python is preserved.
   const lines = text.split('\n');
-  const fenceRe = /^(\s*)```([a-zA-Z0-9_+#.-]*)?\s*$/;
+  const fenceRe = /^(\s*)(`{3,})([a-zA-Z0-9_+#.-]*)?\s*$/;
   const out: string[] = [];
   let prevWasBlank = true;
+  let openFenceBackticks = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const isFence = fenceRe.test(line);
+    const fenceMatch = line.match(fenceRe);
+    const isFence = !!fenceMatch;
     if (isFence) {
-      if (!prevWasBlank) {
-        out.push('');
-        prevWasBlank = true;
-      }
-      out.push(line);
-      if (i + 1 < lines.length && lines[i + 1].trim() !== '' && !fenceRe.test(lines[i + 1])) {
-        out.push('');
-        prevWasBlank = true;
+      const backtickCount = fenceMatch![2].length;
+      if (openFenceBackticks === 0) {
+        // Not inside a fence — this is a real fence opener
+        openFenceBackticks = backtickCount;
+        if (!prevWasBlank) {
+          out.push('');
+          prevWasBlank = true;
+        }
+        out.push(line);
+        if (i + 1 < lines.length && lines[i + 1].trim() !== '' && !fenceRe.test(lines[i + 1])) {
+          out.push('');
+          prevWasBlank = true;
+        } else {
+          prevWasBlank = line.trim() === '';
+        }
+      } else if (backtickCount >= openFenceBackticks) {
+        // Closing fence: same or more backticks than opener
+        openFenceBackticks = 0;
+        if (!prevWasBlank) {
+          out.push('');
+        }
+        out.push(line);
+        prevWasBlank = false;
       } else {
-        prevWasBlank = line.trim() === '';
+        // Inner fence (fewer backticks than outer) — treat as code content
+        out.push(line);
+        prevWasBlank = false;
       }
     } else {
       out.push(line);
@@ -1306,55 +1342,130 @@ export function normalizeMarkdownFences(markdown: string): string {
  *    lines (so it merges with adjacent text instead of becoming an `<hr>`) is
  *    given the blank lines it needs to be recognized as a separator.
  */
+export function normalizeNestedCodeFences(markdown: string): string {
+  if (!markdown) return markdown;
+  const lines = markdown.split('\n');
+
+  type FenceLine = { index: number; char: string; count: number; indent: string; info: string };
+  const fenceLines: FenceLine[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(/^([ \t]*)(`{3,}|~{3,})(.*)$/);
+    if (match) {
+      const indent = match[1];
+      const fenceStr = match[2];
+      const char = fenceStr[0];
+      const count = fenceStr.length;
+      const info = match[3];
+      // Per CommonMark spec (sec 4.5), a code fence info string cannot contain backticks or tildes.
+      if (info.includes('`') || info.includes('~')) continue;
+      fenceLines.push({ index: i, char, count, indent, info });
+    }
+  }
+
+  if (fenceLines.length < 4) return markdown;
+
+  const stack: { fence: FenceLine; maxInnerCount: number }[] = [];
+  const upgrades = new Map<number, number>();
+
+  for (const f of fenceLines) {
+    if (stack.length === 0) {
+      stack.push({ fence: f, maxInnerCount: 0 });
+    } else {
+      const top = stack[stack.length - 1];
+      const isClosingCandidate = f.char === top.fence.char && f.info.trim() === '';
+
+      if (isClosingCandidate && stack.length === 1) {
+        const outer = stack.pop()!;
+        if (outer.maxInnerCount >= outer.fence.count) {
+          const requiredCount = outer.maxInnerCount + 1;
+          upgrades.set(outer.fence.index, requiredCount);
+          upgrades.set(f.index, requiredCount);
+        }
+      } else {
+        if (f.char === top.fence.char && f.count >= top.fence.count) {
+          top.maxInnerCount = Math.max(top.maxInnerCount, f.count);
+        }
+        if (isClosingCandidate && stack.length > 1) {
+          stack.pop();
+        } else {
+          stack.push({ fence: f, maxInnerCount: 0 });
+        }
+      }
+    }
+  }
+
+  if (upgrades.size === 0) return markdown;
+
+  const result = [...lines];
+  for (const [lineIdx, newCount] of upgrades.entries()) {
+    const f = fenceLines.find(x => x.index === lineIdx)!;
+    result[lineIdx] = `${f.indent}${f.char.repeat(newCount)}${f.info}`;
+  }
+  return result.join('\n');
+}
+
 export function normalizeMarkdownStructure(markdown: string): string {
   if (!markdown) return markdown;
+  markdown = normalizeNestedCodeFences(markdown);
 
-  // Process line-by-line to protect fenced code blocks (```) and auto-close unclosed fences
-  // before next section headings or section dividers, ensuring code block pairing never flips.
+  // Process line-by-line to extract fenced code blocks (````) into placeholders so
+  // subsequent normalizations (heading spacing, HR isolation, etc.) never corrupt code.
+  // Uses backtick-count-aware matching: a ````markdown` fence (4+ backticks) correctly
+  // contains inner ```python fences (3 backticks) without premature closing.
+  // Unclosed fences are closed at EOF, not heuristically — headings inside Python/YAML
+  // code (`# comment`) would otherwise trigger false auto-close and split the block.
   const lines = markdown.split('\n');
   const resultLines: string[] = [];
   const codeBlocks: string[] = [];
 
-  let inBlock = false;
+  let openFenceChar: string | null = null;
+  let openFenceCount = 0;
   let currentBlockLines: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const isFenceLine = /^[ \t]*```/.test(line);
+    const fenceMatch = line.match(/^([ \t]*)(`{3,}|~{3,})(.*)$/);
 
-    if (isFenceLine) {
-      if (!inBlock) {
-        inBlock = true;
+    if (fenceMatch) {
+      const fenceStr = fenceMatch[2];
+      const fenceChar = fenceStr[0];
+      const fenceCount = fenceStr.length;
+      const info = fenceMatch[3];
+
+      // CommonMark spec: info string cannot contain backticks/tildes
+      if (openFenceCount === 0 && (info.includes('`') || info.includes('~'))) {
+        resultLines.push(line);
+        continue;
+      }
+
+      if (openFenceCount === 0) {
+        openFenceChar = fenceChar;
+        openFenceCount = fenceCount;
         currentBlockLines = [line];
-      } else {
+      } else if (fenceChar === openFenceChar && fenceCount >= openFenceCount) {
         currentBlockLines.push(line);
-        inBlock = false;
+        openFenceChar = null;
+        openFenceCount = 0;
         const blockText = currentBlockLines.join('\n');
         codeBlocks.push(blockText);
         resultLines.push(`__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length - 1}__`);
         currentBlockLines = [];
+      } else {
+        currentBlockLines.push(line);
       }
     } else {
-      if (inBlock) {
-        if (/^(#{1,6}\s+|---|———)/.test(line.trim())) {
-          currentBlockLines.push('```');
-          const blockText = currentBlockLines.join('\n');
-          codeBlocks.push(blockText);
-          resultLines.push(`__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length - 1}__`);
-          inBlock = false;
-          currentBlockLines = [];
-          resultLines.push(line);
-        } else {
-          currentBlockLines.push(line);
-        }
+      if (openFenceCount > 0) {
+        currentBlockLines.push(line);
       } else {
         resultLines.push(line);
       }
     }
   }
 
-  if (inBlock) {
-    currentBlockLines.push('```');
+  if (openFenceCount > 0 && openFenceChar) {
+    const closeFence = openFenceChar.repeat(openFenceCount);
+    currentBlockLines.push(closeFence);
     const blockText = currentBlockLines.join('\n');
     codeBlocks.push(blockText);
     resultLines.push(`__CODE_BLOCK_PLACEHOLDER_${codeBlocks.length - 1}__`);
@@ -1362,12 +1473,35 @@ export function normalizeMarkdownStructure(markdown: string): string {
 
   let text = resultLines.join('\n');
 
-  // Normalize GFM checklist items `- [x]`, `- [ ]`, `- [x] ☑`, `- [ ] ☐`
-  // into clean checkbox icons `☑ ` and `☐ ` without redundant bullet dots or `[x]` tags.
-  text = text.replace(/^([ \t]*)[*+\-]\s*\[[xX]\]\s*☑?\s*/gm, '$1☑ ');
-  text = text.replace(/^([ \t]*)[*+\-]\s*\[\s*\]\s*☐?\s*/gm, '$1☐ ');
-  text = text.replace(/^([ \t]*)\[[xX]\]\s*☑?\s*/gm, '$1☑ ');
-  text = text.replace(/^([ \t]*)\[\s*\]\s*☐?\s*/gm, '$1☐ ');
+  // Detect table headers where the model prepended a caption as the first cell
+  // without a leading pipe (e.g. `1.人员信息表|员工编号|姓名|...`) causing a
+  // column-count mismatch (header has 1 more cell than separator). Split the
+  // caption onto its own line so markdown-it can parse the table.
+  let tableLines = text.split('\n');
+  for (let i = 0; i < tableLines.length - 1; i++) {
+    const line = tableLines[i];
+    const nextLine = tableLines[i + 1];
+    if (line.includes('|') && !line.startsWith('|') &&
+        nextLine.startsWith('|') && /^\|[-:\s]+\|/.test(nextLine)) {
+      const headerCells = line.split('|').filter(Boolean).length;
+      const sepCells = nextLine.split('|').filter(Boolean).length;
+      if (headerCells === sepCells + 1) {
+        const firstPipe = line.indexOf('|');
+        tableLines.splice(i, 1, line.slice(0, firstPipe), line.slice(firstPipe));
+        i++;
+      }
+    }
+  }
+  text = tableLines.join('\n');
+
+  // Fix ordered list items missing space after dot (e.g. `1.第一阶段` → `1. 第一阶段`)
+  // so markdown-it recognizes them as ordered list items.
+  text = text.replace(/^(\s*\d+)\.([^\s\d])/gm, '$1. $2');
+
+  // Normalize GFM checklist items (`- [x]`, `- [ ]`, `- ☑ [x]`, `- ☐ [ ]`, `- ☑`, `- ☐`)
+  // into clean native GFM task list markdown (`- [x] ` and `- [ ] `).
+  text = text.replace(/^([ \t]*)[*+\-]?\s*(?:☑|☑️|✔|✔️|\[[xX]\])\s*(?:\[[xX]\]|☑|☑️|✔|✔️)?\s*/gm, '$1- [x] ');
+  text = text.replace(/^([ \t]*)[*+\-]?\s*(?:☐|☐️|\[\s*\])\s*(?:\[\s*\]|☐|☐️)?\s*/gm, '$1- [ ] ');
 
   // Convert model-emitted collapsible details prompts like `点击展开...` / `▶ ...` / `▼ ...`
   // followed by a blockquote `> ...` into `> [details] Summary\n> Content` so they render
@@ -1388,7 +1522,7 @@ export function normalizeMarkdownStructure(markdown: string): string {
 
   // Normalize indented decimal sub-numbering like `   1.1 ` or `      1.1.1 `
   // into standard Markdown list items `   1. ` so markdown-it parses them into 3-level lists.
-  text = text.replace(/^([ \t]+)\d+(?:\.\d+)+\s+/gm, '$11. ');
+  text = text.replace(/^([ \t]+)\d+(?:\.\d+)+\s+/gm, (_, indent: string) => `${indent}1. `);
 
   // Process bullet markers line by line, skipping table lines (containing '|') from bullet splitting
   // so cell values like `+15.4%`, `-5%`, `+85%` are never broken into newlines or bullet points.
@@ -1419,8 +1553,12 @@ export function normalizeMarkdownStructure(markdown: string): string {
   // (e.g. `## 1. 范式转移...AGI）### 1.1 大模型...`) is not recognized by the
   // parser because the `#` is not at line start. Split it onto its own line so
   // it renders as a real sub-heading instead of being swallowed into the prior
-  // heading's text.
-  text = text.replace(/([^\n\s#])(#{1,6}\s+[^\n]+)/g, '$1\n$2');
+  // heading's text. We skip table lines (containing '|') so `#` inside table cells
+  // (e.g. `# 欢迎使用`) is never broken onto a new line.
+  text = text.split('\n').map(line => {
+    if (line.includes('|')) return line;
+    return line.replace(/([^\n\s#])(#{1,6}\s+[^\n]+)/g, '$1\n$2');
+  }).join('\n');
   // Collapse the excessive blank lines we may have introduced.
   text = text.replace(/\n{3,}/g, '\n\n');
 
@@ -1593,7 +1731,7 @@ export function markdownToHtml(input: string | StructuredMessage, isStreaming = 
         input.geminiTokens
       );
       if (contentHtml.trim()) {
-        html = `${contentHtml.trim()}<br><br>${thoughtHtml}`;
+        html = `${thoughtHtml}<br><br>${contentHtml.trim()}`;
       } else {
         html = thoughtHtml;
       }
@@ -2076,7 +2214,7 @@ function parseRichListToken(
 ): { block: RichBlock; nextIndex: number } {
   const openToken = tokens[startIndex];
   const closeType = openToken.type.replace('open', 'close');
-  const items: Array<{ blocks: RichBlock[] }> = [];
+  const items: InputRichBlockListItem<never>[] = [];
 
   let idx = startIndex + 1;
   while (idx < tokens.length && tokens[idx].type !== closeType) {
@@ -2103,7 +2241,35 @@ function parseRichListToken(
         idx++;
       }
       if (itemBlocks.length > 0) {
-        items.push({ blocks: itemBlocks });
+        // Detect checkbox prefix [x] or [ ] in the first paragraph
+        let hasCheckbox: true | undefined;
+        let isChecked: true | undefined;
+        const firstBlock = itemBlocks[0];
+        if (firstBlock && firstBlock.type === 'paragraph') {
+          const rawText = extractStringFromRichText(firstBlock.text).trim();
+          const cbMatch = rawText.match(/^\[([ xX])\]\s*/);
+          if (cbMatch) {
+            hasCheckbox = true;
+            if (cbMatch[1] !== ' ') isChecked = true;
+            // Strip checkbox prefix from the RichText
+            const prefixLen = cbMatch[0].length;
+            if (typeof firstBlock.text === 'string') {
+              firstBlock.text = firstBlock.text.slice(prefixLen);
+            } else if (Array.isArray(firstBlock.text)) {
+              const arr = firstBlock.text;
+              const first = arr[0];
+              if (typeof first === 'string' && first.startsWith(cbMatch[0])) {
+                arr[0] = first.slice(prefixLen);
+              }
+            }
+          }
+        }
+        const item: InputRichBlockListItem<never> = { blocks: itemBlocks };
+        if (hasCheckbox) {
+          item.has_checkbox = true;
+          if (isChecked) item.is_checked = true;
+        }
+        items.push(item);
       }
     } else {
       idx++;
@@ -2114,7 +2280,7 @@ function parseRichListToken(
   const isOrdered = openType === 'ordered_list_open';
 
   return {
-    block: { type: 'list', ...(isOrdered ? { is_ordered: true } : {}), items },
+    block: { type: 'list', is_ordered: isOrdered, items } as RichBlock,
     nextIndex: idx,
   };
 }
@@ -2125,12 +2291,18 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
   // tokens. Restored as mathematical_expression entities in inlineToRichText.
   const { text: placeholderText, math } = extractMath(markdown ?? '');
   mathPlaceholderStore = math;
+  // Normalize fences (isolate ` ``` ` glued to text, surround with blank lines)
+  // BEFORE structure normalization so markdown-it recognizes them as real fences.
+  // The HTML path (markdownToHtmlSnippet) already does this; the RichBlocks path
+  // was missing this step, causing fence code blocks with nested backticks or
+  // language annotations like ````markdown` to fail parsing.
+  const fenced = normalizeMarkdownFences(placeholderText);
   // Normalize structure (heading/bullet spacing, mid-line bullet splits,
   // glued `---` separators) BEFORE parsing — without this the streaming
   // render path parsed the raw markdown directly and collapsed bullets
   // that the model joined on a single line. The HTML path already runs
   // its own normalization; this keeps the RichBlocks path consistent.
-  const tokens = md.parse(normalizeMarkdownStructure(placeholderText), {}) as any as MarkdownToken[];
+  const tokens = md.parse(normalizeMarkdownStructure(fenced), {}) as any as MarkdownToken[];
   const blocks: RichBlock[] = [];
 
   for (let i = 0; i < tokens.length; i++) {
@@ -2273,8 +2445,129 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
     blocks.push({ type: 'paragraph', text: markdown.trim() });
   }
 
+  // ── Post-processing ──
+
+  // 1. Standalone checkbox conversion: paragraphs starting with [x] or [ ]
+  //    that are NOT inside a list are wrapped into a single-item list block so
+  //    Telegram renders them as native checkboxes instead of plain text.
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const b = blocks[bi];
+    if (b.type === 'paragraph') {
+      const rawText = extractStringFromRichText(b.text).trim();
+      const cbMatch = rawText.match(/^\[([ xX])\]\s*/);
+      if (cbMatch) {
+        const prefixLen = cbMatch[0].length;
+        let strippedText: RichText = b.text;
+        if (typeof strippedText === 'string') {
+          strippedText = strippedText.slice(prefixLen);
+        } else if (Array.isArray(strippedText)) {
+          strippedText = strippedText.map((item, idx) => {
+            if (idx === 0 && typeof item === 'string' && item.startsWith(cbMatch[0])) {
+              return item.slice(prefixLen);
+            }
+            return item;
+          });
+          if (strippedText.length === 1 && typeof strippedText[0] === 'string') {
+            strippedText = (strippedText[0] as string);
+          }
+        }
+        blocks[bi] = {
+          type: 'list',
+          is_ordered: false,
+          items: [{
+            has_checkbox: true,
+            is_checked: cbMatch[1] !== ' ' ? true : undefined,
+            blocks: [{ type: 'paragraph', text: trimRichText(strippedText) }],
+          }],
+        } as RichBlock;
+      }
+    }
+  }
+
+  // 2. Empty node protection: filter out any block whose text/content is
+  //    empty or whitespace-only. This prevents Telegram from rejecting the
+  //    payload (empty block bodies cause 400 errors).
+  const MAX_DEPTH = 16;
+
+  function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
+    if (depth > MAX_DEPTH) return false;
+    const b = blk as unknown as Record<string, unknown>;
+    const type = b['type'] as string;
+    if (type === 'paragraph' || type === 'heading') {
+      const text = b['text'];
+      if (!text) return false;
+      if (typeof text === 'string' && !text.trim()) return false;
+      if (Array.isArray(text) && text.length === 0) return false;
+      return true;
+    }
+    if (type === 'pre') {
+      const text = b['text'];
+      return typeof text === 'string' && text.length > 0;
+    }
+    if (type === 'footer') {
+      const text = b['text'];
+      return typeof text === 'string' && text.length > 0;
+    }
+    if (type === 'blockquote' || type === 'details') {
+      const innerBlocks = (b['blocks'] as RichBlock[]) ?? [];
+      const filtered = innerBlocks.filter(child => isMeaningfulBlock(child, depth + 1));
+      if (filtered.length === 0) return false;
+      (b['blocks'] as RichBlock[]) = filtered;
+      return true;
+    }
+    if (type === 'list') {
+      const items = (b['items'] as InputRichBlockListItem<never>[]) ?? [];
+      if (items.length === 0) return false;
+      for (const item of items) {
+        item.blocks = item.blocks.filter(child => isMeaningfulBlock(child, depth + 1));
+      }
+      const hasAnyItem = items.some(item => item.blocks.length > 0);
+      return hasAnyItem;
+    }
+    if (type === 'anchor' || type === 'divider' || type === 'mathematical_expression') {
+      return true;
+    }
+    if (type === 'table') {
+      return true;
+    }
+    if (type === 'thinking') {
+      return true;
+    }
+    return true;
+  }
+
+  const filtered = blocks.filter(b => isMeaningfulBlock(b, 0));
+
+  // 3. Depth flattening: Telegram enforces a maximum nesting depth (16).
+  //    Any nested list/blockquote beyond this limit is flattened one level.
+  function flattenDepth(blk: RichBlock, depth: number): RichBlock {
+    if (depth < MAX_DEPTH) return blk;
+    if (blk.type === 'list') {
+      const items = (blk as any).items as InputRichBlockListItem<never>[];
+      for (const item of items) {
+        item.blocks = item.blocks.flatMap(child => {
+          if (child.type === 'list') {
+            const nestedItems = (child as any).items as InputRichBlockListItem<never>[];
+            return nestedItems.flatMap(ni => ni.blocks);
+          }
+          return [flattenDepth(child, depth + 1)];
+        });
+      }
+    }
+    if (blk.type === 'blockquote' || blk.type === 'details') {
+      const inner = (blk as any).blocks as RichBlock[];
+      (blk as any).blocks = inner.flatMap(child => {
+        if (child.type === 'blockquote') return (child as any).blocks as RichBlock[];
+        return [flattenDepth(child, depth + 1)];
+      });
+    }
+    return blk;
+  }
+
+  const flattened = filtered.map(b => flattenDepth(b, 0));
+
   mathPlaceholderStore = [];
-  return blocks;
+  return flattened;
 }
 
 /**
@@ -2291,75 +2584,6 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
  * only PUSH new blocks computed from bytes not seen before, never rebuild or
  * reorder the existing ones.
  */
-export function markdownToRichBlocksDelta(
-  alreadyConverted: string,
-  full: string,
-  opts?: { dropIncompleteTail?: boolean },
-): RichBlock[] {
-  const dropIncompleteTail = opts?.dropIncompleteTail ?? true;
-  if (!full || full.length <= alreadyConverted.length) return [];
-  if (alreadyConverted.length === 0) {
-    // FIRST convert: only emit COMPLETE lines. If the last line of `full` is
-    // still being streamed (no trailing newline yet — e.g. a long heading like
-    // "# 🌐5.多云与容器化开发协同（Tanzu融合）**面向开发者的现代" split across
-    // chunks), emitting it now would render a half-finished heading that then
-    // appears AGAIN once the line completes — a duplicate / garbled title.
-    // Drop the trailing incomplete line and wait for it to finish first.
-    const lastNl = full.lastIndexOf('\n');
-    if (lastNl < 0) return [];
-    return markdownToRichBlocks(full.slice(0, lastNl));
-  }
-  // Find a safe cut in the overlap so we re-convert from a block boundary.
-  // Prefer the last BLANK line (\n\n) — that is a true paragraph boundary.
-  // If none exists (e.g. the cut fell inside a single-line heading like
-  // "# 历届世界杯冠军全景解析"), fall back to the last single newline so we
-  // restart at a LINE boundary instead of mid-line. Restarting mid-line would
-  // lose the heading marker and split the title across two blocks.
-  const overlap = full.slice(0, alreadyConverted.length);
-  let cut = overlap.lastIndexOf('\n\n');
-  let safe: number;
-  let dropFirstLine = false;
-  if (cut < 0) {
-    cut = overlap.lastIndexOf('\n');
-    if (cut < 0) {
-      // No newline at all: the entire already-converted text is one partial
-      // line (e.g. "# 历届世界杯冠军全"). Restart from the very beginning and
-      // drop the first line of the re-parse, which is exactly this partial line.
-      safe = 0;
-      dropFirstLine = true;
-    } else {
-      safe = cut;
-      dropFirstLine = true; // the line up to `cut` was already converted/sent
-    }
-  } else {
-    safe = cut;
-  }
-  let delta = full.slice(safe).replace(/^\n+/, '');
-  if (dropFirstLine) {
-    // Drop the first line of the delta: it is the already-sent tail of the
-    // previous line, not genuinely new content.
-    const nl = delta.indexOf('\n');
-    delta = nl < 0 ? '' : delta.slice(nl + 1);
-  }
-  if (!delta.trim()) return [];
-  const blocks = markdownToRichBlocks(delta);
-  // Drop a trailing SINGLE-LINE block (heading / paragraph) that is still on
-  // an INCOMPLETE source line: when `full` does NOT end with a newline,
-  // its last line is still being streamed, so emitting that half-done
-  // heading/paragraph now would re-appear once the line completes — the
-  // duplicate-title bug (e.g. "## 核心要素" emitted early, then
-  // "## 核心要素对比" again). Multi-line structures (list / table) are
-  // KEPT so already-finished items/rows are not lost mid-stream.
-  if (dropIncompleteTail) {
-    const last = blocks[blocks.length - 1];
-    if (full.length > 0 && full[full.length - 1] !== '\n' && last &&
-        (last.type === 'heading' || last.type === 'paragraph')) {
-      blocks.pop();
-    }
-  }
-  return blocks;
-}
-
 /**
  * Build the 10.2 `InputRichMessage.blocks` payload for a StructuredMessage.
  *
@@ -2376,7 +2600,7 @@ function extractStringFromRichText(rt: any): string {
   return '';
 }
 
-export function isEligibleMainHeading(blk: RichBlock | undefined): boolean {
+function isEligibleMainHeading(blk: RichBlock | undefined): boolean {
   if (!blk || blk.type !== 'heading') return false;
   // 1. Only H1 and H2 (size 1 or 2) can be main titles. H3..H6 (size >= 3) are sub-headings.
   if (blk.size > 2) return false;
@@ -2454,20 +2678,40 @@ export function buildFinalBlocks(
 }
 
 /**
- * Build blocks for a streaming draft. While the model is still thinking we emit
- * a native `thinking` placeholder block (Bot API 10.2, draft-only). Once the body
- * starts arriving, the thinking block is omitted and body blocks are streamed.
+ * Build blocks for a streaming draft (Bot API 10.2, draft-only).
+ *
+ * - While the model is thinking (thought non-empty, no body yet):
+ *   emits a native `thinking` placeholder block with the live thought text.
+ * - When body arrives alongside thought:
+ *   emits a collapsed `thinking` block showing thought, followed by body blocks.
+ * - When only body (no thought): emits body blocks directly (no thinking block).
+ * - When both empty: emits a static `thinking` placeholder ("正在思考...").
  */
-export function buildStreamingBlocks(
-  content: string,
-  hasThought: boolean,
-  isStreaming: boolean,
-): RichBlock[] {
-  const body = markdownToRichBlocks(content);
-  if (isStreaming && hasThought && body.length === 0) {
-    return [{ type: 'thinking', text: '正在思考...' }];
+export function buildStreamingBlocks(input: {
+  content?: string;
+  thought?: string;
+}): RichBlock[] {
+  const thought = (input.thought ?? '').trim();
+  const content = (input.content ?? '').trim();
+
+  if (thought && content) {
+    const body = markdownToRichBlocks(content);
+    return [
+      { type: 'thinking', text: thought, collapsed: true } as RichBlock,
+      ...body,
+    ];
   }
-  return body;
+
+  if (thought && !content) {
+    return [{ type: 'thinking', text: thought } as RichBlock];
+  }
+
+  if (!thought && content) {
+    return markdownToRichBlocks(content);
+  }
+
+  // Both empty
+  return [{ type: 'thinking', text: '正在思考...' } as RichBlock];
 }
 
 /**
@@ -2483,42 +2727,6 @@ export function buildStreamingBlocks(
  * The footer is sent as its own message (after the body), as a single blocks
  * payload, so the collapsible block is never split.
  */
-export function buildNativeFooterBlocks(opts: {
-  model?: string;
-  inputTokens?: string | number;
-  outputTokens?: string | number;
-  cost?: string;
-  cachedTokens?: string | number;
-  thinkingTokens?: string | number;
-  thought?: string;
-}): RichBlock[] {
-  const blocks: RichBlock[] = [];
-
-  const thoughtText = (opts.thought ?? '').trim();
-  if (thoughtText) {
-    const thoughtBlocks = markdownToRichBlocks(thoughtText);
-    blocks.push({
-      type: 'details',
-      summary: '🧠 思考过程 (Thinking Process)',
-      blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thoughtText }],
-    });
-  }
-
-  const parts: string[] = [];
-  if (opts.model) parts.push(opts.model);
-  const inStr = opts.inputTokens !== undefined ? String(opts.inputTokens) : '';
-  const outStr = opts.outputTokens !== undefined ? String(opts.outputTokens) : '';
-  if (inStr || outStr) {
-    parts.push(`In: ${inStr}${opts.cachedTokens ? ` (Cached: ${opts.cachedTokens})` : ''} · Out: ${outStr}${opts.thinkingTokens ? ` (Reasoning: ${opts.thinkingTokens})` : ''}`);
-  }
-  if (opts.cost) parts.push(`Cost: ${opts.cost}`);
-  if (parts.length > 0) {
-    blocks.push({ type: 'footer', text: `⚙️ ${parts.join(' · ')}` });
-  }
-
-  return blocks;
-}
-
 /**
  * Parse a footer rendered as HTML (`___RAW_HTML___` payload) into native 10.2
  * blocks, so the footer benefits from the structured blocks path instead of
@@ -2582,6 +2790,186 @@ export function buildFooterBlocksFromHtml(html: string): RichBlock[] {
   }
 
   return blocks;
+}
+
+// ── RichBlock payload splitter (AST-level, no regex on structure) ──────────────
+
+function richTextLength(rt: unknown): number {
+  if (!rt) return 0;
+  if (typeof rt === 'string') return rt.length;
+  if (Array.isArray(rt)) {
+    return rt.reduce((sum, item) => sum + richTextLength(item), 0);
+  }
+  if (typeof rt === 'object' && 'text' in (rt as any)) {
+    return richTextLength((rt as any).text);
+  }
+  return 0;
+}
+
+function getBlockLength(block: RichBlock): number {
+  const b = block as any;
+  switch (block.type) {
+    case 'paragraph':
+    case 'heading':
+      return richTextLength(b.text);
+    case 'pre':
+    case 'footer':
+      return (b.text || '').length;
+    case 'blockquote':
+      return (b.blocks || []).reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
+    case 'details':
+      return richTextLength(b.summary) + (b.blocks || [])
+        .reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
+    case 'thinking':
+      return richTextLength(b.text);
+    case 'list':
+      return (b.items || []).reduce((s: number, item: any) =>
+        s + (item.blocks || []).reduce((s2: number, child: RichBlock) => s2 + getBlockLength(child), 0), 0);
+    case 'table': {
+      const cells: any[][] = b.cells || [];
+      return cells.reduce((s: number, row: any[]) =>
+        s + row.reduce((s2: number, cell: any) => s2 + richTextLength(cell.text), 0), 0);
+    }
+    case 'divider':
+    case 'anchor':
+    case 'mathematical_expression':
+    default:
+      return 1;
+  }
+}
+
+function splitRichTextByLength(text: string, maxLen: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLen) {
+    let cut = remaining.lastIndexOf(' ', maxLen);
+    if (cut <= 0) cut = remaining.indexOf(' ', maxLen);
+    if (cut <= 0 || cut >= maxLen) cut = maxLen;
+    chunks.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+/**
+ * Split an InputRichBlock[] payload into chunks that each fit within maxChars.
+ *
+ * Operates entirely at the AST node level — never converts blocks to/from strings.
+ *
+ * Rules:
+ *  1. Top-level blocks are the atomic unit. When the next block would overflow
+ *     the current part, a new part is started at the block boundary.
+ *  2. `type: 'details'` containers whose inner `blocks` array exceeds maxChars
+ *     are split into multiple details nodes each holding a subset of the inner blocks.
+ *  3. As a last resort, a single `paragraph` whose text exceeds maxChars is
+ *     split into smaller paragraph nodes at word boundaries.
+ */
+export function splitRichBlocks(
+  blocks: RichBlock[],
+  maxChars = 3800,
+): RichBlock[][] {
+  const parts: RichBlock[][] = [[]];
+  let currentLen = 0;
+
+  const finishPart = () => {
+    if (parts[parts.length - 1].length > 0) {
+      parts.push([]);
+    }
+    currentLen = 0;
+  };
+
+  for (const block of blocks) {
+    const blockLen = getBlockLength(block);
+
+    // Rule 2: details node with oversized inner blocks
+    if (block.type === 'details' && blockLen > maxChars) {
+      const d = block as any;
+      const inner = (d.blocks as RichBlock[]) || [];
+
+      // Partition inner blocks into multiple groups, each within maxChars
+      const groups: RichBlock[][] = [[]];
+      let gIdx = 0;
+      let gLen = 0;
+      for (const ib of inner) {
+        const ibLen = getBlockLength(ib);
+        if (gLen + ibLen > maxChars && groups[gIdx].length > 0) {
+          groups.push([]);
+          gIdx++;
+          gLen = 0;
+        }
+        groups[gIdx].push(ib);
+        gLen += ibLen;
+      }
+
+      const detailsBlocks = groups
+        .filter((g): g is RichBlock[] => g.length > 0)
+        .map((g, idx, arr) => ({
+          type: 'details' as const,
+          blocks: g,
+          summary: arr.length > 1
+            ? `🧠 思考过程 (${idx + 1}/${arr.length})`
+            : d.summary,
+        }));
+
+      // Distribute resulting details blocks across parts
+      for (const db of detailsBlocks) {
+        const dbLen = getBlockLength(db as unknown as RichBlock);
+        if (currentLen + dbLen > maxChars) finishPart();
+        parts[parts.length - 1].push(db as unknown as RichBlock);
+        currentLen += dbLen;
+      }
+      continue;
+    }
+
+    // Rule 3: single paragraph that alone exceeds maxChars
+    if (block.type === 'paragraph' && blockLen > maxChars) {
+      const p = block as any;
+      const raw = extractStringFromRichText(p.text);
+      const chunks = splitRichTextByLength(raw, maxChars);
+      for (const chunk of chunks) {
+        if (currentLen + chunk.length > maxChars) finishPart();
+        parts[parts.length - 1].push({ type: 'paragraph', text: chunk } as RichBlock);
+        currentLen += chunk.length;
+      }
+      continue;
+    }
+
+    // Rule 4: single pre block that alone exceeds maxChars — split by lines
+    if (block.type === 'pre' && blockLen > maxChars) {
+      const p = block as any;
+      const lines = (p.text || '').split('\n');
+      const lang = p.language;
+      let currentLines: string[] = [];
+      let currentPreLen = 0;
+      for (const line of lines) {
+        const lineLen = line.length + 1;
+        if (currentPreLen + lineLen > maxChars && currentLines.length > 0) {
+          if (currentLen > 0) finishPart();
+          parts[parts.length - 1].push({ type: 'pre', text: currentLines.join('\n'), language: lang } as RichBlock);
+          currentLen = currentPreLen;
+          currentLines = [];
+          currentPreLen = 0;
+        }
+        currentLines.push(line);
+        currentPreLen += lineLen;
+      }
+      if (currentLines.length > 0) {
+        if (currentLen > 0 && currentPreLen > maxChars) finishPart();
+        parts[parts.length - 1].push({ type: 'pre', text: currentLines.join('\n'), language: lang } as RichBlock);
+        currentLen += currentPreLen;
+      }
+      continue;
+    }
+
+    // Rule 1: normal block — start new part if it doesn't fit
+    if (currentLen + blockLen > maxChars) finishPart();
+
+    parts[parts.length - 1].push(block);
+    currentLen += blockLen;
+  }
+
+  return parts.filter(p => p.length > 0);
 }
 
 function convertMath(html: string): string {

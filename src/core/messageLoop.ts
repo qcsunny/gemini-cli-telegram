@@ -12,12 +12,10 @@ import * as os from 'node:os';
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
 import { ICONS } from '../channels/telegram/ui.js';
-import { markdownToRichBlocks, markdownToRichBlocksDelta, isEligibleMainHeading } from '../channels/telegram/formatter.js';
-import { runAgyPrint, extractThoughtAndContent, getModelCapabilities } from '../agy/agyCli.js';
+import { runAgyPrint, extractThoughtAndContent } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
-import type { RichBlock } from '../channels/telegram/richMessage.js';
 
 const DEBOUNCE_INTERVAL_MS = 1000;
 
@@ -103,12 +101,16 @@ async function withTimeout<T>(
  */
 function stripWholeMessageCodeFence(text: string): string {
   const trimmed = text.trim();
-  const fenceMatch = /^```([a-zA-Z0-9_-]*)\n([\s\S]*)\n```$/.exec(trimmed);
+  const fenceMatch = /^```([a-zA-Z0-9_-]*)\n([\s\S]*?)\n```$/.exec(trimmed);
   if (!fenceMatch) return text;
   const lang = (fenceMatch[1] || '').toLowerCase();
   // Only strip when it's a markdown/empty fence wrapping the whole message.
   if (lang && lang !== 'markdown' && lang !== 'md') return text;
-  return fenceMatch[2];
+  const inner = fenceMatch[2];
+  // If inner content contains ``` delimiters, this is a nested fence:
+  // keep the outer fence and render as code block.
+  if (/^```/m.test(inner.trim())) return text;
+  return inner;
 }
 
 /**
@@ -348,45 +350,27 @@ export async function processMessage(
   let isDone = false;
   let activeUpdatePromise: Promise<any> = Promise.resolve();
 
-  const capabilities = getModelCapabilities(session.model);
-  const parseMode = session.settings?.telegram?.parseMode || 'RichText';
-  // Rich append-only path: requires the new block-streaming primitives.
-  const isRichSingleMessage = !!reply.sendRichDraftBlocks && (capabilities.supportsThinkingSummary || parseMode === 'RichText');
+  const hasRichPrimitives = !!reply.sendRichDraft;
 
   // ── Single-draft append-only state machine ────────────────────────────────
-  // Exactly ONE RichBlock[] is the source of truth for the whole reply. Block
-  // order is FIXED: [thinkingBlock?, ...bodyBlocks, footerBlock?]. We only ever
-  // PUSH to the end of the body region; we never reorder, rebuild, or replace
-  // the array. Telegram has no native "append", so growing the message means
-  // resending the whole current array under the same draft_id / message_id —
-  // idempotent and safe against retries, duplicates and out-of-order chunks.
   type Phase = 'thinking' | 'body' | 'footer';
   let phase: Phase = 'thinking';
-  let blocks: RichBlock[] = [];
-  let thinkingBlockIndex = -1;
-  let footerBlockIndex = -1;
-  let convertedBodyLen = 0;
 
-  const buildThinkingBlock = (text: string, isStreaming: boolean): RichBlock => ({
-    type: 'details',
-    summary: isStreaming ? '🧠 正在思考... (Thinking...)' : '🧠 思考过程 (Thinking Process)',
-    is_open: isStreaming || undefined,
-    blocks: [{ type: 'paragraph', text: text }],
-  });
-
-  // Render the whole authoritative array to the wire (draft while streaming,
-  // real message once finalized). Never called with a partial/reordered array.
+  // Render the whole authoritative content to the wire (draft while streaming,
+  // real message once finalized).
   const flushBlocks = async () => {
+    const content: { content: string; thought?: string } = {
+      content: answerBuffer.trim(),
+    };
+    if (thoughtBuffer.trim()) content.thought = thoughtBuffer.trim();
+
     if (currentMessageId === null || currentMessageId === 0) {
-      const resId = await reply.sendRichDraftBlocks!(0, blocks);
+      const resId = await reply.sendRichDraft!(content);
       if (typeof resId === 'number' && resId > 0) currentMessageId = resId;
     } else if (phase === 'footer') {
-      // Finalized: promote draft to a real persisted message carrying the SAME
-      // blocks array (no rebuild, no second message, no coverage).
-      const realId = await reply.editRichBlocks!(currentMessageId, blocks);
-      if (typeof realId === 'number' && realId > 0) currentMessageId = realId;
+      currentMessageId = await reply.sendRich!(content);
     } else {
-      await reply.sendRichDraftBlocks!(currentMessageId, blocks);
+      await reply.sendRichDraft!(content);
     }
   };
 
@@ -400,7 +384,7 @@ export async function processMessage(
     activeUpdatePromise = activeUpdatePromise.then(async () => {
       if (isFinished && !isFinal) return;
       try {
-        if (!isRichSingleMessage) {
+        if (!hasRichPrimitives) {
           // Non-rich fallback: plain text (thinking then body), single message path.
           let text = '';
           if (thoughtBuffer.trim()) {
@@ -418,59 +402,12 @@ export async function processMessage(
           return;
         }
 
-        // ── Rich append-only path ──
-        if (phase === 'thinking') {
-          // Thinking block created once; only its text grows. While still
-          // thinking we have no body yet, so the array is just [thinking].
-          if (thinkingBlockIndex < 0 && thoughtBuffer.trim()) {
-            blocks.push(buildThinkingBlock(thoughtBuffer.trim(), true));
-            thinkingBlockIndex = blocks.length - 1;
-          } else if (thinkingBlockIndex >= 0) {
-            blocks[thinkingBlockIndex] = buildThinkingBlock(thoughtBuffer.trim(), true);
-          }
-          if (blocks.length > 0) await flushBlocks();
-          return;
-        }
-
-        // phase === 'body' (or footer): append new body blocks before footer.
-        // On the FINAL tick (isFinal) we must NOT drop the trailing block even
-        // if `answerBuffer` lacks a trailing newline — otherwise the last
-        // paragraph/heading is silently lost (the final completion pass can't
-        // recover it because `convertedBodyLen` already equals the full length).
-        const delta = markdownToRichBlocksDelta(
-          convertedBodyLen === 0 ? '' : answerBuffer.slice(0, convertedBodyLen),
-          answerBuffer,
-          { dropIncompleteTail: !isFinal },
-        );
-        if (delta.length > 0) {
-          // Merge a leading paragraph in `delta` into the previous trailing
-          // paragraph block when the stream was cut mid-paragraph (no blank
-          // line between chunks). Without this, each streamed chunk becomes
-          // its own paragraph block and renders as a spurious line break —
-          // e.g. "这两个函数" / "虽然都能..." / "壤之别...".
-          const insertAt = footerBlockIndex >= 0 ? footerBlockIndex : blocks.length;
-          const prev = insertAt > 0 ? blocks[insertAt - 1] : undefined;
-          const firstDelta = delta[0] as any;
-          if (prev && (prev as any).type === 'paragraph' && firstDelta.type === 'paragraph') {
-            const prevText = (prev as any).text;
-            const prevArr = Array.isArray(prevText) ? prevText : [prevText];
-            const deltaArr = Array.isArray(firstDelta.text) ? firstDelta.text : [firstDelta.text];
-            (prev as any).text = [...prevArr, ...deltaArr];
-            blocks.splice(insertAt, 0, ...delta.slice(1));
-            if (footerBlockIndex >= 0) footerBlockIndex += delta.length - 1;
-          } else {
-            if (footerBlockIndex >= 0) {
-              blocks.splice(footerBlockIndex, 0, ...delta);
-              footerBlockIndex += delta.length;
-            } else {
-              blocks.push(...delta);
-            }
-          }
-          convertedBodyLen = answerBuffer.length;
-          await flushBlocks();
-        }
+        // ── Rich HTML streaming path ──
+        // Send the full content each time via sendRichDraft (HTML mode).
+        // sendRichDraft handles <tg-thinking> animation and details blocks.
+        await flushBlocks();
       } catch (e) {
-        logger.warn(`[messageLoop] Failed to update streaming blocks: ${e}`);
+        logger.warn(`[messageLoop] Failed to update streaming message: ${e}`);
       }
     });
 
@@ -555,11 +492,7 @@ export async function processMessage(
         answerBuffer = '';
         isDone = false;
         currentMessageId = null;
-        blocks = [];
         phase = 'thinking';
-        thinkingBlockIndex = -1;
-        footerBlockIndex = -1;
-        convertedBodyLen = 0;
         thoughtEventCount = 0;
         textEventCount = 0;
 
@@ -603,9 +536,11 @@ export async function processMessage(
                 } else {
                   answerBuffer = rawStreamBuffer;
                 }
-                // Transition from thinking → body: only when body text starts arriving
+                // Transition between thinking ↔ body phases based on buffer content
                 if (phase === 'thinking' && answerBuffer.trim()) {
                   phase = 'body';
+                } else if (phase === 'body' && !answerBuffer.trim()) {
+                  phase = 'thinking';
                 }
               } else if (event.type === 'done') {
                 isDone = true;
@@ -694,6 +629,20 @@ export async function processMessage(
         }
       }
 
+      // Aggressive stray thought-tag cleanup: if any unpaired <thought> / <thought-gemini>
+      // tags survived the extractThoughtAndContent step (e.g. an upstream interrupt
+      // mid-tag while body text was already streaming), strip them here so they never
+      // leak as literal text into the user-facing final message.
+      answerBuffer = answerBuffer
+        .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
+        .replace(/<thought-gemini[^>]*>[\s\S]*?<\/thought-gemini>/gi, '')
+        .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
+        .replace(/<\/?thought[^>]*>/gi, '')
+        .replace(/<\/?thought-gemini[^>]*>/gi, '')
+        .replace(/<\/?thinking[^>]*>/gi, '')
+        .replace(/<\/?think[^>]*>/gi, '')
+        .trim();
+
       if (thoughtBuffer.length === 0 && session.conversationId) {
         const result = await readThoughtFromTranscript(session.conversationId, answerBuffer, turnStartTime);
         if (result && result.thought) {
@@ -707,175 +656,78 @@ export async function processMessage(
       }
 
 
-      // 5. Append-only finalize of the SAME single draft (no rebuild, no second
-      //    message, no coverage). The authoritative `blocks` array is finalized
-      //    in place: (a) close the thinking block if still open, (b) convert any
-      //    remaining body markdown not yet pushed, (c) append exactly one footer
-      //    block. Order is [thinking, ...body, footer] and never changes.
+      // 5. Finalize: send the complete content as a real persisted message.
+      // The HTML path (via sendRich) handles thought→details, blockquote
+      // stripping, heading hoisting, and footer formatting internally.
 
-      // (a) Close / fill the thinking block (native `details`, collapsed).
-      if (thoughtBuffer.trim()) {
-        const closedThinking: RichBlock = {
-          type: 'details',
-          summary: '🧠 思考过程 (Thinking Process)',
-          blocks: [{ type: 'paragraph', text: thoughtBuffer.trim() }],
-        };
-        if (thinkingBlockIndex >= 0) {
-          blocks[thinkingBlockIndex] = closedThinking;
-        } else {
-          blocks.unshift(closedThinking);
-          thinkingBlockIndex = 0;
-          footerBlockIndex = footerBlockIndex >= 0 ? footerBlockIndex + 1 : -1;
-        }
-      }
-
-      // (a2) Strip blockquote blocks → plain paragraphs to avoid details+blockquote nesting.
-      // NOTE: Only strip blockquotes that were already in blocks before (b). We handle
-      // new ones after (b) in the combined step below.
-      {
-        for (let bi = 0; bi < blocks.length; bi++) {
-          const blk = blocks[bi] as any;
-          if (blk.type === 'blockquote') {
-            const inner: RichBlock[] = (blk.blocks || []).map((b: any) => ({ type: 'paragraph', text: b.text }));
-            blocks.splice(bi, 1, ...inner);
-            bi += inner.length - 1;
-          }
-        }
-      }
-
-      // (b) Rebuild the body from the COMPLETE answerBuffer. We deliberately
-      // re-parse the whole body here instead of trusting the append-only
-      // streaming deltas. The per-tick deltas use `dropIncompleteTail: true`
-      // and only PUSH new blocks, so any block the streaming pass dropped —
-      // most notably a trailing paragraph/heading when the stream ended
-      // without a trailing newline, or a paragraph wrongly merged into its
-      // predecessor mid-stream — would otherwise be permanently missing from
-      // the final message. Rebuilding from the full buffer guarantees the
-      // final content is complete and correctly structured. (The non-streaming
-      // path already uses exactly this `markdownToRichBlocks` call.)
-      if (answerBuffer.trim()) {
-        const bodyBlocks = markdownToRichBlocks(answerBuffer);
-        const bodyStart = thinkingBlockIndex >= 0 ? thinkingBlockIndex + 1 : 0;
-        blocks.splice(bodyStart, blocks.length - bodyStart, ...bodyBlocks);
-        convertedBodyLen = answerBuffer.length;
-      }
-
-      // (b2) Post-body cleanup: strip any blockquote blocks introduced in (b),
-      // then hoist the first heading above the thinking block.
-      {
-        // Strip remaining blockquotes → paragraphs
-        for (let bi = 0; bi < blocks.length; bi++) {
-          const blk = blocks[bi] as any;
-          if (blk.type === 'blockquote') {
-            const inner: RichBlock[] = (blk.blocks || []).map((b: any) => ({ type: 'paragraph', text: b.text }));
-            blocks.splice(bi, 1, ...inner);
-            bi += inner.length - 1;
-          }
-        }
-
-        // Hoist the first heading above the thinking block (only if it is a genuine main heading)
-        if (thinkingBlockIndex >= 0) {
-          const nextBlockIdx = thinkingBlockIndex + 1;
-          if (nextBlockIdx < blocks.length && isEligibleMainHeading(blocks[nextBlockIdx])) {
-            const [headingBlock] = blocks.splice(nextBlockIdx, 1);
-            blocks.unshift(headingBlock);
-            thinkingBlockIndex = 1;
-            if (footerBlockIndex >= 0) footerBlockIndex++;
-          }
-        }
-      }
-
-
-      // (c) Append exactly one footer block (stats line). If thinking was
-      // recovered but the body is empty, the message is still a single draft.
-      const footerMarker = formatFooterMarker(
+      const footerText = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
         finalPrompt,
         answerBuffer + (thoughtBuffer.trim() ? '\n' + thoughtBuffer.trim() : ''),
         finalResult.usage,
       );
-      if (finalResult.exitCode === 0) {
-        const footerParts = parseFooterMarker(footerMarker);
-        if (footerParts.length > 0) {
-          if (footerBlockIndex >= 0) {
-            blocks[footerBlockIndex] = { type: 'footer', text: `⚙️ ${footerParts.join(' · ')}` };
-          } else {
-            blocks.push({ type: 'footer', text: `⚙️ ${footerParts.join(' · ')}` });
-            footerBlockIndex = blocks.length - 1;
-          }
-        }
 
-        // Atomically commit the single draft → one real persisted message.
+      if (finalResult.exitCode === 0) {
+        const footerParts = parseFooterMarker(footerText);
+
+        // Atomically send the real persisted message.
         const replyContext = {
           answerMarkdown: answerBuffer.trim(),
           thinkingMarkdown: thoughtBuffer.trim(),
         };
 
-        if (isRichSingleMessage) {
-          if (currentMessageId !== null && blocks.length > 0) {
-            phase = 'footer';
-            try {
-              const realId = await reply.editRichBlocks!(currentMessageId, blocks);
-              if (typeof realId === 'number' && realId > 0) currentMessageId = realId;
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
-            } catch (e) {
-              logger.warn(`[messageLoop] Failed to commit final blocks, falling back to sendRich: ${e}`);
-              try {
-                const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
-                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
-                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
-              } catch (e2) {
-                logger.warn(`[messageLoop] sendRich fallback failed: ${e2}`);
-              }
+        if (currentMessageId !== null) {
+          phase = 'footer';
+          try {
+            const finalContent: { content: string; thought?: string; footerText?: string } = {
+              content: answerBuffer.trim(),
+            };
+            if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
+            if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
+
+            // Use sendRich to finalize the message
+            if (reply.sendRich) {
+              currentMessageId = await reply.sendRich!(finalContent);
+            } else {
+              // Plain text fallback
+              const finalText = thoughtBuffer.trim()
+                ? `🧠 思考过程 (Thinking Process)\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
+                : answerBuffer.trim();
+              await reply.edit!(currentMessageId, finalText);
             }
-          } else if (blocks.length > 0) {
-            // No draft was ever created (e.g. Claude Thinking model outputs all at once).
-            // Send the already-built blocks array directly instead of re-invoking sendRich
-            // (which would re-parse answerBuffer via buildFinalBlocks and may produce
-            // different/duplicate content).
+            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext);
+          } catch (e) {
+            logger.warn(`[messageLoop] Finalize failed: ${e}`);
             try {
-              const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
-              if (reply.sendRichDraftBlocks && reply.editRichBlocks) {
-                // Use draft→real flow so the message is properly materialized
-                const draftId = await reply.sendRichDraftBlocks(0, blocks);
-                if (draftId) {
-                  currentMessageId = draftId;
-                  phase = 'footer';
-                  const realId = await reply.editRichBlocks(draftId, blocks);
-                  if (typeof realId === 'number' && realId > 0) currentMessageId = realId;
-                } else {
-                  throw new Error('sendRichDraftBlocks returned no id');
-                }
-              } else {
-                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
-              }
-              if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext);
-            } catch (e) {
-              logger.warn(`[messageLoop] sendRich (no-draft path) failed: ${e}`);
-              try {
-                const footerText = footerParts.length > 0 ? `⚙️ ${footerParts.join(' · ')}` : undefined;
-                currentMessageId = await reply.sendRich!({ content: answerBuffer.trim(), thought: thoughtBuffer.trim(), footerText });
-                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
-              } catch (e2) {
-                logger.warn(`[messageLoop] sendRich fallback also failed: ${e2}`);
-              }
+              const finalContent: { content: string; thought?: string; footerText?: string } = {
+                content: answerBuffer.trim(),
+              };
+              if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
+              if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
+              currentMessageId = await reply.sendRich!(finalContent);
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
+            } catch (e2) {
+              logger.warn(`[messageLoop] sendRich fallback failed: ${e2}`);
             }
           }
         } else if (answerBuffer.trim()) {
-          // Plain-text fallback finalize (no rich primitives available).
-          const finalText = thoughtBuffer.trim()
-            ? `🧠 思考过程 (Thinking Process)\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
-            : answerBuffer.trim();
+          // No draft was ever created (e.g. model outputs all at once).
           try {
-            if (currentMessageId !== null) {
-              await reply.edit!(currentMessageId, finalText);
-              messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
-            } else {
-              currentMessageId = await reply.send!(finalText);
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
-            }
+            const finalContent: { content: string; thought?: string; footerText?: string } = {
+              content: answerBuffer.trim(),
+            };
+            if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
+            if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
+            currentMessageId = await reply.sendRich!(finalContent);
+            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext);
           } catch (e) {
-            logger.warn(`[messageLoop] Plain finalize failed: ${e}`);
+            logger.warn(`[messageLoop] sendRich (no-draft path) failed: ${e}`);
+            try {
+              currentMessageId = await reply.send!(answerBuffer.trim());
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
+            } catch (e2) {
+              logger.warn(`[messageLoop] send fallback failed: ${e2}`);
+            }
           }
         }
 
@@ -960,6 +812,9 @@ export async function processMessage(
 }
 
 const FALLBACK_MAP: Record<string, string> = {
+  'Gemini 3.6 Flash (High)': 'Gemini 3.6 Flash (Medium)',
+  'Gemini 3.6 Flash (Medium)': 'Gemini 3.6 Flash (Low)',
+  'Gemini 3.6 Flash (Low)': 'Gemini 3.5 Flash (High)',
   'Claude Opus 4.6 (Thinking)': 'Claude Sonnet 4.6 (Thinking)',
   'Claude Sonnet 4.6 (Thinking)': 'Gemini 3.1 Pro (High)',
   'GPT-OSS 120B (Medium)': 'Gemini 3.1 Pro (High)',
@@ -967,14 +822,15 @@ const FALLBACK_MAP: Record<string, string> = {
   'Gemini 3.1 Pro (Low)': 'Gemini 3.5 Flash (Medium)',
   'Gemini 3.5 Flash (High)': 'Gemini 3.5 Flash (Medium)',
   'Gemini 3.5 Flash (Medium)': 'Gemini 3.5 Flash (Low)',
+  'Gemini 3.5 Flash (Low)': 'Web2API: Gemini Auto',
   // 跨通道兜底:agy 官方通道用尽后,切到 cookie 免费通道的 AUTO(自动选模)。
   // 注意 `Gemini Auto` 是 Google AUTO 模式,不固定底层模型,此处仅作"最终保底通道",
   // 不代表它是最弱模型。
-  'Gemini 3.5 Flash (Low)': 'Web2API: Gemini Auto',
   // ── Web2API(cookie 通道)内部子链:按 Google 实际能力 强→弱 排列 ──
   // 综合能力梯队:Pro / Flash Thinking(一档) > 3.5 Flash(二档,工具调用/Agent 甚至超 Pro)
   // > Flash Thinking Lite / Flash Lite(三档) > Auto(动态路由,非固定档)。
   // 3.1 Pro → 3.5 Flash Thinking → 3.5 Flash → 3.5 Flash Thinking Lite → Flash Lite → Auto。
+  'Web2API: Gemini 3.1 Pro Enhanced': 'Web2API: Gemini 3.1 Pro',
   'Web2API: Gemini 3.1 Pro': 'Web2API: Gemini 3.5 Flash Thinking',
   'Web2API: Gemini 3.5 Flash Thinking': 'Web2API: Gemini 3.5 Flash',
   'Web2API: Gemini 3.5 Flash': 'Web2API: Gemini 3.5 Flash Thinking Lite',
@@ -982,11 +838,11 @@ const FALLBACK_MAP: Record<string, string> = {
   'Web2API: Gemini Flash Lite': 'Web2API: Gemini Auto',
 };
 
-export function getFallbackModel(currentModel: string): string | null {
+function getFallbackModel(currentModel: string): string | null {
   return FALLBACK_MAP[currentModel] ?? null;
 }
 
-export function isRateLimitOrUnavailableError(stderr: string, output: string): boolean {
+function isRateLimitOrUnavailableError(stderr: string, output: string): boolean {
   const lowerStderr = stderr.toLowerCase();
   const lowerOutput = output.toLowerCase();
   

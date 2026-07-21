@@ -21,14 +21,153 @@ import type {
   MultimodalInput,
   StructuredMessage,
 } from '../../core/types.js';
+import type { InputRichMessage } from '@grammyjs/types/rich.js';
+import type { RichBlock } from './richMessage.js';
 import { registerCommands } from './commands.js';
-import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks, buildFooterBlocksFromHtml } from './formatter.js';
+import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
 const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// ── Typed Rich API helpers ──
+
+function buildRichMessagePayload(blocks: RichBlock[]): InputRichMessage<never> {
+  return { blocks };
+}
+
+function buildRichMessageHtmlPayload(html: string): InputRichMessage<never> {
+  return { html };
+}
+
+function buildRichMessageMarkdownPayload(markdown: string): InputRichMessage<never> {
+  return { markdown };
+}
+
+// ── Draft throttle (minimum interval between draft updates) ──
+
+const draftThrottleTimestamps = new Map<number, number>();
+const draftBackoffUntil = new Map<number, number>();
+const draftBackoffMultiplier = new Map<number, number>();
+const DRAFT_THROTTLE_MS = 250;
+
+export function record429Backoff(chatId: number, retryAfterSec?: number): void {
+  const mult = Math.min((draftBackoffMultiplier.get(chatId) ?? 1) * 2, 8);
+  draftBackoffMultiplier.set(chatId, mult);
+
+  const baseWait = retryAfterSec ? retryAfterSec * 1000 : 1000;
+  const waitMs = baseWait * mult + 100;
+  const existingUntil = draftBackoffUntil.get(chatId) ?? 0;
+  const nextUntil = Math.max(existingUntil, Date.now() + waitMs);
+  draftBackoffUntil.set(chatId, nextUntil);
+  logger.warn(`[429 BACKOFF] Dynamic rate-limit backoff set for chatId=${chatId}: wait ${waitMs}ms (mult=${mult})`);
+}
+
+export function reset429Backoff(chatId: number): void {
+  draftBackoffMultiplier.delete(chatId);
+  draftBackoffUntil.delete(chatId);
+}
+
+export function is429Error(err: any): boolean {
+  if (!err) return false;
+  if (err.error_code === 429 || err.status === 429) return true;
+  if (err.parameters?.retry_after !== undefined) return true;
+  if (err.payload?.parameters?.retry_after !== undefined) return true;
+  const msg = String(err.message || err);
+  return msg.includes('429') || msg.includes('Too Many Requests');
+}
+
+export function get429RetryAfter(err: any): number | undefined {
+  if (typeof err?.parameters?.retry_after === 'number') return err.parameters.retry_after;
+  if (typeof err?.payload?.parameters?.retry_after === 'number') return err.payload.parameters.retry_after;
+  return undefined;
+}
+
+async function throttleDraft(chatId: number): Promise<void> {
+  const now = Date.now();
+  const backoffUntil = draftBackoffUntil.get(chatId) ?? 0;
+  if (now < backoffUntil) {
+    const wait = backoffUntil - now;
+    logger.info(`[429 BACKOFF] Throttling draft update for chatId=${chatId} due to active 429 backoff (${wait}ms left)`);
+    await new Promise(r => setTimeout(r, wait));
+  } else {
+    const last = draftThrottleTimestamps.get(chatId) ?? 0;
+    const elapsed = now - last;
+    if (elapsed < DRAFT_THROTTLE_MS) {
+      await new Promise(r => setTimeout(r, DRAFT_THROTTLE_MS - elapsed));
+    }
+  }
+  draftThrottleTimestamps.set(chatId, Date.now());
+}
+
+// ── Block payload validation ──
+
+function validateBlocksPayload(blocks: unknown[]): boolean {
+  if (!Array.isArray(blocks)) {
+    logger.warn(`[BLOCK VALIDATION] blocks is not an array: ${typeof blocks}`);
+    return false;
+  }
+  if (blocks.length === 0) {
+    logger.warn(`[BLOCK VALIDATION] blocks array is empty`);
+    return false;
+  }
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i] as Record<string, unknown>;
+    if (!b || typeof b !== 'object') {
+      logger.warn(`[BLOCK VALIDATION] Block ${i} is not an object: ${typeof b}`);
+      return false;
+    }
+    const type = b['type'];
+    if (!type || typeof type !== 'string') {
+      logger.warn(`[BLOCK VALIDATION] Block ${i} missing 'type': ${JSON.stringify(b).slice(0, 100)}`);
+      return false;
+    }
+    // Per-type required field check
+    switch (type as string) {
+      case 'paragraph':
+      case 'heading':
+        if (!b['text']) {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (${type}) missing 'text'`);
+          return false;
+        }
+        break;
+      case 'pre':
+        if (b['text'] !== undefined && typeof b['text'] !== 'string') {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (pre) 'text' must be string, got ${typeof b['text']}`);
+          return false;
+        }
+        break;
+      case 'list':
+        if (!Array.isArray(b['items']) || (b['items'] as unknown[]).length === 0) {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (list) missing or empty 'items'`);
+          return false;
+        }
+        break;
+      case 'blockquote':
+      case 'details':
+        if (!Array.isArray(b['blocks'])) {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (${type}) missing 'blocks' array`);
+          return false;
+        }
+        break;
+      case 'table':
+        if (!Array.isArray(b['cells']) || (b['cells'] as unknown[]).length === 0) {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (table) missing or empty 'cells'`);
+          return false;
+        }
+        break;
+      case 'thinking':
+        if (b['text'] !== undefined && typeof b['text'] !== 'string') {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (thinking) 'text' must be string, got ${typeof b['text']}`);
+          return false;
+        }
+        break;
+    }
+  }
+  return true;
+}
 
 function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = false): string {
   if (typeof originalText === 'string' && originalText.startsWith('___RAW_HTML___')) {
@@ -85,7 +224,7 @@ export interface TelegramBotOptions {
  * with the in-progress message handler — otherwise it would be queued behind it.
  * Callback queries are bypass-sequentialized (returns undefined) so they respond immediately.
  */
-export function getSequentialKey(ctx: any): string | undefined {
+function getSequentialKey(ctx: any): string | undefined {
   if (ctx.callbackQuery) {
     return undefined;
   }
@@ -128,10 +267,6 @@ function prepareTelegramMarkdown(markdown: string): string {
 const draftIds = new Map<number, number>();
 const activeDraftIds = new Set<number>();
 
-export function clearDraftIds(): void {
-  draftIds.clear();
-  activeDraftIds.clear();
-}
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  */
@@ -227,49 +362,103 @@ export function buildChannelReply(
         : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
       try {
-        // Option A (AGENTS.md Mandate): Native Rich HTML via sendRichMessage.
-        // Telegram server parses HTML natively into full Rich Blocks (including
-        // tables, details with bold text, headings, and LaTeX formulas).
+        // Option A (AGENTS.md Mandate): Native InputRichBlock via sendRichMessage.
+        // Blocks are constructed by buildFinalBlocks (or getBlocksPayload) which
+        // produce @grammyjs/types InputRichBlock<never>[] — giving us compile-time
+        // validation of every block's required fields.
+        try {
+          const blocks = getBlocksPayload(originalText);
+          if (blocks.length > 0) {
+            if (!validateBlocksPayload(blocks)) {
+              logger.warn(`[BLOCK VALIDATION] Block payload failed pre-flight validation, skipping Option A`);
+              throw new Error('Block payload validation failed');
+            }
+
+            // Split blocks into parts using AST-level splitter
+            const parts = splitRichBlocks(blocks, TELEGRAM_RICH_MAX_LENGTH);
+            const totalTextLen = typeof originalText === 'string'
+              ? originalText.length
+              : (originalText.content.length + (originalText.thought?.length || 0));
+
+            // File fallback: if extremely long or too many parts, send as .md file
+            if (totalTextLen > 60000 || parts.length > 5) {
+              logger.info(`[SENDRICH] Message too long (${totalTextLen} chars, ${parts.length} parts), falling back to file send`);
+              const mdContent = typeof originalText === 'string'
+                ? originalText
+                : `${originalText.content}${originalText.thought ? `\n\n# 思考过程\n${originalText.thought}` : ''}`;
+              const fileName = `response_${Date.now()}.md`;
+              const preview = mdContent.slice(0, 200).replace(/\n/g, ' ');
+              const caption = `📄 内容过长，已自动导出为 Markdown 文件\n\n${preview}...`;
+              const file = new InputFile(Buffer.from(mdContent, 'utf-8'), fileName);
+              const msg = await ctx.replyWithDocument(file, {
+                caption,
+                message_thread_id: messageThreadId,
+              });
+              messageCache.set(msg.message_id, safeMarkdown);
+              return msg.message_id;
+            }
+
+            if (parts.length === 1) {
+              // Single part: send as before
+              logger.debug(`[SENDRICH] Option A: sending native blocks (count=${blocks.length})`);
+              const richMessage = buildRichMessagePayload(parts[0]);
+              const res = await ctx.api.sendRichMessage(chatId, richMessage, {
+                message_thread_id: messageThreadId,
+              });
+              messageCache.set(res.message_id, safeMarkdown);
+              return res.message_id;
+            }
+
+            // Multi-part: send sequentially with part numbering and delay
+            logger.info(`[SENDRICH] Option A: sending ${parts.length} parts (total=${totalTextLen} chars)`);
+            let lastMsgId = 0;
+            for (let pIdx = 0; pIdx < parts.length; pIdx++) {
+              let partBlocks = parts[pIdx];
+              if (pIdx > 0) {
+                partBlocks = [...partBlocks, { type: 'footer', text: `(Part ${pIdx + 1}/${parts.length})` } as RichBlock];
+              }
+              const richMessage = buildRichMessagePayload(partBlocks);
+              const res = await ctx.api.sendRichMessage(chatId, richMessage, {
+                message_thread_id: messageThreadId,
+              });
+              lastMsgId = res.message_id;
+              messageCache.set(lastMsgId, safeMarkdown);
+              if (pIdx < parts.length - 1) {
+                await new Promise(r => setTimeout(r, 300));
+              }
+            }
+            return lastMsgId;
+          } else {
+            logger.debug(`[SENDRICH] Option A skipped: empty blocks, falling through`);
+          }
+        } catch (err: any) {
+          logger.warn(`sendRich Option A (blocks) failed: ${err.message || err}. Trying Option B...`);
+        }
+
+        // Option B: Rich HTML via sendRichMessage (native server-side HTML→blocks parsing)
         try {
           let html = getHtmlPayload(originalText);
           if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
             html = '正在思考...<br><br>' + html;
           }
-          logger.debug(`[TELEGRAM PAYLOAD] sendRich Option A html.length=${html.length}`);
-          const res: any = await (ctx.api.raw as any).sendRichMessage({
-            chat_id: chatId,
+          logger.debug(`[SENDRICH] Option B: sending HTML (html.length=${html.length})`);
+          const richMessage = buildRichMessageHtmlPayload(html);
+          const res = await ctx.api.sendRichMessage(chatId, richMessage, {
             message_thread_id: messageThreadId,
-            rich_message: { html },
           });
           messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
         } catch (err: any) {
-          logger.warn(`sendRich Option A (HTML) failed: ${err.message || err}. Trying Option B (blocks)...`);
-        }
-
-        // Option B: Native structured blocks payload fallback
-        try {
-          const blocks = getBlocksPayload(originalText);
-          if (blocks.length > 0) {
-            const res: any = await (ctx.api.raw as any).sendRichMessage({
-              chat_id: chatId,
-              message_thread_id: messageThreadId,
-              rich_message: { blocks },
-            });
-            messageCache.set(res.message_id, safeMarkdown);
-            return res.message_id;
-          }
-        } catch (err: any) {
-          logger.warn(`sendRich Option B (blocks) failed: ${err.message || err}. Trying Option C...`);
+          logger.warn(`sendRich Option B (HTML) failed: ${err.message || err}. Trying Option C...`);
         }
 
         // Option C: Rich Markdown
         try {
           const preparedMarkdown = prepareTelegramMarkdown(safeMarkdown);
-          const res: any = await (ctx.api.raw as any).sendRichMessage({
-            chat_id: chatId,
+          logger.debug(`[SENDRICH] Option C: sending Markdown`);
+          const richMessage = buildRichMessageMarkdownPayload(preparedMarkdown);
+          const res = await ctx.api.sendRichMessage(chatId, richMessage, {
             message_thread_id: messageThreadId,
-            rich_message: { markdown: preparedMarkdown },
           });
           messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
@@ -277,7 +466,7 @@ export function buildChannelReply(
           logger.warn(`sendRich Option C failed: ${err.message || err}. Trying Option D...`);
         }
 
-        // Option D: HTML Fallback
+        // Option D: HTML Fallback via standard ctx.reply
         try {
           let htmlText = getHtmlPayload(originalText);
           if (htmlText.includes('<details') && !htmlText.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
@@ -321,23 +510,25 @@ export function buildChannelReply(
         ? originalText
         : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
+      // Throttle to avoid 429 on rapid stream updates
+      await throttleDraft(chatId);
+
       // Option A (10.2): Native structured blocks with native `thinking` placeholder
       // while streaming (draft-only). Body blocks are streamed once content arrives.
       try {
-        const hasThought = typeof originalText === 'string'
-          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
-          : (!!originalText.thought && originalText.thought.trim().length > 0);
-        const content = typeof originalText === 'string' ? originalText : originalText.content;
-        const blocks = buildStreamingBlocks(content, hasThought, true);
+        const contentRaw = typeof originalText === 'string' ? originalText : originalText.content;
+        const thoughtRaw = typeof originalText === 'string' ? undefined : originalText.thought;
+        const blocks = buildStreamingBlocks({ content: contentRaw, thought: thoughtRaw });
         if (blocks.length > 0) {
+          if (!validateBlocksPayload(blocks)) {
+            logger.warn(`[BLOCK VALIDATION] Draft blocks failed pre-flight, falling through`);
+            throw new Error('Draft blocks validation failed');
+          }
           logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option A - blocks): draftId=${draftId}, blocks=${blocks.length}`);
-          const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
-            chat_id: chatId,
+          await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessagePayload(blocks), {
             message_thread_id: messageThreadId,
-            draft_id: draftId,
-            rich_message: { blocks },
           });
-          logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (blocks) success for draftId=${draftId}. Response keys: ${Object.keys(res || {})}`);
+          logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (blocks) success for draftId=${draftId}.`);
           messageCache.set(draftId, cacheMarkdown);
           return draftId;
         }
@@ -352,22 +543,19 @@ export function buildChannelReply(
           html = '正在思考...<br><br>' + html;
         }
 
-        const hasThought = typeof originalText === 'string'
-          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
-          : (!!originalText.thought && originalText.thought.trim().length > 0);
+        const contentText = typeof originalText === 'string'
+          ? originalText.replace(/<thought[^>]*>[\s\S]*?<\/thought[^>]*>/gi, '').replace(/<thought-gemini[^>]*>[\s\S]*?<\/thought-gemini[^>]*>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think[^>]*>/gi, '').trim()
+          : (originalText.content || '').trim();
 
-        const suffix = hasThought
+        const suffix = contentText
           ? ''
           : '\n<tg-thinking>正在思考...</tg-thinking>';
 
         logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option B): html="${html}${suffix}"`);
-        const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
-          chat_id: chatId,
+        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageHtmlPayload(`${html}${suffix}`), {
           message_thread_id: messageThreadId,
-          draft_id: draftId,
-          rich_message: { html: `${html}${suffix}` },
         });
-        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (HTML) success for draftId=${draftId}. Response keys: ${Object.keys(res || {})}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (HTML) success for draftId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
@@ -378,13 +566,10 @@ export function buildChannelReply(
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
         logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option C - Markdown): markdown="${safeMarkdown}"`);
-        const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
-          chat_id: chatId,
+        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown), {
           message_thread_id: messageThreadId,
-          draft_id: draftId,
-          rich_message: { markdown: safeMarkdown },
         });
-        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (Markdown) success for draftId=${draftId}. Response keys: ${Object.keys(res || {})}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (Markdown) success for draftId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return draftId;
       } catch (err: any) {
@@ -401,22 +586,24 @@ export function buildChannelReply(
         ? originalText
         : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
 
+      // Throttle to avoid 429 on rapid stream updates
+      await throttleDraft(chatId);
+
       // Per Bot API 10.1: there is no "editRichMessageDraft" method.
       // Updating a draft is done by calling sendRichMessageDraft again with the same draft_id.
       // Option A (10.2): Native structured blocks with native `thinking` placeholder.
       try {
-        const hasThought = typeof originalText === 'string'
-          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
-          : (!!originalText.thought && originalText.thought.trim().length > 0);
-        const content = typeof originalText === 'string' ? originalText : originalText.content;
-        const blocks = buildStreamingBlocks(content, hasThought, isStreaming);
+        const contentRaw = typeof originalText === 'string' ? originalText : originalText.content;
+        const thoughtRaw = typeof originalText === 'string' ? undefined : originalText.thought;
+        const blocks = buildStreamingBlocks({ content: contentRaw, thought: thoughtRaw });
         if (blocks.length > 0) {
-          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A - blocks, isStreaming=${isStreaming}): blocks=${blocks.length}`);
-          await (ctx.api.raw as any).sendRichMessageDraft({
-            chat_id: chatId,
+          if (!validateBlocksPayload(blocks)) {
+            logger.warn(`[BLOCK VALIDATION] Edit draft blocks failed pre-flight, falling through`);
+            throw new Error('Edit draft blocks validation failed');
+          }
+          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A - blocks): blocks=${blocks.length}`);
+          await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessagePayload(blocks), {
             message_thread_id: messageThreadId,
-            draft_id: draftId,
-            rich_message: { blocks },
           });
           logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit blocks) success for draftId=${draftId}.`);
           messageCache.set(draftId, cacheMarkdown);
@@ -442,11 +629,8 @@ export function buildChannelReply(
           : '';
 
         logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option B, isStreaming=${isStreaming}): html="${html}${suffix}"`);
-        await (ctx.api.raw as any).sendRichMessageDraft({
-          chat_id: chatId,
+        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageHtmlPayload(`${html}${suffix}`), {
           message_thread_id: messageThreadId,
-          draft_id: draftId,
-          rich_message: { html: `${html}${suffix}` },
         });
         logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit HTML) success for draftId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
@@ -459,11 +643,8 @@ export function buildChannelReply(
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
         logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option C - Markdown): markdown="${safeMarkdown}"`);
-        await (ctx.api.raw as any).sendRichMessageDraft({
-          chat_id: chatId,
+        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown), {
           message_thread_id: messageThreadId,
-          draft_id: draftId,
-          rich_message: { markdown: safeMarkdown },
         });
         logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit Markdown) success for draftId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
@@ -482,18 +663,17 @@ export function buildChannelReply(
         activeDraftIds.add(targetDraftId);
         draftIds.set(chatId, targetDraftId);
 
-        const res: any = await (ctx.api.raw as any).sendRichMessageDraft({
-          chat_id: chatId,
-          message_thread_id: messageThreadId,
-          draft_id: targetDraftId,
-          rich_message: { blocks },
-        });
-        const returnedId = res?.draft_id ?? res?.message_id ?? targetDraftId;
-        if (returnedId) {
-          activeDraftIds.add(returnedId);
-          draftIds.set(chatId, returnedId);
+        // Throttle draft calls
+        await throttleDraft(chatId);
+
+        if (!validateBlocksPayload(blocks)) {
+          logger.warn(`[BLOCK VALIDATION] sendRichDraftBlocks payload failed validation`);
+          throw new Error('Block payload validation failed');
         }
-        return returnedId;
+        await ctx.api.sendRichMessageDraft(chatId, targetDraftId, buildRichMessagePayload(blocks as RichBlock[]), {
+          message_thread_id: messageThreadId,
+        });
+        return targetDraftId;
       } catch (err: any) {
         logger.warn(`sendRichDraftBlocks failed for draftId=${draftId}: ${err.message || err}`);
         throw err;
@@ -501,23 +681,21 @@ export function buildChannelReply(
     },
     editRichBlocks: async (messageId: number, blocks: unknown[]): Promise<number | void> => {
       try {
+        if (!validateBlocksPayload(blocks)) {
+          logger.warn(`[BLOCK VALIDATION] editRichBlocks payload failed validation`);
+          throw new Error('Block payload validation failed');
+        }
         if (activeDraftIds.has(messageId) || draftIds.get(chatId) === messageId) {
-          const res: any = await (ctx.api.raw as any).sendRichMessage({
-            chat_id: chatId,
+          // Materialize draft: sendRichMessage creates a persisted message
+          const res = await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(blocks as RichBlock[]), {
             message_thread_id: messageThreadId,
-            draft_id: messageId,
-            rich_message: { blocks },
           });
-          const realId = res?.message_id ?? messageId;
           activeDraftIds.delete(messageId);
           if (draftIds.get(chatId) === messageId) draftIds.delete(chatId);
-          return realId;
+          return res.message_id;
         }
-        await (ctx.api.raw as any).editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          rich_message: { blocks },
-        });
+        // Edit existing persisted message via editMessageText
+        await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(blocks as RichBlock[]));
         return messageId;
       } catch (err: any) {
         if (err?.description?.includes('message is not modified')) return messageId;
@@ -555,12 +733,12 @@ export function buildChannelReply(
       try {
         const blocks = getBlocksPayload(originalText);
         if (blocks.length > 0) {
+          if (!validateBlocksPayload(blocks)) {
+            logger.warn(`[BLOCK VALIDATION] editRich blocks failed validation, falling through`);
+            throw new Error('Block payload validation failed');
+          }
           logger.debug(`[DEBUG] editMessageText (Option A - blocks) called: messageId=${messageId}, blocks=${blocks.length}`);
-          await (ctx.api.raw as any).editMessageText({
-            chat_id: chatId,
-            message_id: messageId,
-            rich_message: { blocks },
-          });
+          await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(blocks));
           logger.debug(`[DEBUG] editMessageText (Option A - blocks) success: messageId=${messageId}`);
           messageCache.set(messageId, cacheMarkdown);
           return;
@@ -582,11 +760,7 @@ export function buildChannelReply(
         logger.debug(`[TELEGRAM PAYLOAD] editRich originalText.length=${textLen} html.length=${html.length} containsDetails=${html.includes('<details')} containsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')} containsBodyTitle=${html.includes('证明') || html.includes('Proof')}`);
 
         logger.debug(`[DEBUG] editMessageText (Option B) called: messageId=${messageId}`);
-        await (ctx.api.raw as any).editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          rich_message: { html },
-        });
+        await ctx.api.editMessageText(chatId, messageId, buildRichMessageHtmlPayload(html));
         logger.debug(`[DEBUG] editMessageText (Option B) success: messageId=${messageId}`);
         messageCache.set(messageId, cacheMarkdown);
         return;
@@ -602,11 +776,7 @@ export function buildChannelReply(
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
         logger.debug(`[DEBUG] editMessageText (Option C) called: messageId=${messageId}`);
-        await (ctx.api.raw as any).editMessageText({
-          chat_id: chatId,
-          message_id: messageId,
-          rich_message: { markdown: safeMarkdown },
-        });
+        await ctx.api.editMessageText(chatId, messageId, buildRichMessageMarkdownPayload(safeMarkdown));
         logger.debug(`[DEBUG] editMessageText (Option C) success: messageId=${messageId}`);
         messageCache.set(messageId, cacheMarkdown);
         return;

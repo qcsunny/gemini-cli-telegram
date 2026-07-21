@@ -37,6 +37,11 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 2.50, outputRate: 10.00 }
   },
   {
+    // Gemini 3.6 Flash
+    pattern: /3\.6\s*flash/i,
+    rates: { inputRate: 1.50, outputRate: 9.00 }
+  },
+  {
     // Gemini 3.5 Flash
     pattern: /3\.5\s*flash/i,
     rates: { inputRate: 1.50, outputRate: 9.00 }
@@ -94,7 +99,7 @@ const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00 };
  * - Estimate: CJK characters count * 0.8 + English words count * 1.3.
  * - Return at least 1 token if input text is non-empty.
  */
-export function estimateTokens(text: string): number {
+function estimateTokens(text: string): number {
   if (!text || !text.trim()) {
     return 0;
   }
@@ -131,7 +136,7 @@ export interface TokenUsage {
  * Lookup is case-insensitive and partial.
  * Supports cached tokens discount (Gemini caching discount is 25% of input rate).
  */
-export function calculateCost(
+function calculateCost(
   modelName: string,
   inputTokens: number,
   outputTokens: number,
