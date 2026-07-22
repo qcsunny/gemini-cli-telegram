@@ -6,9 +6,12 @@
 
 /**
  * @file messageCache.ts
- * @description In-memory TTL cache storing unformatted Markdown messages and reply contexts.
+ * @description LRU TTL cache storing unformatted Markdown messages and reply contexts.
  * Enables exact Markdown source retrieval for the /save command instead of extracting rendered HTML from Telegram.
  */
+
+import { LRUCache } from 'lru-cache';
+import { getTuningConfig } from '../config/userConfig.js';
 
 /**
  * Contextual metadata associated with a saved message reply, including title and separate thinking/answer blocks.
@@ -20,47 +23,47 @@ export interface ReplyContext {
 }
 
 /**
- * A simple TTL-based cache for storing original Markdown messages.
- * This allows the /save command to retrieve the unformatted source
- * instead of the rendered text from Telegram.
+ * Internal cache entry storing the raw Markdown text and optional reply context.
+ */
+interface CacheEntry {
+  text: string;
+  replyContext?: ReplyContext;
+}
+
+/**
+ * LRU-based TTL cache for original Markdown messages.
+ * Uses `lru-cache` for efficient O(1) get/set with automatic LRU eviction
+ * and TTL-based expiration. The /save command retrieves unformatted source
+ * instead of rendered text from Telegram.
  */
 export class MessageCache {
-  private cache = new Map<number, { text: string; replyContext?: ReplyContext; timestamp: number }>();
-  private readonly ttl: number;
-  private readonly maxSize: number;
+  private cache: LRUCache<number, CacheEntry>;
+  /** Tracks the most recently stored reply context for /save convenience. */
+  private lastReplyContext: ReplyContext | null = null;
 
   /**
-   * @param ttlMs - Time-to-live for cache entries in milliseconds (default: 24 hours).
-   * @param maxSize - Maximum number of entries before oldest entry eviction (default: 1000).
+   * @param ttlMs - Time-to-live for cache entries in milliseconds.
+   * @param maxSize - Maximum number of entries before LRU eviction.
    */
-  constructor(ttlMs = 24 * 60 * 60 * 1000, maxSize = 1000) {
-    this.ttl = ttlMs;
-    this.maxSize = maxSize;
+  constructor(ttlMs: number, maxSize: number) {
+    this.cache = new LRUCache<number, CacheEntry>({
+      max: maxSize,
+      ttl: ttlMs,
+    });
   }
 
   /**
    * Stores or updates a message entry in the cache.
-   * Evicts the oldest entry if capacity is reached.
+   * LRU eviction happens automatically when capacity is reached.
    *
    * @param messageId - Telegram message ID or draft ID.
    * @param text - Raw Markdown content string.
    * @param replyContext - Optional structured reply context (thinking & answer parts).
    */
   set(messageId: number, text: string, replyContext?: ReplyContext): void {
-    if (this.cache.size >= this.maxSize) {
-      const oldestKey = this.cache.keys().next().value;
-      if (oldestKey !== undefined) this.cache.delete(oldestKey);
-    }
-
-    this.cache.set(messageId, {
-      text,
-      replyContext,
-      timestamp: Date.now(),
-    });
-
-    // Cleanup expired entries occasionally
-    if (Math.random() < 0.1) {
-      this.cleanup();
+    this.cache.set(messageId, { text, replyContext });
+    if (replyContext) {
+      this.lastReplyContext = replyContext;
     }
   }
 
@@ -68,55 +71,21 @@ export class MessageCache {
    * Retrieves stored raw Markdown text for a given message ID if not expired.
    */
   get(messageId: number): string | null {
-    const entry = this.cache.get(messageId);
-    if (!entry) return null;
-
-    if (Date.now() - entry.timestamp > this.ttl) {
-      this.cache.delete(messageId);
-      return null;
-    }
-
-    return entry.text;
+    return this.cache.get(messageId)?.text ?? null;
   }
 
   /**
    * Retrieves stored ReplyContext for a given message ID if not expired.
    */
   getReplyContext(messageId: number): ReplyContext | null {
-    const entry = this.cache.get(messageId);
-    if (!entry) return null;
-
-    if (Date.now() - entry.timestamp > this.ttl) {
-      this.cache.delete(messageId);
-      return null;
-    }
-
-    return entry.replyContext || null;
+    return this.cache.get(messageId)?.replyContext ?? null;
   }
 
   /**
    * Finds and returns the most recently stored ReplyContext across all cached messages.
    */
   getLastReplyContext(): ReplyContext | null {
-    let latest: { timestamp: number; context: ReplyContext } | null = null;
-    for (const entry of this.cache.values()) {
-      if (entry.replyContext && (!latest || entry.timestamp > latest.timestamp)) {
-        latest = { timestamp: entry.timestamp, context: entry.replyContext };
-      }
-    }
-    return latest ? latest.context : null;
-  }
-
-  /**
-   * Evicts all expired cache entries based on configured TTL.
-   */
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.cache.entries()) {
-      if (now - entry.timestamp > this.ttl) {
-        this.cache.delete(key);
-      }
-    }
+    return this.lastReplyContext;
   }
 
   get size(): number {
@@ -124,8 +93,12 @@ export class MessageCache {
   }
 
   get capacity(): number {
-    return this.maxSize;
+    return this.cache.max;
   }
 }
 
-export const messageCache = new MessageCache();
+/** Singleton instance — configured from config.json tuning parameters. */
+export const messageCache = new MessageCache(
+  getTuningConfig().cacheTtlMs,
+  getTuningConfig().cacheMaxSize,
+);

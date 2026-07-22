@@ -16,46 +16,44 @@ import * as os from 'node:os';
 import * as http from 'node:http';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
-import { loadUserConfig } from '../config/userConfig.js';
+import { loadUserConfig, getTuningConfig, getBackendUrl, getWeb2ApiKey } from '../config/userConfig.js';
+import { saveMessage, restoreAllHistories } from './messageStore.js';
 import Database from 'better-sqlite3';
 
 
-// ─── Web2API (local Gemini via gemini-web2api) ────────────────────────────────
-const WEB2API_BASE_URL = 'http://127.0.0.1:8081/v1';
-const WEB2API_API_KEY  = 'sk-gemini-local';
 
-/** Map from display name → actual web2api model ID */
-const WEB2API_MODEL_MAP: Record<string, string> = {
-  'Web2API: Gemini 3.1 Pro Enhanced':         'gemini-3.1-pro-enhanced',
-  'Web2API: Gemini 3.6 Flash':              'gemini-3.6-flash',
-  'Web2API: Gemini 3.5 Flash':              'gemini-3.5-flash',
-  'Web2API: Gemini 3.5 Flash Thinking':     'gemini-3.5-flash-thinking',
-  'Web2API: Gemini 3.5 Flash Thinking Lite':'gemini-3.5-flash-thinking-lite',
-  'Web2API: Gemini 3.1 Pro':                'gemini-3.1-pro',
-  'Web2API: Gemini Flash Lite':             'gemini-flash-lite',
-  'Web2API: Gemini Auto':                   'gemini-auto',
-};
+interface ModelsConfig {
+  defaultOrder: string[];
+  routing: Record<string, string>;
+}
 
-/** Returns true if the model name should be routed to web2api */
+let _parsedModels: ModelsConfig | null | undefined; // undefined = need reload, null = failed, object = cached
+
+function loadModelsConfig(): ModelsConfig | null {
+  if (_parsedModels !== undefined) return _parsedModels;
+  try {
+    const url = new URL('../config/models.json', import.meta.url);
+    const content = fssync.readFileSync(url, 'utf-8');
+    _parsedModels = JSON.parse(content) as ModelsConfig;
+  } catch (e) {
+    _parsedModels = null;
+  }
+  return _parsedModels;
+}
+
+/** Returns true if the model name has a routing entry pointing to web2api */
 export function isWeb2ApiModel(model: string): boolean {
-  return model in WEB2API_MODEL_MAP;
+  const cfg = loadModelsConfig();
+  if (!cfg) return false;
+  return model in cfg.routing && model.startsWith('Web2API:');
 }
 
 // ─── DeepSeek API Proxy (local deepseek-api) ──────────────────────────────────
-const DEEPSEEK_BASE_URL = 'http://127.0.0.1:5001/v1';
-
-/** Map from display name → actual deepseek-api model ID */
-const DEEPSEEK_MODEL_MAP: Record<string, string> = {
-  'DeepSeek: Flash':                     'deepseek-v4-flash',
-  'DeepSeek: Flash Thinking':            'deepseek-v4-flash-thinking',
-  'DeepSeek: Flash Search':              'deepseek-v4-flash-search',
-  'DeepSeek: Flash Thinking Search':     'deepseek-v4-flash-thinking-search',
-  'DeepSeek: Pro':                       'deepseek-v4-pro',
-  'DeepSeek: Pro Thinking':              'deepseek-v4-pro-thinking',
-};
-
+/** Returns true if the model name has a routing entry pointing to deepseek */
 export function isDeepSeekModel(model: string): boolean {
-  return model in DEEPSEEK_MODEL_MAP;
+  const cfg = loadModelsConfig();
+  if (!cfg) return false;
+  return model in cfg.routing && model.startsWith('DeepSeek:');
 }
 
 // ── Web2API in-memory conversation history ───────────────────────────────────
@@ -64,8 +62,14 @@ export function isDeepSeekModel(model: string): boolean {
 interface Web2ApiMessage {
   role: 'user' | 'assistant';
   content: string;
+  createdAt?: string;
 }
 const web2apiHistories = new Map<string, Web2ApiMessage[]>();
+
+/** Restore web2api/deepseek/gemini-direct conversation histories from SQLite on startup. */
+export function restoreHistoriesFromDb(): void {
+  restoreAllHistories(web2apiHistories, deepseekHistories, geminiDirectHistories);
+}
 
 // ── Gemini Direct in-memory conversation history ─────────────────────────────
 // Separate from web2apiHistories to avoid cross-contamination between routing paths.
@@ -91,7 +95,8 @@ export function clearDeepSeekHistory(conversationId: string): void {
 
 export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
   const { prompt, conversationId: existingConvId, model = '', onChunk, signal } = opts;
-  const modelId = DEEPSEEK_MODEL_MAP[model] ?? 'deepseek-v4-flash';
+  const cfg = loadModelsConfig();
+  const modelId = cfg?.routing[model] ?? 'deepseek-v4-flash';
 
   const convId = existingConvId || makeDeepSeekConvId();
 
@@ -107,7 +112,11 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
     messages: history.map(h => ({ role: h.role, content: h.content })),
   });
 
-  const url = new URL(`${DEEPSEEK_BASE_URL}/chat/completions`);
+  const backendUrl = getBackendUrl('deepseek');
+  if (!backendUrl) {
+    return { conversationId: '', output: '', exitCode: 1, stderr: 'DeepSeek backend URL not configured' };
+  }
+  const url = new URL(`${backendUrl}/chat/completions`);
   const reqOptions: http.RequestOptions = {
     hostname: url.hostname,
     port: url.port || 80,
@@ -196,10 +205,12 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
 
         if (finalOutput) {
           history.push({ role: 'assistant', content: finalOutput });
-          const MAX_MESSAGES = 40;
-          const trimmed = history.length > MAX_MESSAGES ? history.slice(history.length - MAX_MESSAGES) : history;
+          const maxMessages = getTuningConfig().maxHistoryMessages;
+          const trimmed = history.length > maxMessages ? history.slice(history.length - maxMessages) : history;
           deepseekHistories.set(convId, trimmed);
         }
+        saveMessage(convId, 'user', prompt, 'deepseek');
+        saveMessage(convId, 'assistant', finalOutput, 'deepseek');
         resolve({ conversationId: convId, output: finalOutput, exitCode: 0, stderr: '' });
       });
 
@@ -240,7 +251,8 @@ export function clearWeb2ApiHistory(conversationId: string): void {
  */
 export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
   const { prompt, conversationId: existingConvId, model = '', onChunk, signal } = opts;
-  const modelId = WEB2API_MODEL_MAP[model] ?? 'gemini-3.5-flash';
+  const cfg = loadModelsConfig();
+  const modelId = cfg?.routing[model] ?? 'gemini-3.5-flash';
 
   // Resolve or create the conversation ID
   const convId = existingConvId || makeWeb2ApiConvId();
@@ -255,7 +267,11 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
     messages: history,
   });
 
-  const url = new URL(`${WEB2API_BASE_URL}/chat/completions`);
+  const backendUrl = getBackendUrl('web2api');
+  if (!backendUrl) {
+    return { conversationId: '', output: '', exitCode: 1, stderr: 'Web2API backend URL not configured' };
+  }
+  const url = new URL(`${backendUrl}/chat/completions`);
   const reqOptions: http.RequestOptions = {
     hostname: url.hostname,
     port: url.port || 80,
@@ -263,7 +279,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${WEB2API_API_KEY}`,
+      'Authorization': `Bearer ${getWeb2ApiKey()}`,
       'Content-Length': Buffer.byteLength(body),
     },
   };
@@ -333,11 +349,14 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
         // Persist the assistant reply in history for next turn
         if (outputBuf) {
           history.push({ role: 'assistant', content: outputBuf });
-          // Cap history at 40 messages (20 turns) to avoid memory growth
-          const MAX_MESSAGES = 40;
-          const trimmed = history.length > MAX_MESSAGES ? history.slice(history.length - MAX_MESSAGES) : history;
+          // Cap history at maxHistoryMessages (configurable via tuning) to avoid memory growth
+          const maxMessages = getTuningConfig().maxHistoryMessages;
+          const trimmed = history.length > maxMessages ? history.slice(history.length - maxMessages) : history;
           web2apiHistories.set(convId, trimmed);
         }
+        // Persist to SQLite for restart survival
+        saveMessage(convId, 'user', prompt, 'web2api');
+        saveMessage(convId, 'assistant', outputBuf, 'web2api');
         // Upstream returned no content (e.g. Gemini web rate-limit / empty reply).
         // Surface a clear message instead of sending a blank message.
         if (!outputBuf.trim()) {
@@ -540,8 +559,8 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
 
     // Save history in memory
     history.push({ role: 'model', parts: [{ text: outputBuf }] });
-    const MAX_MESSAGES = 40;
-    const trimmed = history.length > MAX_MESSAGES ? history.slice(history.length - MAX_MESSAGES) : history;
+    const maxMessages = getTuningConfig().maxHistoryMessages;
+    const trimmed = history.length > maxMessages ? history.slice(history.length - maxMessages) : history;
     geminiDirectHistories.set(convId, trimmed);
 
     const finalResult: AgyRunResult = {
@@ -729,6 +748,21 @@ async function snapshotConversations(): Promise<Set<string>> {
  * Streams stdout to onChunk in real time; resolves when the process exits.
  *
  * Returns an AgyRunResult with the conversation UUID and full output.
+ */
+/**
+ * Execute a model run by routing to the appropriate backend.
+ *
+ * Routing priority (checked in order):
+ *   1. Web2API models (prefix "Web2API:") → local HTTP proxy at :8081
+ *   2. DeepSeek models (prefix "DeepSeek:") → local deepseek-api proxy at :5001
+ *   3. Gemini models with API key configured → direct Google AI REST SSE
+ *   4. Everything else → native `agy` binary (C++ child process)
+ *
+ * Each backend maintains its own conversation history:
+ *   - agy: persisted on disk as SQLite .db files (via conversationStore)
+ *   - web2api: in-memory Map<convId, message[]> (stateless service, full replay)
+ *   - deepseek: in-memory Map<convId, message[]> (stateless service, full replay)
+ *   - gemini-direct: in-memory Map<convId, message[]> (stateless, full replay)
  */
 export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   // Route web2api models directly to the local HTTP service
@@ -961,7 +995,8 @@ function parseVarint(data: Uint8Array, pos: number): { val: number; nextPos: num
   return { val, nextPos: pos };
 }
 
-function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | null {
+/** Exported for testing: manual protobuf decoder for agy usage metadata. */
+export function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | null {
   let pos = 0;
   while (pos < m.length) {
     let pTag;
@@ -1068,7 +1103,94 @@ function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | null {
   return null;
 }
 
-function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefined {
+/**
+ * Exported for testing: full metadata protobuf decoder, extracting all known
+ * fields for debugging. Returns a plain object with key/value pairs.
+ *
+ * Identified fields (reverse-engineered, no .proto):
+ *   field 1   — timestamp blob (12 bytes, varint-encoded)
+ *   field 3   — varint (role/type indicator)
+ *   field 4   — tool-call JSON (string, user steps only)
+ *   field 5   — repeated string labels
+ *   field 6-8 — timestamp-like blobs
+ *   field 9   — usage sub-message (input/output/cached/thinking)
+ *   field 11  — varint (constant 1020)
+ *   field 12  — conversation UUID (string)
+ *   field 20  — conversation tree (parent/child IDs)
+ *   field 21  — varint (nesting depth)
+ *   field 26  — sub-step token-summary container
+ *   field 30  — human-readable title (string)
+ *   field 31  — human-readable description (string)
+ */
+export function extractMetadataFromProto(m: Uint8Array): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  let pos = 0;
+
+  while (pos < m.length) {
+    let pTag;
+    try { pTag = parseVarint(m, pos); } catch { break; }
+    const tag = pTag.val;
+    pos = pTag.nextPos;
+    if (pos > m.length) break;
+
+    const wireType = tag & 7;
+    const fieldNum = tag >> 3;
+
+    if (wireType === 0) {
+      try {
+        const v = parseVarint(m, pos);
+        result[`field${fieldNum}`] = v.val;
+        pos = v.nextPos;
+      } catch { break; }
+    } else if (wireType === 1) {
+      result[`field${fieldNum}`] = Buffer.from(m.slice(pos, pos + 8)).toString('hex');
+      pos += 8;
+    } else if (wireType === 2) {
+      try {
+        const pLen = parseVarint(m, pos);
+        const len = pLen.val;
+        pos = pLen.nextPos;
+        if (pos + len > m.length) break;
+        const slice = m.subarray(pos, pos + len);
+        const decoded = new TextDecoder().decode(slice);
+
+        // Classify known string fields
+        if (fieldNum === 4) {
+          result['toolCall'] = decoded;
+        } else if (fieldNum === 5) {
+          if (!result['labels']) result['labels'] = [];
+          (result['labels'] as string[]).push(decoded);
+        } else if (fieldNum === 9) {
+          // Field 9 is the usage sub-message; already decoded at the top level
+          // by readConversationHistory. Store raw preview for debugging.
+          result['field9_raw'] = decoded.slice(0, 120) + (decoded.length > 120 ? '...' : '');
+        } else if (fieldNum === 12) {
+          result['convId'] = decoded;
+        } else if (fieldNum === 20) {
+          result['convTree'] = decoded.slice(0, 120);
+        } else if (fieldNum === 30) {
+          result['title'] = decoded;
+        } else if (fieldNum === 31) {
+          result['description'] = decoded;
+        } else {
+          // Store raw text preview for unknown string fields
+          result[`field${fieldNum}`] = decoded.length > 100 ? decoded.slice(0, 100) + '...' : decoded;
+        }
+        pos += len;
+      } catch { break; }
+    } else if (wireType === 5) {
+      result[`field${fieldNum}`] = Buffer.from(m.slice(pos, pos + 4)).toString('hex');
+      pos += 4;
+    } else {
+      pos++;
+    }
+  }
+
+  return result;
+}
+
+/** Exported for testing: reads agy DB and extracts usage metadata. */
+export function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefined {
   try {
     if (!fssync.existsSync(dbPath)) {
       return undefined;
@@ -1091,37 +1213,192 @@ function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefine
   return undefined;
 }
 
-export const AVAILABLE_MODELS = [
-  'Gemini 3.6 Flash (High)',
-  'Gemini 3.6 Flash (Medium)',
-  'Gemini 3.6 Flash (Low)',
-  'Gemini 3.5 Flash (High)',
-  'Gemini 3.5 Flash (Medium)',
-  'Gemini 3.5 Flash (Low)',
-  'Gemini 3.1 Pro (High)',
-  'Gemini 3.1 Pro (Low)',
-  'Claude Sonnet 4.6 (Thinking)',
-  'Claude Opus 4.6 (Thinking)',
-  'GPT-OSS 120B (Medium)',
-  // 代理模型(web2api Gemini + DeepSeek)按指定顺序:
-  'Web2API: Gemini 3.1 Pro Enhanced',
-  'Web2API: Gemini 3.1 Pro',
-  'Web2API: Gemini 3.6 Flash',
-  'Web2API: Gemini 3.5 Flash Thinking',
-  'DeepSeek: Pro Thinking',
-  'Web2API: Gemini 3.5 Flash',
-  'DeepSeek: Pro',
-  'DeepSeek: Flash Thinking Search',
-  'DeepSeek: Flash Thinking',
-  'Web2API: Gemini 3.5 Flash Thinking Lite',
-  'DeepSeek: Flash Search',
-  'DeepSeek: Flash',
-  'Web2API: Gemini Auto',
-  'Web2API: Gemini Flash Lite',
-];
+// ── Conversation History Recovery ───────────────────────────────────────────
+
+export interface ConversationTurn {
+  role: 'user' | 'assistant' | 'thinking' | 'tool' | 'observation' | 'title' | 'unknown';
+  content: string;
+  stepType: number;
+  idx: number;
+  status: number;
+  stepFormat: number;
+  hasSubtrajectory: boolean;
+  /** Decoded token usage from metadata field 9, if present. */
+  usage?: {
+    input: number;
+    output: number;
+    cached: number;
+    thinking: number;
+  } | null;
+  /** Full decoded metadata fields for debugging. */
+  metadata?: Record<string, unknown> | null;
+  /** Raw blob columns for debugging. Protobuf blobs decoded via extractTextFromProto; plain text read directly. */
+  errorDetails: string | null;
+  permissions: string | null;
+  taskDetails: string | null;
+  renderInfo: string | null;
+}
+
+/**
+ * Reads the full conversation history from an agy SQLite database, decoding
+ * each step's protobuf payload back into readable text. Useful for seeding
+ * in-memory histories (web2apiHistories / deepseekHistories) when resuming
+ * a conversation from disk.
+ *
+ * Returns an ordered array of all steps, or null on failure.
+ */
+export function readConversationHistory(dbPath: string): ConversationTurn[] | null {
+  try {
+    if (!fssync.existsSync(dbPath)) return null;
+    const db = new Database(dbPath, { readonly: true });
+    const rows = db.prepare('SELECT idx, step_type, status, step_payload, metadata, step_format, has_subtrajectory, error_details, permissions, task_details, render_info FROM steps ORDER BY idx ASC').all() as any[];
+    db.close();
+
+    const turns: ConversationTurn[] = [];
+
+    for (const row of rows) {
+      if (!(row.step_payload instanceof Uint8Array)) continue;
+
+      const text = extractTextFromProto(row.step_payload);
+      if (!text) continue;
+
+      const stepType = Number(row.step_type);
+      const role = stepTypeToRole(stepType);
+      const md = row.metadata instanceof Uint8Array ? extractMetadataFromProto(row.metadata) : null;
+      turns.push({
+        role,
+        content: text,
+        stepType,
+        idx: Number(row.idx),
+        status: Number(row.status ?? 0),
+        stepFormat: Number(row.step_format ?? 0),
+        hasSubtrajectory: row.has_subtrajectory === 1 || row.has_subtrajectory === true,
+        usage: ((md?.['usage'] ?? undefined) as ConversationTurn['usage']),
+        metadata: md,
+        errorDetails: row.error_details instanceof Uint8Array ? extractTextFromProto(row.error_details) ?? decodePlainText(row.error_details) : null,
+        permissions: row.permissions instanceof Uint8Array ? extractTextFromProto(row.permissions) ?? decodePlainText(row.permissions) : null,
+        taskDetails: row.task_details instanceof Uint8Array ? decodePlainText(row.task_details) : null,
+        renderInfo: row.render_info instanceof Uint8Array ? decodePlainText(row.render_info) : null,
+      });
+    }
+
+    return turns;
+  } catch (e) {
+    logger.warn(`[agyCli] readConversationHistory failed: ${e}`);
+    return null;
+  }
+}
+
+/** Decode a blob as plain UTF-8 text, with null-bytes stripped and non-printable chars replaced. */
+function decodePlainText(b: Uint8Array): string {
+  const decoded = new TextDecoder().decode(b);
+  // Strip trailing null bytes (common in SQLite blobs) and replace other control chars
+  return decoded.replace(/\0+$/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '?');
+}
+
+function stepTypeToRole(stepType: number): ConversationTurn['role'] {
+  switch (stepType) {
+    case 8: return 'user';
+    case 9: return 'assistant';
+    case 14: return 'thinking';
+    case 15: return 'tool';
+    case 17: return 'observation';
+    case 23: return 'assistant';
+    case 98: return 'title';
+    default: return 'unknown';
+  }
+}
+
+/**
+ * Generic protobuf-to-text extractor. Walks all length-delimited (wire type 2)
+ * fields and returns the longest plausible string — this works without knowing
+ * the exact .proto field numbers.
+ */
+function extractTextFromProto(m: Uint8Array): string | null {
+  let pos = 0;
+  const strings: string[] = [];
+
+  while (pos < m.length) {
+    let pTag;
+    try {
+      pTag = parseVarint(m, pos);
+    } catch {
+      break;
+    }
+    const tag = pTag.val;
+    pos = pTag.nextPos;
+    if (pos > m.length) break;
+
+    const wireType = tag & 7;
+
+    if (wireType === 0) {
+      try { const p = parseVarint(m, pos); pos = p.nextPos; } catch { break; }
+    } else if (wireType === 1) {
+      pos += 8;
+    } else if (wireType === 2) {
+      try {
+        const pLen = parseVarint(m, pos);
+        const len = pLen.val;
+        pos = pLen.nextPos;
+        if (pos + len > m.length) break;
+
+        const slice = m.subarray(pos, pos + len);
+        const decoded = new TextDecoder().decode(slice);
+
+        if (decoded.length >= 4 && isPlausibleText(decoded)) {
+          strings.push(decoded);
+        }
+
+        pos += len;
+      } catch { break; }
+    } else if (wireType === 5) {
+      pos += 4;
+    } else {
+      pos++;
+    }
+  }
+
+  if (strings.length === 0) return null;
+  return strings.reduce((a, b) => a.length >= b.length ? a : b);
+}
+
+/** Quick heuristic: >70% printable / whitespace / common Unicode characters. */
+function isPlausibleText(s: string): boolean {
+  let printable = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code >= 32 && code <= 126) printable++;
+    else if (code === 10 || code === 13 || code === 9) printable++;
+    else if (code > 127) printable++;
+  }
+  return printable / s.length > 0.7;
+}
+
+/** Clears cached model order, forcing re-read from disk on next call. */
+export function clearDefaultModelsCache(): void {
+  _defaultModels = undefined;
+  _parsedModels = undefined; // also force reload of models.json
+}
+
+let _defaultModels: string[] | undefined;
+
+function getDefaultModels(): string[] {
+  if (_defaultModels) return _defaultModels;
+  const cfg = loadModelsConfig();
+  if (cfg?.defaultOrder) {
+    _defaultModels = cfg.defaultOrder;
+  } else {
+    _defaultModels = [];
+  }
+  return _defaultModels;
+}
 
 export async function getAvailableModels(): Promise<string[]> {
-  return AVAILABLE_MODELS;
+  const cfg = loadUserConfig();
+  if (cfg?.orderedModels && cfg.orderedModels.length > 0) {
+    return cfg.orderedModels;
+  }
+  return getDefaultModels();
 }
 
 interface ParsedBlock {

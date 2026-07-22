@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-*   Target files: [src/core/messageLoop.ts](file:///home/qcsunny/.gemini-cli-telegram/src/core/messageLoop.ts) and [src/core/messageLoop.test.ts](file:///home/qcsunny/.gemini-cli-telegram/src/core/messageLoop.test.ts).
+*   Target files: [src/core/messageLoop.ts](src/core/messageLoop.ts) and [src/core/messageLoop.test.ts](src/core/messageLoop.test.ts).
 *   No other files should be affected. All existing tests (152 total) must pass.
 
 ---
@@ -21,7 +21,7 @@
 - Modify: `src/core/messageLoop.ts`
 
 **Interfaces:**
-- Consumes: [docs/superpowers/specs/2026-07-22-horizontal-tier-fallback-design.md](file:///home/qcsunny/.gemini-cli-telegram/docs/superpowers/specs/2026-07-22-horizontal-tier-fallback-design.md)
+- Consumes: [docs/superpowers/specs/2026-07-22-horizontal-tier-fallback-design.md](docs/superpowers/specs/2026-07-22-horizontal-tier-fallback-design.md)
 - Produces: Updated circular fallback chain building.
 
 - [ ] **Step 1: Write the implementation changes**

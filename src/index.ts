@@ -16,6 +16,10 @@ import {
   type TelegramBotOptions,
 } from './channels/telegram/bot.js';
 import { logger } from './utils/logger.js';
+import { loadUserConfig, clearConfigCache } from './config/userConfig.js';
+import { clearDefaultModelsCache, restoreHistoriesFromDb } from './agy/agyCli.js';
+import { clearModelOrderCache } from './core/messageLoop.js';
+import { startHealthServer, stopHealthServer } from './utils/healthServer.js';
 
 export type { ChannelReply, DaemonSession, SessionOptions, MessageFormatter } from './core/types.js';
 export { SessionManager } from './core/session.js';
@@ -45,8 +49,15 @@ export async function startTelegramDaemon(
 
   const bot = new TelegramBot(options.token, options);
 
+  // Start the optional health HTTP server if configured
+  const config = loadUserConfig();
+  if (config?.healthPort) {
+    startHealthServer(config.healthPort);
+  }
+
   const shutdown = async () => {
     logger.info('Shutting down...');
+    stopHealthServer();
     await bot.stop();
     process.exit(0);
   };
@@ -54,6 +65,18 @@ export async function startTelegramDaemon(
   process.once('SIGTERM', () => void shutdown());
   process.once('SIGINT', () => void shutdown());
 
+  // SIGHUP — hot-reload config caches without restarting the daemon.
+  // After editing config.json (or models.json), send kill -HUP <pid>.
+  process.on('SIGHUP', () => {
+    logger.info('[SIGHUP] Clearing all config caches (tuning, models, model order)...');
+    clearConfigCache();
+    clearDefaultModelsCache();
+    clearModelOrderCache();
+  });
+
   await bot.start();
+
+  // Restore web2api/deepseek conversation histories from SQLite (survive restarts)
+  restoreHistoriesFromDb();
 }
 

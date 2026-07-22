@@ -17,31 +17,6 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 
-/**
- * Maps raw model string identifier to human-friendly UI display label.
- */
-function getDisplayString(model: string): string {
-  const displayNames: Record<string, string> = {
-    'gemini-1.5-pro': 'Gemini 1.5 Pro',
-    'gemini-1.5-flash': 'Gemini 1.5 Flash',
-    'gemini-2.5-pro': 'Gemini 2.5 Pro',
-    'gemini-2.5-flash': 'Gemini 2.5 Flash',
-    'gemini-3.1-pro-high': 'Gemini 3.1 Pro (High)',
-    'gemini-3.1-pro-low': 'Gemini 3.1 Pro (Low)',
-    'gemini-3.5-flash-high': 'Gemini 3.5 Flash (High)',
-    'gemini-3.5-flash-medium': 'Gemini 3.5 Flash (Medium)',
-    'gemini-3.5-flash-low': 'Gemini 3.5 Flash (Low)',
-    'gemini-3.6-flash-high': 'Gemini 3.6 Flash (High)',
-    'gemini-3.6-flash-medium': 'Gemini 3.6 Flash (Medium)',
-    'gemini-3.6-flash-low': 'Gemini 3.6 Flash (Low)',
-    'claude-3-5-sonnet': 'Claude Sonnet 4.6 (Thinking)',
-    'claude-3-opus': 'Claude Opus 4.6 (Thinking)',
-    'claude-sonnet-4-6': 'Claude Sonnet 4.6 (Thinking)',
-    'claude-opus-4-6-thinking': 'Claude Opus 4.6 (Thinking)',
-    'gpt-oss-120b-medium': 'GPT-OSS 120B (Medium)',
-  };
-  return displayNames[model] || model;
-}
 import type { SessionManager } from '../../core/session.js';
 import type { SessionOptions, DaemonSession } from '../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../core/resume.js';
@@ -63,7 +38,7 @@ import {
   truncate,
   escapeHtml,
 } from './ui.js';
-import { AVAILABLE_MODELS } from '../../agy/agyCli.js';
+import { getAvailableModels } from '../../agy/agyCli.js';
 
 const PROJECTS_PER_PAGE = 5;
 
@@ -227,10 +202,11 @@ export function registerCommands(
     if (!arg) {
       const session = sessionManager.getSession(chatId);
       const currentModel = session?.config.getModel() || 'unknown';
+      const models = await getAvailableModels();
 
-      const modelItems = AVAILABLE_MODELS.map((m, i) => ({
+      const modelItems = models.map((m, i) => ({
         id: (i + 1).toString(),
-        display: getDisplayString(m),
+        display: m,
         active: m === currentModel,
       }));
 
@@ -245,10 +221,11 @@ export function registerCommands(
     }
 
     // Resolve number to model name
+    const models = await getAvailableModels();
     const num = parseInt(arg, 10);
     const modelName =
-      !isNaN(num) && num >= 1 && num <= AVAILABLE_MODELS.length
-        ? AVAILABLE_MODELS[num - 1]
+      !isNaN(num) && num >= 1 && num <= models.length
+        ? models[num - 1]
         : arg;
 
     try {
@@ -1074,10 +1051,11 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
       ctx.answerCallbackQuery('Loading models...').catch(e => logger.error(`Failed callback: ${e}`));
       const session = sessionManager.getSession(chatId);
       const currentModel = session?.config.getModel() || 'unknown';
+      const models = await getAvailableModels();
 
-      const modelItems = AVAILABLE_MODELS.map((m, i) => ({
+      const modelItems = models.map((m, i) => ({
         id: (i + 1).toString(),
-        display: getDisplayString(m),
+        display: m,
         active: m === currentModel,
       }));
 
@@ -1112,8 +1090,8 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
         const dateStr = new Date().toISOString().slice(0, 10);
         const sanitizeTitle = (title || 'untitled').replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, '_').substring(0, 30);
         const filename = `${dateStr}_${sanitizeTitle}.md`;
-        const homeDir = process.env['HOME'] || '/root';
-        const inboxDir = `${homeDir}/Documents/Obsidian/Inbox`;
+        const config = loadUserConfig();
+        const inboxDir = config?.savePath || `${process.env['HOME'] || '/root'}/Documents/Obsidian/Inbox`;
         if (!fs.existsSync(inboxDir)) {
           fs.mkdirSync(inboxDir, { recursive: true });
         }
@@ -1362,11 +1340,12 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
 
     // Handle model selection callback
     if (data.startsWith('/model ')) {
+      const models = await getAvailableModels();
       const modelArg = data.replace('/model ', '');
       const num = parseInt(modelArg, 10);
       const modelName =
-        !isNaN(num) && num >= 1 && num <= AVAILABLE_MODELS.length
-          ? AVAILABLE_MODELS[num - 1]
+        !isNaN(num) && num >= 1 && num <= models.length
+          ? models[num - 1]
           : modelArg;
 
       ctx.answerCallbackQuery(`Brain: ${modelName}`).catch(e => logger.error(`Failed callback: ${e}`));

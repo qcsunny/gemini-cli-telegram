@@ -45,14 +45,14 @@ describe('userConfig', () => {
     expect(loadUserConfig()).toEqual(mockConfig);
   });
 
-  it('should throw ZodError when invalid config is loaded', () => {
+  it('should return null when invalid config is loaded instead of throwing', () => {
     const invalidConfig = {
       allowedUsers: 'not-an-array',
     };
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(invalidConfig));
 
-    expect(() => loadUserConfig()).toThrow();
+    expect(loadUserConfig()).toBeNull();
   });
 
   it('should save config', () => {

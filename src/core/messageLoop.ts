@@ -18,46 +18,31 @@ import * as os from 'node:os';
 
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import { logger } from '../utils/logger.js';
-import { ICONS } from '../channels/telegram/ui.js';
+import { ICONS, escapeHtml } from '../channels/telegram/ui.js';
 import { runAgyPrint, extractThoughtAndContent } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
+import { loadUserConfig, getTuningConfig } from '../config/userConfig.js';
 
-const DEBOUNCE_INTERVAL_MS = 1000;
-
-/**
- * Overall guard for a single model run. The underlying web2api/http request has
- * its own socket timeout, but if a response hangs before that fires (e.g. an
- * upstream stall with no bytes sent), the Promise would never resolve and the
- * user would see a silent "no reply". This wrapper guarantees the call always
- * settles, surfacing a clear error instead of hanging forever.
- */
-/**
- * Hard cap on a single model run (wall-clock from start, NEVER reset by
- * activity). A streamed reply that runs longer than this is killed. 15 min is
- * ~180k Chinese chars at 200 char/s — far beyond any daily need; longer means
- * the model is stuck in a loop.
- */
-const MODEL_RUN_HARD_TIMEOUT_MS = 900_000;
-/**
- * Inactivity guard: if there has been NO streamed output for this long, the run
- * is treated as a genuine upstream stall and killed. Reset on every streamed
- * chunk so an actively-streaming (even slow) reply is never killed.
- */
-const MODEL_RUN_INACTIVITY_MS = 600_000;
+// Read tuning defaults once at import time; callers use getTuningConfig() for runtime values.
+const tuning = getTuningConfig();
+const DEBOUNCE_INTERVAL_MS = tuning.debounceIntervalMs;
 
 /**
  * Overall guard for a single model run. Two independent timers race the run:
  *  - a HARD total cap (never reset), and
  *  - an INACTIVITY timer that resets on each streamed chunk/event.
  * `onActivity` lets the caller report progress to reset the inactivity timer.
+ *
+ * Both timeouts are read from `config.json` → `tuning` (see userConfig.ts).
  */
 async function withTimeout<T>(
   promise: Promise<T>,
   modelLabel: string,
   onActivity?: () => void,
 ): Promise<{ result: T; resetInactivity: () => void }> {
+  const { modelRunHardTimeoutMs: HARD_MS, modelRunInactivityMs: INACT_MS } = getTuningConfig();
   let hardTimer: NodeJS.Timeout | undefined;
   let inactTimer: NodeJS.Timeout | undefined;
   let reject: (reason?: any) => void;
@@ -68,15 +53,15 @@ async function withTimeout<T>(
 
   // Hard total cap — set once, never reset.
   hardTimer = setTimeout(() => {
-    fire(`模型 \`${modelLabel}\` 单次运行超过 ${MODEL_RUN_HARD_TIMEOUT_MS / 60000} 分钟被强制终止（疑似模型陷入死循环或上游挂起）。请稍后重试，或拆分问题。`);
-  }, MODEL_RUN_HARD_TIMEOUT_MS);
+    fire(`模型 \`${modelLabel}\` 单次运行超过 ${HARD_MS / 60000} 分钟被强制终止（疑似模型陷入死循环或上游挂起）。请稍后重试，或拆分问题。`);
+  }, HARD_MS);
 
   // Inactivity timer — reset on activity.
   const armInactivity = () => {
     if (inactTimer) clearTimeout(inactTimer);
     inactTimer = setTimeout(() => {
-      fire(`模型 \`${modelLabel}\` 在 ${MODEL_RUN_INACTIVITY_MS / 60000} 分钟内无输出（疑似上游服务挂起）。请稍后重试，或切换到其它模型。`);
-    }, MODEL_RUN_INACTIVITY_MS);
+      fire(`模型 \`${modelLabel}\` 在 ${INACT_MS / 60000} 分钟内无输出（疑似上游服务挂起）。请稍后重试，或切换到其它模型。`);
+    }, INACT_MS);
   };
   armInactivity();
 
@@ -428,21 +413,24 @@ export async function processMessage(
       session._busySince = Date.now();
       session.turnCount++;
 
-      // Build the ordered fallback chain starting from the session's model.
-      // Uses buildChannelAwareChain which traverses ORDERED_MODELS in a circular chain.
-      const chain = buildChannelAwareChain(session.model || ORDERED_MODELS[0]);
+      // Build the circular fallback chain starting from the session's current model.
+      // buildChannelAwareChain walks the effective model list (config or hardcoded):
+      // starting at the session model, it appends all weaker models, then wraps
+      // around to the strongest models (those above the session model) to form a
+      // complete circular chain.
+      const chain = buildChannelAwareChain(session.model || getEffectiveModelOrder()[0]);
 
       // Retry policy (per the agreed design):
-      //   • Each model is attempted up to RETRIES_PER_MODEL times.
+      //   • Each model is attempted up to retriesPerModel times (configurable via tuning).
       //   • On exhausting a model's retries, downgrade to the next-weaker
       //     model in the fallback chain (starting from the session's model).
       //   • The chain is walked in a CIRCULAR fashion: after reaching the
       //     weakest model, it wraps back to the strongest. This handles
       //     temporary failures (rate limits, transient errors) where a model
       //     may recover after a brief cooldown.
-      //   • Total budget is chain.length * RETRIES_PER_MODEL.
-      const RETRIES_PER_MODEL = 3;
-      const maxAttempts = chain.length * RETRIES_PER_MODEL;
+      //   • Total budget is chain.length * retriesPerModel.
+      const retriesPerModel = getTuningConfig().retriesPerModel;
+      const maxAttempts = chain.length * retriesPerModel;
 
       let modelToUse = chain[0];
       let chainIdx = 0;          // index into `chain`
@@ -455,20 +443,23 @@ export async function processMessage(
       const escReason = (s: string) =>
         s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
 
-      // Step to the next model in the chain, walking CIRCULAR with
-      // NO wrap-around. Returns true if we moved to a weaker model (caller
-      // continues), or false if we are already at the LAST model in the chain
-      // (the one that sits right before the starting model in the loop) — in
-      // which case there is no further downgrade and the caller terminates.
+      // Advance to the next model in the fallback chain. The chain is circular:
+      // after the last (weakest) model, it wraps to the first (strongest) model.
+      // Returns true if there is a next model to try, false if we've completed
+      // a full loop and should terminate.
+      //
+      // Also detects channel switches (e.g., agy → deepseek) and logs them
+      // with a 🔀 emoji so the user sees the backend change in Telegram.
       const advanceModel = async (reason: string): Promise<boolean> => {
         const prevModel = modelToUse;
         if (chainIdx + 1 >= chain.length) {
-          logger.warn(`[messageLoop] Model "${prevModel}" failed (${reason}). No further fallback available — terminating (attempt ${attempts}/${maxAttempts}).`);
+          logger.warn(`[messageLoop] Model "${prevModel}" failed (${reason}). Full fallback chain exhausted — terminating (attempt ${attempts}/${maxAttempts}).`);
           return false;
         }
         chainIdx++;
         modelToUse = chain[chainIdx];
         failsForModel = 0;
+        // Detect whether the downgrade crosses a channel boundary (agy ↔ deepseek ↔ web2api)
         const prevCh = getChannelModel(prevModel);
         const nextCh = getChannelModel(modelToUse);
         const switchedChannel = prevCh && nextCh && prevCh !== nextCh;
@@ -500,7 +491,17 @@ export async function processMessage(
         let rawStreamBuffer = '';
 
         try {
-          logger.info(`[messageLoop] Attempt ${attempts}/${maxAttempts}: Running prompt with model="${modelToUse}" (model retry ${failsForModel + 1}/${RETRIES_PER_MODEL})`);
+          // Lazy health check: skip this model if its backend is in cooldown.
+          {
+            const channel = getChannelModel(modelToUse);
+            if (!isBackendAvailable(channel)) {
+              logger.info(`[messageLoop] Skipping model "${modelToUse}" — backend "${channel}" is in cooldown`);
+              if (await advanceModel(`后端 ${channel} 暂时不可用`)) continue;
+              break;
+            }
+          }
+
+          logger.info(`[messageLoop] Attempt ${attempts}/${maxAttempts}: Running prompt with model="${modelToUse}" (model retry ${failsForModel + 1}/${retriesPerModel})`);
           turnStartTime = Date.now();
           let resetInactivity: (() => void) | undefined;
           const { result } = await withTimeout(runAgyPrint({
@@ -560,6 +561,7 @@ export async function processMessage(
 
           if (result.exitCode === 0) {
             success = true;
+            markBackendHealthy(getChannelModel(modelToUse));
             // If we had to fall back, persist the change to disk and update session
             if (modelToUse && modelToUse !== session.model) {
               logger.info(`[messageLoop] Successfully downgraded to model "${modelToUse}". Updating session.`);
@@ -572,18 +574,28 @@ export async function processMessage(
           const stderr = result.stderr || '';
           const output = result.output || answerBuffer;
 
+          // Backend health: mark backend failed on connection-level errors
+          if (isConnectionError(result.stderr) || isConnectionError(result.output)) {
+            markBackendFailed(getChannelModel(modelToUse));
+          }
+
           // ANY non-success is eligible for a retry/downgrade (rate-limit,
           // auth error, process termination, hard timeout, generic error).
           const reason = isRateLimitOrUnavailableError(stderr, output)
             ? '频控或上游不可用'
             : (stderr.trim() || output.trim() || '未知错误');
           failsForModel++;
-          if (failsForModel < RETRIES_PER_MODEL) continue; // retry same model
+          if (failsForModel < retriesPerModel) continue; // retry same model
           if (await advanceModel(reason)) continue;          // downgrade to next
           break;                                            // last model failed → terminate
         } catch (e: any) {
           logger.error(`[messageLoop] Attempt ${attempts} error: ${e?.message || e}`);
           if (signal.aborted) throw e;
+
+          // Backend health: mark backend failed on connection-level errors
+          if (isConnectionError(e)) {
+            markBackendFailed(getChannelModel(modelToUse));
+          }
 
           // ANY thrown error is eligible for a retry/downgrade (including
           // hard-timeout / inactivity kills from withTimeout, auth errors,
@@ -594,7 +606,7 @@ export async function processMessage(
             ? '频控或上游不可用'
             : errMsg;
           failsForModel++;
-          if (failsForModel < RETRIES_PER_MODEL) continue; // retry same model
+          if (failsForModel < retriesPerModel) continue; // retry same model
           if (await advanceModel(reason)) continue;          // downgrade to next
           break;                                            // last model failed → terminate
         }
@@ -762,7 +774,6 @@ export async function processMessage(
         if (finalResult.isTimeout || signal.aborted) errorReason = '执行被取消或超时 (Cancelled/Timeout)';
 
         let detailMsg = '';
-        const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
         if (isFriendlyUpstreamMsg) {
           detailMsg = `\n\n${escapeHtml(stderrStr.trim())}`;
@@ -812,59 +823,169 @@ export async function processMessage(
   }
 }
 
+// ── Model registry & fallback helpers ──────────────────────────────────────
+//
+// ORDERED_MODELS is a single flat array of every available model, ordered by
+// capability from strongest (index 0) to weakest (last index).  The fallback
+// chain is built dynamically per session by slicing this array starting at the
+// user's current model and wrapping around — so a user on a mid-tier model
+// first tries weaker models, then loops back to the strongest ones.
+//
+// Models are grouped into tiers for readability only; the runtime does NOT
+// treat tiers specially — any model can fall back to any other.
+//
+// Three "channels" exist:
+//   • agy       — official Antigravity CLI models (require OAuth / API key)
+//   • deepseek  — local deepseek-api proxy (requires userToken from chat.deepseek.com)
+//   • web2api   — free Gemini web frontend via reverse proxy (no auth needed)
+//
+// The channel is detected at runtime by getChannelModel() using model-name
+// prefixes, so cross-channel fallback is fully automatic.
+
 export const ORDERED_MODELS = [
-  // ── Tier 1: 极强推理 (Ultra Reasoning) ──
-  'Claude Opus 4.6 (Thinking)',
-  'DeepSeek: Pro Thinking',
+  // ── Tier 1: Ultra Reasoning (strongest) ──
+  'Claude Opus 4.6 (Thinking)',       // agy — best reasoning, highest cost
+  'DeepSeek: Pro Thinking',           // deepseek — local proxy, strong chain-of-thought
 
-  // ── Tier 2: 高级推理 (Advanced Reasoning) ──
-  'Claude Sonnet 4.6 (Thinking)',
-  'Web2API: Gemini 3.1 Pro Enhanced',
-  'Gemini 3.1 Pro (High)',
-  'Web2API: Gemini 3.1 Pro',
-  'DeepSeek: Pro',
-  'Gemini 3.1 Pro (Low)',
+  // ── Tier 2: Advanced Reasoning ──
+  'Claude Sonnet 4.6 (Thinking)',     // agy — balanced reasoning/speed
+  'Web2API: Gemini 3.1 Pro Enhanced', // web2api — enhanced Pro via cookie proxy
+  'Gemini 3.1 Pro (High)',            // agy — official Pro at high budget
+  'Web2API: Gemini 3.1 Pro',          // web2api — standard Pro via cookie proxy
+  'DeepSeek: Pro',                    // deepseek — non-thinking Pro variant
+  'Gemini 3.1 Pro (Low)',             // agy — official Pro at low budget
 
-  // ── Tier 3: 通用智能 (General Capabilities) ──
-  'Gemini 3.6 Flash (High)',
-  'Web2API: Gemini 3.5 Flash Thinking',
-  'DeepSeek: Flash Thinking Search',
-  'Gemini 3.6 Flash (Medium)',
-  'DeepSeek: Flash Thinking',
-  'Web2API: Gemini 3.5 Flash Thinking Lite',
-  'Gemini 3.6 Flash (Low)',
-  'GPT-OSS 120B (Medium)',
-  'Web2API: Gemini 3.5 Flash',
+  // ── Tier 3: General Capabilities ──
+  'Gemini 3.6 Flash (High)',          // agy — latest Flash, high budget
+  'Web2API: Gemini 3.5 Flash Thinking', // web2api — Flash with thinking via cookie
+  'DeepSeek: Flash Thinking Search',  // deepseek — fast thinking + web search
+  'Gemini 3.6 Flash (Medium)',        // agy — latest Flash, medium budget
+  'DeepSeek: Flash Thinking',         // deepseek — fast thinking without search
+  'Gemini 3.6 Flash (Low)',           // agy — latest Flash, low budget
+  'GPT-OSS 120B (Medium)',           // agy — Open-source GPT variant
+  'Web2API: Gemini 3.5 Flash',        // web2api — standard Flash via cookie
 
-  // ── Tier 4: 快速轻量 (Speed & Light) ──
-  'Gemini 3.5 Flash (High)',
-  'DeepSeek: Flash Search',
-  'Gemini 3.5 Flash (Medium)',
-  'DeepSeek: Flash',
-  'Web2API: Gemini Auto',
-  'Gemini 3.5 Flash (Low)',
-  'Web2API: Gemini Flash Lite'
+  // ── Tier 4: Speed & Light (weakest, cheapest) ──
+  'Gemini 3.5 Flash (High)',          // agy — previous-gen Flash, high budget
+  'DeepSeek: Flash Search',           // deepseek — fast + web search, no thinking
+  'Gemini 3.5 Flash (Medium)',        // agy — previous-gen Flash, medium budget
+  'DeepSeek: Flash',                  // deepseek — fastest DeepSeek variant
+  'Web2API: Gemini Auto',             // web2api — auto-select via cookie
+  'Gemini 3.5 Flash (Low)',           // agy — previous-gen Flash, low budget
+  'Web2API: Gemini 3.5 Flash Thinking Lite', // web2api — near Flash Lite tier, minimal thinking
+  'Web2API: Gemini Flash Lite',       // web2api — lightest/free tier
 ];
 
+// Return the effective model order list: config-specified order if present,
+// otherwise the hardcoded ORDERED_MODELS. The config is loaded once per
+// invocation and cached, so repeated calls don't re-read the file.
+let _cachedModelOrder: string[] | undefined;
+
+/** Clears the cached model order list. Called on SIGHUP to force re-read from config. */
+export function clearModelOrderCache(): void {
+  _cachedModelOrder = undefined;
+}
+
+function getEffectiveModelOrder(): string[] {
+  if (_cachedModelOrder !== undefined) return _cachedModelOrder;
+  const cfg = loadUserConfig();
+  if (cfg?.orderedModels && cfg.orderedModels.length > 0) {
+    _cachedModelOrder = cfg.orderedModels;
+    logger.info(`[messageLoop] Using custom model order from config (${_cachedModelOrder.length} models)`);
+  } else {
+    _cachedModelOrder = ORDERED_MODELS;
+  }
+  return _cachedModelOrder;
+}
+
+// Build a circular fallback chain starting at `startModel`.
+//
+// Algorithm:
+//   1. Locate startModel in the effective model list (config or hardcoded).
+//   2. Push all models from startModel to the end (weaker models).
+//   3. Wrap around and push all models from the beginning up to startModel
+//      (stronger models) — this handles the case where even the weakest
+//      model fails and we want to retry the strongest ones.
+//
+// Example: if startModel is at index 10 of a 24-model list, the chain is
+//   [10, 11, …, 23, 0, 1, …, 9] — 24 entries, circular.
+//
+// If startModel is not found (shouldn't happen), we prepend it and return
+// the full list as a safe fallback.
 function buildChannelAwareChain(startModel: string): string[] {
-  const idx = ORDERED_MODELS.indexOf(startModel);
+  const models = getEffectiveModelOrder();
+  const idx = models.indexOf(startModel);
   if (idx === -1) {
-    return [startModel, ...ORDERED_MODELS];
+    // Unknown model — try it first, then fall through the entire list
+    return [startModel, ...models];
   }
   const chain: string[] = [];
-  for (let i = idx; i < ORDERED_MODELS.length; i++) {
-    chain.push(ORDERED_MODELS[i]);
+  // Append weaker models (from current position to end)
+  for (let i = idx; i < models.length; i++) {
+    chain.push(models[i]);
   }
+  // Wrap around to strongest models (from start to current position)
   for (let i = 0; i < idx; i++) {
-    chain.push(ORDERED_MODELS[i]);
+    chain.push(models[i]);
   }
   return chain;
 }
 
+// Determine which backend channel a model belongs to, based on its display name.
+// Used by advanceModel() to detect and log cross-channel switches.
+// Returns 'agy' | 'deepseek' | 'web2api', or null if the prefix is unrecognized.
 function getChannelModel(model: string): string | null {
   if (model.startsWith('Web2API:')) return 'web2api';
   if (model.startsWith('DeepSeek:')) return 'deepseek';
-  return 'agy';
+  return 'agy'; // default: official Antigravity CLI models have no prefix
+}
+
+// ── Backend Health Tracker ──────────────────────────────────────────────────
+// Lazy health detection: no timers, no probes. Each backend channel carries a
+// failCount and cooldownUntil timestamp. Before we attempt a model route, we
+// check whether its backend is currently in cooldown — if so, we skip it
+// entirely (zero network overhead). Cooldown doubles per failure, capped at 5
+// minutes. On success the entry is cleared immediately.
+interface BackendHealth {
+  failCount: number;
+  cooldownUntil: number;
+}
+const backendHealth = new Map<string, BackendHealth>();
+const COOLDOWN_INITIAL_MS = 30_000;
+const COOLDOWN_MAX_MS = 300_000;
+
+function isBackendAvailable(channel: string | null): boolean {
+  if (!channel) return true;
+  const health = backendHealth.get(channel);
+  if (!health) return true;
+  if (Date.now() >= health.cooldownUntil) {
+    backendHealth.delete(channel);
+    return true;
+  }
+  return false;
+}
+
+function markBackendFailed(channel: string | null): void {
+  if (!channel) return;
+  const prev = backendHealth.get(channel);
+  const failCount = (prev?.failCount ?? 0) + 1;
+  const cooldownMs = Math.min(COOLDOWN_INITIAL_MS * Math.pow(2, failCount - 1), COOLDOWN_MAX_MS);
+  backendHealth.set(channel, { failCount, cooldownUntil: Date.now() + cooldownMs });
+  logger.warn(`[BackendHealth] Backend "${channel}" marked unavailable for ${cooldownMs}ms (fail #${failCount})`);
+}
+
+function markBackendHealthy(channel: string | null): void {
+  if (!channel) return;
+  backendHealth.delete(channel);
+}
+
+/** Returns true if the error indicates the backend service itself is unreachable. */
+function isConnectionError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  if (e.code === 'ECONNREFUSED' || e.code === 'ENOTFOUND' || e.code === 'ECONNRESET' || e.code === 'ENETUNREACH' || e.code === 'ETIMEDOUT') return true;
+  const msg = (e.message || '').toLowerCase();
+  return msg.includes('socket hang up') || msg.includes('connection refused') || msg.includes('econnrefused');
 }
 
 function isRateLimitOrUnavailableError(stderr: string, output: string): boolean {

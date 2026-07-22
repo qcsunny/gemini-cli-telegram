@@ -46,9 +46,9 @@ A local gateway that bridges the **Google Antigravity / Gemini CLI** to **Telegr
 | `/delete_session <index>` | Permanently delete a stored session |
 
 ## Links
-- Releases: https://github.com/qcsunny/gemini-cli-telegram/releases
-- Issues: https://github.com/qcsunny/gemini-cli-telegram/issues
-- Discussions: https://github.com/qcsunny/gemini-cli-telegram/discussions
+- Releases: https://github.com/user/gemini-cli-telegram/releases
+- Issues: https://github.com/user/gemini-cli-telegram/issues
+- Discussions: https://github.com/user/gemini-cli-telegram/discussions
 
 ---
 *This is a starter skeleton. Expand the Setup, Troubleshooting, and FAQ sections as the project grows.*
