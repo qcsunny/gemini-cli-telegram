@@ -78,21 +78,6 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     pattern: /3\s*flash/i,
     rates: { inputRate: 0.50, outputRate: 3.00 }
   },
-  {
-    // Gemini 2.5 Pro
-    pattern: /2\.5\s*pro/i,
-    rates: { inputRate: 1.25, outputRate: 10.00 }
-  },
-  {
-    // Gemini 2.5 Flash
-    pattern: /2\.5\s*flash/i,
-    rates: { inputRate: 0.30, outputRate: 2.50 }
-  },
-  {
-    // Gemini 2.5 Flash-Lite
-    pattern: /2\.5\s*flash-lite/i,
-    rates: { inputRate: 0.10, outputRate: 0.40 }
-  },
   // --- Generics / Fallbacks ---
   {
     // General Pro keyword
