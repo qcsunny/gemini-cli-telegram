@@ -17,8 +17,7 @@ import * as http from 'node:http';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
 import { loadUserConfig } from '../config/userConfig.js';
-// @ts-ignore
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 
 
 // ─── Web2API (local Gemini via gemini-web2api) ────────────────────────────────
@@ -1074,8 +1073,7 @@ function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefine
     if (!fssync.existsSync(dbPath)) {
       return undefined;
     }
-    // @ts-ignore
-    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const db = new Database(dbPath, { readonly: true });
     const rows = db.prepare('SELECT metadata FROM steps ORDER BY idx DESC').all() as any[];
     db.close();
     
