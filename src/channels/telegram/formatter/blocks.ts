@@ -502,26 +502,7 @@ function parseRichListToken(
  * `inlineToRichText`, so styling — including CJK bold at word boundaries —
  * renders natively without relying on Telegram re-parsing raw markdown.
  */
-export function markdownToRichBlocks(markdown: string): RichBlock[] {
-  // Reset media store for this conversion
-  resetMediaStore();
-  // Extract every LaTeX formula into a private-use-area placeholder BEFORE
-  // parsing so markdown-it never splits formula internals ( ) { } across
-  // tokens. Restored as mathematical_expression entities in inlineToRichText.
-  const { text: placeholderText, math } = extractMath(markdown ?? '');
-  mathPlaceholderStore = math;
-  // Normalize fences (isolate ` ``` ` glued to text, surround with blank lines)
-  // BEFORE structure normalization so markdown-it recognizes them as real fences.
-  // The HTML path (markdownToHtmlSnippet) already does this; the RichBlocks path
-  // was missing this step, causing fence code blocks with nested backticks or
-  // language annotations like ````markdown` to fail parsing.
-  const fenced = normalizeMarkdownFences(placeholderText);
-  // Normalize structure (heading/bullet spacing, mid-line bullet splits,
-  // glued `---` separators) BEFORE parsing — without this the streaming
-  // render path parsed the raw markdown directly and collapsed bullets
-  // that the model joined on a single line. The HTML path already runs
-  // its own normalization; this keeps the RichBlocks path consistent.
-  const tokens = md.parse(normalizeMarkdownStructure(fenced), {}) as any as MarkdownToken[];
+function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): RichBlock[] {
   const blocks: RichBlock[] = [];
 
   for (let i = 0; i < tokens.length; i++) {
@@ -578,35 +559,40 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
         let j = i + 1;
         let isDetails = false;
         let detailsSummary = '点击展开';
-        const blockquoteInnerBlocks: RichBlock[] = [];
-
-        while (j < tokens.length && tokens[j].type !== 'blockquote_close') {
+        
+        let depth = 1;
+        const innerTokens: MarkdownToken[] = [];
+        while (j < tokens.length) {
           const nextToken = tokens[j];
-          if (nextToken.type === 'inline' && nextToken.children) {
-            const rt = trimRichText(inlineToRichText(nextToken.children, math));
-            if (rt) {
-              const rawText = extractStringFromRichText(rt).trim();
-              if (blockquoteInnerBlocks.length === 0 && rawText.startsWith('[details]')) {
-                isDetails = true;
-                detailsSummary = rawText.replace(/^\[details\]\s*/i, '') || '点击展开';
-              } else {
-                blockquoteInnerBlocks.push({ type: 'paragraph', text: rt });
-              }
-            }
-          }
+          if (nextToken.type === 'blockquote_open') depth++;
+          if (nextToken.type === 'blockquote_close') depth--;
+          if (depth === 0) break;
+          innerTokens.push(nextToken);
           j++;
+        }
+
+        const parsedInner = markdownTokensToRichBlocks(innerTokens, math);
+
+        if (parsedInner.length > 0 && parsedInner[0].type === 'paragraph') {
+          const firstPara = parsedInner[0] as any;
+          const rawText = extractStringFromRichText(firstPara.text).trim();
+          if (rawText.startsWith('[details]')) {
+            isDetails = true;
+            detailsSummary = rawText.replace(/^\[details\]\s*/i, '') || '点击展开';
+            parsedInner.shift();
+          }
         }
 
         if (isDetails) {
           blocks.push({
             type: 'details',
             summary: detailsSummary,
-            blocks: blockquoteInnerBlocks.length > 0 ? blockquoteInnerBlocks : [{ type: 'paragraph', text: ' ' }],
+            blocks: parsedInner.length > 0 ? parsedInner : [{ type: 'paragraph', text: ' ' }],
           });
         } else {
           blocks.push({
             type: 'blockquote',
-            blocks: blockquoteInnerBlocks,
+            blocks: parsedInner,
           });
         }
         i = j;
@@ -659,6 +645,31 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
       }
     }
   }
+
+  return blocks;
+}
+
+export function markdownToRichBlocks(markdown: string): RichBlock[] {
+  // Reset media store for this conversion
+  resetMediaStore();
+  // Extract every LaTeX formula into a private-use-area placeholder BEFORE
+  // parsing so markdown-it never splits formula internals ( ) { } across
+  // tokens. Restored as mathematical_expression entities in inlineToRichText.
+  const { text: placeholderText, math } = extractMath(markdown ?? '');
+  mathPlaceholderStore = math;
+  // Normalize fences (isolate ` ``` ` glued to text, surround with blank lines)
+  // BEFORE structure normalization so markdown-it recognizes them as real fences.
+  // The HTML path (markdownToHtmlSnippet) already does this; the RichBlocks path
+  // was missing this step, causing fence code blocks with nested backticks or
+  // language annotations like ````markdown` to fail parsing.
+  const fenced = normalizeMarkdownFences(placeholderText);
+  // Normalize structure (heading/bullet spacing, mid-line bullet splits,
+  // glued `---` separators) BEFORE parsing — without this the streaming
+  // render path parsed the raw markdown directly and collapsed bullets
+  // that the model joined on a single line. The HTML path already runs
+  // its own normalization; this keeps the RichBlocks path consistent.
+  const tokens = md.parse(normalizeMarkdownStructure(fenced), {}) as any as MarkdownToken[];
+  const blocks = markdownTokensToRichBlocks(tokens, math);
 
   if (blocks.length === 0 && markdown && markdown.trim()) {
     blocks.push({ type: 'paragraph', text: markdown.trim() });
