@@ -11,6 +11,9 @@
  */
 
 import pino from 'pino';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 const isDev =
   process.env['NODE_ENV'] === 'development' ||
@@ -19,6 +22,11 @@ const isDev =
   !process.env['NODE_ENV'];
 
 const level = process.env['LOG_LEVEL'] || 'info';
+
+/**
+ * Path to error.log file in daemon runtime directory (~/.gemini-cli-telegram/error.log)
+ */
+export const ERROR_LOG_PATH = path.join(os.homedir(), '.gemini-cli-telegram', 'error.log');
 
 /**
  * Underlying Pino logger instance.
@@ -75,7 +83,15 @@ export const logger = {
   },
   error: (message: unknown, ...args: unknown[]) => {
     if (pinoInstance.isLevelEnabled('error')) {
-      pinoInstance.error(formatMsg(message, args));
+      const formatted = formatMsg(message, args);
+      pinoInstance.error(formatted);
+      try {
+        const timestamp = new Date().toISOString();
+        fs.mkdirSync(path.dirname(ERROR_LOG_PATH), { recursive: true });
+        fs.appendFileSync(ERROR_LOG_PATH, `[${timestamp}] ${formatted}\n`);
+      } catch {
+        // Fail silent to prevent log writing errors from crashing the daemon
+      }
     }
   },
 };

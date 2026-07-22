@@ -4,17 +4,30 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
 
 describe('logger', () => {
   beforeEach(async () => {
     vi.resetModules();
   });
 
-  it('should export logger and pinoInstance', async () => {
-    const { logger, pinoInstance } = await import('./logger.js');
+  afterEach(async () => {
+    const { ERROR_LOG_PATH } = await import('./logger.js');
+    if (fs.existsSync(ERROR_LOG_PATH)) {
+      try {
+        fs.unlinkSync(ERROR_LOG_PATH);
+      } catch {
+        // ignore cleanup error
+      }
+    }
+  });
+
+  it('should export logger, pinoInstance and ERROR_LOG_PATH', async () => {
+    const { logger, pinoInstance, ERROR_LOG_PATH } = await import('./logger.js');
     expect(logger).toBeDefined();
     expect(pinoInstance).toBeDefined();
+    expect(ERROR_LOG_PATH).toBeDefined();
     expect(typeof logger.info).toBe('function');
     expect(typeof logger.debug).toBe('function');
     expect(typeof logger.warn).toBe('function');
@@ -34,6 +47,21 @@ describe('logger', () => {
 
     infoSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+
+  it('should write error logs to error.log file', async () => {
+    const { logger, ERROR_LOG_PATH } = await import('./logger.js');
+
+    if (fs.existsSync(ERROR_LOG_PATH)) {
+      fs.unlinkSync(ERROR_LOG_PATH);
+    }
+
+    logger.error('unit test error writing to log', new Error('test failure details'));
+
+    expect(fs.existsSync(ERROR_LOG_PATH)).toBe(true);
+    const content = fs.readFileSync(ERROR_LOG_PATH, 'utf-8');
+    expect(content).toContain('unit test error writing to log');
+    expect(content).toContain('test failure details');
   });
 
   it('should NOT log debug messages when LOG_LEVEL is default info', async () => {
