@@ -69,8 +69,8 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 2.00, outputRate: 12.00 }
   },
   {
-    // Gemini 3.5/3.1 Flash-Lite
-    pattern: /3\.[15]\s*flash-lite/i,
+    // Gemini 3.5 Flash-Lite
+    pattern: /3\.5\s*flash-lite|flash-lite/i,
     rates: { inputRate: 0.30, outputRate: 2.50 }
   },
   {
