@@ -34,13 +34,18 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 0.14, outputRate: 0.28 }
   },
   {
-    // Claude Opus (Thinking)
-    pattern: /opus/i,
-    rates: { inputRate: 15.00, outputRate: 75.00 }
+    // DeepSeek R1
+    pattern: /deepseek.*r1/i,
+    rates: { inputRate: 0.55, outputRate: 2.19 }
   },
   {
-    // Claude Sonnet (Thinking)
-    pattern: /sonnet/i,
+    // Claude Opus (Thinking / 4.8 / 5)
+    pattern: /opus/i,
+    rates: { inputRate: 5.00, outputRate: 25.00 }
+  },
+  {
+    // Claude Sonnet (Thinking / 3.5 / 5)
+    pattern: /sonnet|claude.*5/i,
     rates: { inputRate: 3.00, outputRate: 15.00 }
   },
   {
@@ -51,7 +56,7 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
     // Gemini 3.6 Flash
     pattern: /3\.6\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 9.00 }
+    rates: { inputRate: 1.50, outputRate: 7.50 }
   },
   {
     // Gemini 3.5 Flash
@@ -64,9 +69,9 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 2.00, outputRate: 12.00 }
   },
   {
-    // Gemini 3.1 Flash-Lite
-    pattern: /3\.1\s*flash-lite/i,
-    rates: { inputRate: 0.25, outputRate: 1.50 }
+    // Gemini 3.5/3.1 Flash-Lite
+    pattern: /3\.[15]\s*flash-lite/i,
+    rates: { inputRate: 0.30, outputRate: 2.50 }
   },
   {
     // Gemini 3 Flash
