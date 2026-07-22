@@ -421,32 +421,22 @@ export async function processMessage(
       session._busySince = Date.now();
       session.turnCount++;
 
-      // Build the ordered fallback chain starting from the session's model:
-      // [model0, model1, … modelN] where each entry's FALLBACK_MAP value is
-      // the next entry. Used to drive a deterministic, exhaustive retry.
-      const chain: string[] = [];
-      {
-        let m = session.model;
-        while (m) {
-          chain.push(m);
-          const n = getFallbackModel(m);
-          if (!n) break;
-          m = n;
-        }
-      }
+      // Build the ordered fallback chain starting from the session's model.
+      // Uses buildChannelAwareChain which traverses ORDERED_MODELS in a circular chain.
+      const chain = buildChannelAwareChain(session.model || ORDERED_MODELS[0]);
 
       // Retry policy (per the agreed design):
       //   • Each model is attempted up to RETRIES_PER_MODEL times.
       //   • On exhausting a model's retries, downgrade to the next-weaker
       //     model in the fallback chain (starting from the session's model).
-      //   • The chain is walked exactly ONE full loop: from the starting
-      //     model through every weaker model, ending at the model that sits
-      //     right before the starting model. When that LAST model also
-      //     exhausts its retries, the session terminates with an error — we
-      //     do NOT wrap back to the start for a second pass.
-      // So the total attempt budget is one full loop = chain.length * RETRIES.
+      //   • The chain is walked in a CIRCULAR fashion: after reaching the
+      //     weakest model, it wraps back to the strongest. This handles
+      //     temporary failures (rate limits, transient errors) where a model
+      //     may recover after a brief cooldown.
+      //   • Total budget is MAX_LOOPS full loops = chain.length * RETRIES * MAX_LOOPS.
       const RETRIES_PER_MODEL = 3;
-      const maxAttempts = chain.length * RETRIES_PER_MODEL;
+      const MAX_LOOPS = 2;  // 最多循环 2 轮（默认模型→最弱→再回到默认模型→最弱）
+      const maxAttempts = chain.length * RETRIES_PER_MODEL * MAX_LOOPS;
 
       let modelToUse = chain[0];
       let chainIdx = 0;          // index into `chain`
@@ -459,7 +449,7 @@ export async function processMessage(
       const escReason = (s: string) =>
         s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
 
-      // Step to the next model in the chain, walking exactly ONE pass with
+      // Step to the next model in the chain, walking CIRCULAR with
       // NO wrap-around. Returns true if we moved to a weaker model (caller
       // continues), or false if we are already at the LAST model in the chain
       // (the one that sits right before the starting model in the loop) — in
@@ -473,8 +463,13 @@ export async function processMessage(
         chainIdx++;
         modelToUse = chain[chainIdx];
         failsForModel = 0;
-        logger.warn(`[messageLoop] Model "${prevModel}" failed (${reason}). Downgrading to "${modelToUse}" (attempt ${attempts}/${maxAttempts}).`);
-        await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escReason(reason)}），正在自动降级至 \`${modelToUse}\` 重试...`);
+        const prevCh = getChannelModel(prevModel);
+        const nextCh = getChannelModel(modelToUse);
+        const switchedChannel = prevCh && nextCh && prevCh !== nextCh;
+        const logTag = switchedChannel ? `[messageLoop] 🔀 Channel switch ${prevCh}→${nextCh}` : '[messageLoop]';
+        logger.warn(`${logTag} Model "${prevModel}" failed (${reason}). Downgrading to "${modelToUse}" (attempt ${attempts}/${maxAttempts}).`);
+        const switchNote = switchedChannel ? `（切换至 ${nextCh} 通道）` : '';
+        await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escReason(reason)}），正在自动降级至 \`${modelToUse}\`${switchNote} 重试...`);
         return true;
       };
 
@@ -811,35 +806,59 @@ export async function processMessage(
   }
 }
 
-const FALLBACK_MAP: Record<string, string> = {
-  'Gemini 3.6 Flash (High)': 'Gemini 3.6 Flash (Medium)',
-  'Gemini 3.6 Flash (Medium)': 'Gemini 3.6 Flash (Low)',
-  'Gemini 3.6 Flash (Low)': 'Gemini 3.5 Flash (High)',
-  'Claude Opus 4.6 (Thinking)': 'Claude Sonnet 4.6 (Thinking)',
-  'Claude Sonnet 4.6 (Thinking)': 'Gemini 3.1 Pro (High)',
-  'GPT-OSS 120B (Medium)': 'Gemini 3.1 Pro (High)',
-  'Gemini 3.1 Pro (High)': 'Gemini 3.5 Flash (High)',
-  'Gemini 3.1 Pro (Low)': 'Gemini 3.5 Flash (Medium)',
-  'Gemini 3.5 Flash (High)': 'Gemini 3.5 Flash (Medium)',
-  'Gemini 3.5 Flash (Medium)': 'Gemini 3.5 Flash (Low)',
-  'Gemini 3.5 Flash (Low)': 'Web2API: Gemini Auto',
-  // 跨通道兜底:agy 官方通道用尽后,切到 cookie 免费通道的 AUTO(自动选模)。
-  // 注意 `Gemini Auto` 是 Google AUTO 模式,不固定底层模型,此处仅作"最终保底通道",
-  // 不代表它是最弱模型。
-  // ── Web2API(cookie 通道)内部子链:按 Google 实际能力 强→弱 排列 ──
-  // 综合能力梯队:Pro / Flash Thinking(一档) > 3.5 Flash(二档,工具调用/Agent 甚至超 Pro)
-  // > Flash Thinking Lite / Flash Lite(三档) > Auto(动态路由,非固定档)。
-  // 3.1 Pro → 3.5 Flash Thinking → 3.5 Flash → 3.5 Flash Thinking Lite → Flash Lite → Auto。
-  'Web2API: Gemini 3.1 Pro Enhanced': 'Web2API: Gemini 3.1 Pro',
-  'Web2API: Gemini 3.1 Pro': 'Web2API: Gemini 3.5 Flash Thinking',
-  'Web2API: Gemini 3.5 Flash Thinking': 'Web2API: Gemini 3.5 Flash',
-  'Web2API: Gemini 3.5 Flash': 'Web2API: Gemini 3.5 Flash Thinking Lite',
-  'Web2API: Gemini 3.5 Flash Thinking Lite': 'Web2API: Gemini Flash Lite',
-  'Web2API: Gemini Flash Lite': 'Web2API: Gemini Auto',
-};
+export const ORDERED_MODELS = [
+  // ── Tier 1: 极强推理 (Ultra Reasoning) ──
+  'Claude Opus 4.6 (Thinking)',
+  'DeepSeek: Pro Thinking',
 
-function getFallbackModel(currentModel: string): string | null {
-  return FALLBACK_MAP[currentModel] ?? null;
+  // ── Tier 2: 高级推理 (Advanced Reasoning) ──
+  'Claude Sonnet 4.6 (Thinking)',
+  'Web2API: Gemini 3.1 Pro Enhanced',
+  'Gemini 3.1 Pro (High)',
+  'Web2API: Gemini 3.1 Pro',
+  'DeepSeek: Pro',
+  'Gemini 3.1 Pro (Low)',
+
+  // ── Tier 3: 通用智能 (General Capabilities) ──
+  'Gemini 3.6 Flash (High)',
+  'Web2API: Gemini 3.5 Flash Thinking',
+  'DeepSeek: Flash Thinking Search',
+  'Gemini 3.6 Flash (Medium)',
+  'DeepSeek: Flash Thinking',
+  'Web2API: Gemini 3.5 Flash Thinking Lite',
+  'Gemini 3.6 Flash (Low)',
+  'GPT-OSS 120B (Medium)',
+  'Web2API: Gemini 3.5 Flash',
+
+  // ── Tier 4: 快速轻量 (Speed & Light) ──
+  'Gemini 3.5 Flash (High)',
+  'DeepSeek: Flash Search',
+  'Gemini 3.5 Flash (Medium)',
+  'DeepSeek: Flash',
+  'Web2API: Gemini Auto',
+  'Gemini 3.5 Flash (Low)',
+  'Web2API: Gemini Flash Lite'
+];
+
+function buildChannelAwareChain(startModel: string): string[] {
+  const idx = ORDERED_MODELS.indexOf(startModel);
+  if (idx === -1) {
+    return [startModel, ...ORDERED_MODELS];
+  }
+  const chain: string[] = [];
+  for (let i = idx; i < ORDERED_MODELS.length; i++) {
+    chain.push(ORDERED_MODELS[i]);
+  }
+  for (let i = 0; i < idx; i++) {
+    chain.push(ORDERED_MODELS[i]);
+  }
+  return chain;
+}
+
+function getChannelModel(model: string): string | null {
+  if (model.startsWith('Web2API:')) return 'web2api';
+  if (model.startsWith('DeepSeek:')) return 'deepseek';
+  return 'agy';
 }
 
 function isRateLimitOrUnavailableError(stderr: string, output: string): boolean {
