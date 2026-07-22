@@ -21,6 +21,7 @@ import {
   safeHtmlSlice,
   normalizeSpacingAroundDetails,
   normalizeMarkdownFences,
+  normalizeNestedCodeFences,
   normalizeMarkdownStructure,
   findSafeCutPoint,
   buildFooterBlocksFromHtml
@@ -885,6 +886,35 @@ describe('Tilde Fence Isolation in normalizeMarkdownStructure', () => {
       '架构与流程图表',
       '1. ASCII 流程图'
     ]);
+  });
+
+  it('should upgrade multi-level (3-level) nested code fences so all outer parent fences are upgraded correctly', () => {
+    const input = [
+      '```markdown',
+      '# Outer Level 1',
+      '```python',
+      '# Mid Level 2',
+      '```js',
+      'console.log("Inner Level 3");',
+      '```',
+      '```',
+      '```',
+    ].join('\n');
+
+    const normalized = normalizeNestedCodeFences(input);
+    const lines = normalized.split('\n');
+
+    // Outermost fence (Level 1) should upgrade to 5 backticks
+    expect(lines[0]).toBe('`````markdown');
+    expect(lines[8]).toBe('`````');
+
+    // Middle fence (Level 2) should upgrade to 4 backticks
+    expect(lines[2]).toBe('````python');
+    expect(lines[7]).toBe('````');
+
+    // Innermost fence (Level 3) should stay 3 backticks
+    expect(lines[4]).toBe('```js');
+    expect(lines[6]).toBe('```');
   });
 });
 
