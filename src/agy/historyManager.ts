@@ -5,7 +5,7 @@
  * and physically delete session database files (`.db`, `-shm`, `-wal`).
  */
 
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getConversationsDir } from './agyCli.js';
@@ -59,7 +59,7 @@ export function undoLastTurn(uuid: string): boolean {
   if (!fs.existsSync(dbPath)) return false;
 
   try {
-    const db = new DatabaseSync(dbPath);
+    const db = new Database(dbPath);
     
     // Antigravity (agy) records many steps per turn (thinking, tools, generation).
     // The safest "undo" without deep protobuf parsing is to delete the last ~5 to 10 indices
@@ -67,9 +67,9 @@ export function undoLastTurn(uuid: string): boolean {
     // max(idx) - 10 as a heuristic.
     
     const stmt = db.prepare('SELECT MAX(idx) as max_idx FROM steps');
-    const result = stmt.get() as { max_idx: number };
+    const result = stmt.get() as { max_idx: number } | undefined;
     
-    if (result && result.max_idx !== null && result.max_idx >= 0) {
+    if (result && result.max_idx !== null && result.max_idx !== undefined && result.max_idx >= 0) {
       const max_idx = result.max_idx;
       const deleteStmt = db.prepare('DELETE FROM steps WHERE idx > ?');
       // Delete last 15 steps which should clear the last assistant generation and user prompt
@@ -116,4 +116,3 @@ export function deleteSession(uuid: string): boolean {
     return false;
   }
 }
-

@@ -27,7 +27,7 @@ export interface SessionListEntry {
   relativeTime: string;
 }
 
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 
 /**
  * Extracts conversation title and last modified timestamp for a given session UUID.
@@ -39,7 +39,7 @@ function getSessionMetadata(uuid: string, defaultMtimeMs: number): { title: stri
     const homeDir = process.env['HOME'] || '/root';
     const dbPath = `${homeDir}/.gemini/antigravity-cli/conversation_summaries.db`;
     if (fs.existsSync(dbPath)) {
-      const db = new DatabaseSync(dbPath);
+      const db = new Database(dbPath, { readonly: true });
       const row = db.prepare('SELECT title, preview, last_modified_time FROM conversation_summaries WHERE conversation_id = ?').get(uuid) as { title?: string; preview?: string; last_modified_time?: string } | undefined;
       db.close();
       if (row) {
