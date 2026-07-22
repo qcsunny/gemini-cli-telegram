@@ -4,15 +4,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file types.ts
+ * @description Central type definitions and interface declarations for the core daemon engine.
+ * Defines channel-agnostic abstractions for session state, multimodal inputs, rich message replies,
+ * workspace metadata, and formatting contracts.
+ */
+
 import type { SendMediaFn } from '../channels/telegram/outbound.js';
 
 export type { SendMediaFn, MediaType } from '../channels/telegram/outbound.js';
 
+/**
+ * Multimodal input payload combining text prompt and attached media parts.
+ */
 export interface MultimodalInput {
   text?: string;
   media?: MediaPart[];
 }
 
+/**
+ * Downloaded media attachment details for prompt input processing.
+ */
 export interface MediaPart {
   type: 'photo' | 'voice' | 'audio' | 'video' | 'document';
   path: string; // Local path to the downloaded file
@@ -20,6 +33,9 @@ export interface MediaPart {
   fileName?: string; // Original file name (for documents)
 }
 
+/**
+ * Structured LLM output object containing body content, reasoning steps, execution timing, and footer metrics.
+ */
 export interface StructuredMessage {
   content: string;
   thought?: string;

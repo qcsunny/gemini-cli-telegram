@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file index.ts
+ * @description Primary library export entry point for gemini-cli-telegram.
+ * Re-exports public core types, session managers, and message loop functions,
+ * and provides the `startTelegramDaemon` bootstrap function for programmatically starting the bot daemon.
+ */
+
 import {
   TelegramBot,
   type TelegramBotOptions,
@@ -15,10 +22,18 @@ export { SessionManager } from './core/session.js';
 export { processMessage } from './core/messageLoop.js';
 export { listAvailableSessions, resumeSession } from './core/resume.js';
 
+/**
+ * Startup configuration options for starting the Telegram daemon process.
+ */
 export interface DaemonOptions extends TelegramBotOptions {
   token: string;
 }
 
+/**
+ * Initializes and starts the Telegram daemon bot process with signal handlers (SIGTERM / SIGINT) for graceful shutdown.
+ *
+ * @param options - Daemon startup configuration including bot token, model, whitelist, and proxy settings.
+ */
 export async function startTelegramDaemon(
   options: DaemonOptions,
 ): Promise<void> {

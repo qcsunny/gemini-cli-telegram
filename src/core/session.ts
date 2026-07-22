@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file session.ts
+ * @description Session & Workspace Management module.
+ * Provides the ProjectManager class for discovering and caching local software projects/workspaces,
+ * and the SessionManager class for tracking active chat sessions (DaemonSession), managing session state,
+ * lifecycle reset/destruction, working directory resolution, and scheduler integration.
+ */
+
 import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import * as fs from 'node:fs/promises';
@@ -15,10 +23,13 @@ import { getConversationId, deleteConversation, getStoredModel, setConversation,
 import { clearWeb2ApiHistory, clearDeepSeekHistory } from '../agy/agyCli.js';
 import { loadUserConfig } from '../config/userConfig.js';
 
+/** Factory function type for building chat-bound media sender functions */
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
 
 /**
- * Project discovery utility
+ * Utility class for discovering, caching, and managing local software projects/workspaces.
+ * Scans directories for indicator files (e.g. package.json, Cargo.toml, .git) and persists
+ * solidified project configurations locally.
  */
 export class ProjectManager {
   private projects: Map<string, ProjectInfo> = new Map();

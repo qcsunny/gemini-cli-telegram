@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file formatter.ts
+ * @description Markdown, HTML, and Rich Text formatting engine for Telegram messages.
+ * Implements tokenization, HTML splitting (details, pre, table, math_block), AST parsing (via markdown-it),
+ * Rich Message 10.2 block building (`buildFinalBlocks`, `buildStreamingBlocks`), and HTML sanitization/conversion.
+ */
+
 import MarkdownIt from 'markdown-it';
 import markdownItCjkFriendly from 'markdown-it-cjk-friendly';
 import type { MessageFormatter, StructuredMessage } from '../../core/types.js';
@@ -540,7 +547,7 @@ function getAttr(token: MarkdownToken, name: string): string | null {
 }
 
 const md = new MarkdownIt({
-  html: false,
+  html: true,
   linkify: true,
   breaks: false,
   typographer: false,
@@ -1946,10 +1953,21 @@ export function markdownToMarkdownV2(markdown: string): string {
 type RichTextEntity =
   | { type: 'bold'; text: RichText }
   | { type: 'italic'; text: RichText }
+  | { type: 'underline'; text: RichText }
   | { type: 'strikethrough'; text: RichText }
   | { type: 'spoiler'; text: RichText }
+  | { type: 'marked'; text: RichText }
+  | { type: 'subscript'; text: RichText }
+  | { type: 'superscript'; text: RichText }
   | { type: 'code'; text: RichText }
-  | { type: 'url'; text: string; url: string };
+  | { type: 'url'; text: string; url: string }
+  | { type: 'custom_emoji'; text: string; custom_emoji_id: string; alternative_text: string }
+  | { type: 'datetime'; text: string; unix_time: number; date_time_format: string }
+  | { type: 'email_address'; text: string; email_address: string }
+  | { type: 'phone_number'; text: string; phone_number: string }
+  | { type: 'text_mention'; text: string; user: { id: number } }
+  | { type: 'reference'; text: string; name: string }
+  | { type: 'reference_link'; text: string; reference_name: string };
 
 /**
  * Convert markdown-it inline tokens into a native 10.2 `RichText` value
@@ -2068,10 +2086,25 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
     switch (top.type) {
       case 'bold': node = { type: 'bold', text: inner }; break;
       case 'italic': node = { type: 'italic', text: inner }; break;
+      case 'underline': node = { type: 'underline', text: inner }; break;
       case 'strikethrough': node = { type: 'strikethrough', text: inner }; break;
       case 'spoiler': node = { type: 'spoiler', text: inner }; break;
+      case 'marked': node = { type: 'marked', text: inner }; break;
+      case 'subscript': node = { type: 'subscript', text: inner }; break;
+      case 'superscript': node = { type: 'superscript', text: inner }; break;
       case 'code': node = { type: 'code', text: inner }; break;
       case 'url': node = { type: 'url', text: String(inner).replace(/\n/g, ' '), url: top.href ?? '' }; break;
+      case 'email_address': node = { type: 'email_address', text: String(inner), email_address: top.href ?? '' }; break;
+      case 'phone_number': node = { type: 'phone_number', text: String(inner), phone_number: top.href ?? '' }; break;
+      case 'text_mention': node = { type: 'text_mention', text: String(inner), user: { id: Number(top.href) } }; break;
+      case 'reference': node = { type: 'reference', text: String(inner), name: top.href ?? '' }; break;
+      case 'reference_link': node = { type: 'reference_link', text: String(inner), reference_name: top.href ?? '' }; break;
+      case 'custom_emoji': node = { type: 'custom_emoji', text: String(inner), custom_emoji_id: top.href ?? '', alternative_text: String(inner) }; break;
+      case 'datetime': {
+        const [unix, fmt] = (top.href ?? '0:wDT').split(':');
+        node = { type: 'datetime', text: String(inner), unix_time: Number(unix), date_time_format: fmt || 'wDT' };
+        break;
+      }
     }
     out.push(node as RichText);
   };
@@ -2102,17 +2135,123 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
         case 'code_close': close('code'); break;
         case 'link_open': {
           const href = getAttr(token, 'href') ?? '';
-          open('url', href);
+          // Classify link type by href scheme to construct appropriate Telegram RichText nodes.
+          if (href.startsWith('mailto:')) open('email_address', href.slice(7));
+          else if (href.startsWith('tel:')) open('phone_number', href.slice(4));
+          else if (href.startsWith('tg://user?id=')) open('text_mention', href.slice(13));
+          else if (href.startsWith('#')) open('reference_link', href.slice(1));
+          else open('url', href);
           break;
         }
-        case 'link_close': close('url'); break;
+        case 'link_close': {
+          // Determine what link type was opened by looking at the stack in reverse order.
+          const lastLink = [...stack].reverse().find(s => s.type === 'url' || s.type === 'email_address' || s.type === 'phone_number' || s.type === 'text_mention' || s.type === 'reference_link');
+          if (lastLink) close(lastLink.type);
+          break;
+        }
         case 'image':
           // Best-effort: represent image alt text as plain text.
           pushPlain(token.content ?? '');
           break;
-        default:
+        default: {
+          // Process inline HTML tags which match specific Telegram rich-text formatting tags (e.g. underline, marked) 
+          // or proprietary attributes (e.g. custom emojis, time stamps, reference links).
+          if (token.type === 'html_inline' && token.content) {
+            const tag = token.content;
+            const openMatch = tag.match(/^<([\w-]+)(?:\s+([^>]*))?\/?>$/i);
+            const closeMatch = tag.match(/^<\/([\w-]+)>$/i);
+            if (openMatch) {
+              const tagName = openMatch[1].toLowerCase();
+              const attrs = openMatch[2] ?? '';
+              
+              // Standard styling tags.
+              if (tagName === 'u' || tagName === 'ins') { open('underline'); break; }
+              if (tagName === 'mark') { open('marked'); break; }
+              if (tagName === 'sub') { open('subscript'); break; }
+              if (tagName === 'sup') { open('superscript'); break; }
+              
+              // Custom Telegram entities.
+              if (tagName === 'tg-emoji') {
+                const emojiId = attrs.match(/emoji-id="([^"]*)"/)?.[1] ?? '';
+                open('custom_emoji', emojiId);
+                break;
+              }
+              if (tagName === 'tg-time') {
+                const unix = attrs.match(/unix="(\d+)"/)?.[1] ?? '0';
+                const fmt = attrs.match(/format="([^"]*)"/)?.[1] ?? 'wDT';
+                open('datetime', `${unix}:${fmt}`);
+                break;
+              }
+              if (tagName === 'tg-reference') {
+                const name = attrs.match(/name="([^"]*)"/)?.[1] ?? '';
+                open('reference', name);
+                break;
+              }
+              
+              // Media tags (self-closing). These are parsed, registered in the media store,
+              // and replaced by a proprietary tg:// URI reference to be processed during message sending.
+              if (tagName === 'img') {
+                const src = attrs.match(/src="([^"]*)"/)?.[1] ?? '';
+                if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+                  const id = `media_${mediaIdCounter++}`;
+                  mediaStore.push({ id, url: src, type: 'photo' });
+                  pushPlain(`tg://photo?id=${id}`);
+                }
+                break;
+              }
+              if (tagName === 'video') {
+                const src = attrs.match(/src="([^"]*)"/)?.[1] ?? '';
+                if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+                  const id = `media_${mediaIdCounter++}`;
+                  mediaStore.push({ id, url: src, type: 'video' });
+                  pushPlain(`tg://video?id=${id}`);
+                }
+                break;
+              }
+              if (tagName === 'audio') {
+                const src = attrs.match(/src="([^"]*)"/)?.[1] ?? '';
+                if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+                  const id = `media_${mediaIdCounter++}`;
+                  mediaStore.push({ id, url: src, type: 'audio' });
+                  pushPlain(`tg://audio?id=${id}`);
+                }
+                break;
+              }
+              
+              // Anchor elements (<a>) featuring specialized schemes.
+              if (tagName === 'a') {
+                const href = attrs.match(/href="([^"]*)"/)?.[1] ?? '';
+                if (href.startsWith('mailto:')) open('email_address', href.slice(7));
+                else if (href.startsWith('tel:')) open('phone_number', href.slice(4));
+                else if (href.startsWith('tg://user?id=')) open('text_mention', href.slice(13));
+                else if (href.startsWith('#')) open('reference_link', href.slice(1));
+                else open('url', href);
+                break;
+              }
+            }
+            if (closeMatch) {
+              const tagName = closeMatch[1].toLowerCase();
+              if (tagName === 'u' || tagName === 'ins') { close('underline'); break; }
+              if (tagName === 'mark') { close('marked'); break; }
+              if (tagName === 'sub') { close('subscript'); break; }
+              if (tagName === 'sup') { close('superscript'); break; }
+              if (tagName === 'tg-emoji') { close('custom_emoji'); break; }
+              if (tagName === 'tg-time') { close('datetime'); break; }
+              if (tagName === 'tg-reference') { close('reference'); break; }
+              if (tagName === 'a') {
+                const lastLink = [...stack].reverse().find(s => 
+                  s.type === 'url' || s.type === 'email_address' || 
+                  s.type === 'phone_number' || s.type === 'text_mention' || 
+                  s.type === 'reference_link'
+                );
+                if (lastLink) close(lastLink.type);
+                break;
+              }
+            }
+          }
           if (token.children) walk(token.children);
           break;
+        }
       }
     }
   };
@@ -2140,6 +2279,22 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
 const MATH_OPEN = '';
 const MATH_CLOSE = '';
 let mathPlaceholderStore: string[] = [];
+
+// --- Media collection (RichBlocks path) ------------------------------------
+// Collects media attachments (photos, videos, audio) discovered during
+// markdown-to-RichBlocks conversion. Media URLs are assigned unique IDs
+// and referenced via tg://photo?id=... (etc.) in the output blocks.
+let mediaStore: { id: string; url: string; type: 'photo' | 'video' | 'audio' | 'animation' | 'voice_note' }[] = [];
+let mediaIdCounter = 0;
+
+export function getCollectedMedia(): typeof mediaStore {
+  return mediaStore;
+}
+
+export function resetMediaStore(): void {
+  mediaStore = [];
+  mediaIdCounter = 0;
+}
 
 const MATH_EXTRACT_RE = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^\$\n\r]*?[^\s$])?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
 
@@ -2286,6 +2441,8 @@ function parseRichListToken(
 }
 
 export function markdownToRichBlocks(markdown: string): RichBlock[] {
+  // Reset media store for this conversion
+  resetMediaStore();
   // Extract every LaTeX formula into a private-use-area placeholder BEFORE
   // parsing so markdown-it never splits formula internals ( ) { } across
   // tokens. Restored as mathematical_expression entities in inlineToRichText.

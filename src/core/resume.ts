@@ -4,9 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file resume.ts
+ * @description Session listing and switching utilities.
+ * Extracts conversation metadata (title, modified timestamp) from SQLite summaries database
+ * or transcript logs, and switches active session context for a chat.
+ */
+
 import type { DaemonSession } from './types.js';
 import { listAvailableSessions as getAgySessions } from '../agy/historyManager.js';
 
+/**
+ * Metadata entry representing a resumable agy session in UI lists.
+ */
 export interface SessionListEntry {
   index: number;
   id: string;
@@ -19,6 +29,10 @@ export interface SessionListEntry {
 
 import { DatabaseSync } from 'node:sqlite';
 
+/**
+ * Extracts conversation title and last modified timestamp for a given session UUID.
+ * Queries conversation_summaries.db first; falls back to parsing transcript.jsonl.
+ */
 function getSessionMetadata(uuid: string, defaultMtimeMs: number): { title: string; date: Date } {
   // 1. Primary: Query conversation_summaries.db for preview and authentic last_modified_time
   try {

@@ -1,3 +1,10 @@
+/**
+ * @file outbound.ts
+ * @description Outbound media delivery handler for Telegram.
+ * Provides media type detection from file extensions and a dual-delivery transport:
+ * primary via grammY API methods, with automatic fallback to direct cURL HTTP multipart requests if API calls fail.
+ */
+
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { InputFile } from 'grammy';
@@ -7,6 +14,7 @@ import { logger } from '../../utils/logger.js';
 
 const execAsync = promisify(exec);
 
+/** Supported media categories for Telegram outbound transmission */
 export type MediaType =
   | 'photo'
   | 'voice'
@@ -16,6 +24,7 @@ export type MediaType =
   | 'document'
   | 'auto';
 
+/** Function contract for dispatching local files to a specific chat */
 export type SendMediaFn = (
   filePath: string,
   type: MediaType,

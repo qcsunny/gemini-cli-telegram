@@ -4,10 +4,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file ui.ts
+ * @description Telegram user interface components, emoji constants, inline keyboards, and message templates.
+ * Provides functions for constructing main menu, model selector, project picker, and session resume keyboards,
+ * as well as formatting system welcome, help, and status messages.
+ */
+
 import { InlineKeyboard } from 'grammy';
 import type { ProjectInfo } from '../../core/types.js';
 
-// ── Emoji Constants ──
+/** Unicode emoji icon mapping for consistent visual UI styling */
 export const ICONS = {
   // General
   bot: '🤖',
@@ -62,6 +69,9 @@ export const ICONS = {
 
 // ── Inline Keyboards ──
 
+/**
+ * Builds the main persistent navigation inline keyboard with quick action buttons.
+ */
 export function buildMainKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text(`${ICONS.new} New`, '/new')
@@ -77,6 +87,9 @@ export function buildMainKeyboard(): InlineKeyboard {
     .text(`${ICONS.help} Help`, '/help');
 }
 
+/**
+ * Builds an inline keyboard displaying available AI models for selection.
+ */
 export function buildModelKeyboard(models: Array<{ id: string; display: string; active?: boolean }>): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   const chunkSize = 1;
@@ -95,6 +108,9 @@ export function buildModelKeyboard(models: Array<{ id: string; display: string; 
   return keyboard;
 }
 
+/**
+ * Builds a paginated inline keyboard for browsing and selecting workspace projects.
+ */
 export function buildProjectKeyboard(projects: ProjectInfo[], hasMore = false, page = 0, currentProjectId?: string): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   
@@ -154,6 +170,9 @@ function truncateToWidth(str: string, maxWidth: number): string {
   return res + '…';
 }
 
+/**
+ * Builds an inline keyboard for selecting and restoring previous sessions.
+ */
 export function buildResumeKeyboard(sessions: Array<{ id: string; title: string; index: number; relativeTime?: string }>): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   

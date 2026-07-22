@@ -5,6 +5,13 @@
  */
 
 
+/**
+ * @file messageLoop.ts
+ * @description Core message execution loop and LLM orchestrator.
+ * Handles prompt formatting, local file binding, real-time response streaming via a single-draft state machine,
+ * automated multi-tier model fallback chains, transcript reasoning recovery, and generated artifact auto-delivery.
+ */
+
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';

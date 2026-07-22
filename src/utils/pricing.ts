@@ -4,12 +4,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file pricing.ts
+ * @description Token usage estimation and model pricing calculator module.
+ * Provides heuristic token count estimates for CJK and Western text, model rate lookups,
+ * footer marker string formatting, and footer string parsing for rich messages.
+ */
+
+/**
+ * Model pricing rates per 1,000,000 tokens in USD.
+ */
 interface PricingInfo {
   inputRate: number;  // Cost per 1,000,000 tokens
   outputRate: number; // Cost per 1,000,000 tokens
 }
 
-// Pricing matrix based on active models
+/**
+ * Pricing matrix matching model name patterns to their input/output rates.
+ */
 const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
     // DeepSeek V4 Pro

@@ -4,12 +4,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file scheduler.ts
+ * @description Persistent task scheduler for automated and recurring chat interactions.
+ * Persists tasks in ~/.gemini-cli-telegram/scheduled-tasks.json, running periodic checks every 30 seconds.
+ */
+
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import { logger } from '../utils/logger.js';
 
+/**
+ * Data structure representing a scheduled background chat task.
+ */
 export interface ScheduledTask {
   id: string;
   chatId: number;
@@ -29,6 +38,7 @@ export interface ScheduledTask {
   runCount: number;
 }
 
+/** Callback signature invoked when a scheduled task triggers */
 export type TaskCallback = (task: ScheduledTask) => Promise<void>;
 
 /**

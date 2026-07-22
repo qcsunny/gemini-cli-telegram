@@ -4,11 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file commands.ts
+ * @description Telegram bot slash command registry and interactive command handlers.
+ * Implements handlers for /start, /new, /cancel, /resume, /model, /status, /addfolder, /id,
+ * /undo, /save (Obsidian exporter), /delete_session, /help, /schedule, /autopilot, and callback queries.
+ */
+
 import type { Bot, Context } from 'grammy';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
+
+/**
+ * Maps raw model string identifier to human-friendly UI display label.
+ */
 function getDisplayString(model: string): string {
   const displayNames: Record<string, string> = {
     'gemini-1.5-pro': 'Gemini 1.5 Pro',

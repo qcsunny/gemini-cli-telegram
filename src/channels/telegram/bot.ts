@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file bot.ts
+ * @description Main Telegram Bot server and adapter implementation.
+ * Houses the `TelegramBot` class, grammY update handling, middleware pipeline (whitelist authentication, sequentialization),
+ * `buildChannelReply` (implementing Telegram Bot API 10.2 Rich Message draft/final multi-tier fallback pipeline),
+ * dynamic HTTP 429 backoff rate limiter, stuck session watchdog, and autopilot handlers.
+ */
+
 import { Bot, Context, InputFile } from 'grammy';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { run, sequentialize } from '@grammyjs/runner';

@@ -5,8 +5,16 @@
  */
 
 /**
+ * @file error.ts
+ * @description Utility functions for formatting and stringifying errors safely.
+ */
+
+/**
  * Robustly stringifies an unknown error object.
- * Prevents common issues like '[object Object]' when an error is a plain object.
+ * Prevents common issues like '[object Object]' when an error is a plain object or API response.
+ *
+ * @param err - The raw error value of unknown type (Error, Object, string, etc.)
+ * @returns Human-readable string representation of the error.
  */
 export function formatError(err: unknown): string {
   if (!err) return 'Unknown error';

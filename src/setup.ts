@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file setup.ts
+ * @description Interactive terminal setup wizard for configuring gemini-cli-telegram.
+ * Guides the user through entering/verifying Telegram bot tokens via BotFather,
+ * adding allowed Telegram user IDs (interactive or manual), and selecting default LLM models via terminal radio UI.
+ */
+
 import * as readline from 'node:readline';
 import { Bot } from 'grammy';
 import { getAvailableModels } from './agy/agyCli.js';
@@ -16,8 +23,12 @@ import {
 } from './config/userConfig.js';
 import { ICONS } from './channels/telegram/ui.js';
 
+/** Valid setup step identifier flags */
 export type SetupStep = 'token' | 'users' | 'model';
 
+/**
+ * Prompts the user with a question via readline interface.
+ */
 function ask(rl: readline.Interface, question: string): Promise<string> {
   return new Promise((resolve) => {
     rl.question(question, (answer) => resolve(answer.trim()));
