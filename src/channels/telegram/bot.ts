@@ -16,9 +16,11 @@ import { Bot, Context, InputFile } from 'grammy';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { run, sequentialize } from '@grammyjs/runner';
 import * as fs from 'fs/promises';
+import * as fssync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as http from 'http';
 import { SessionManager } from '../../core/session.js';
 import { processMessage } from '../../core/messageLoop.js';
 import { createTelegramSendMedia } from './outbound.js';
@@ -34,14 +36,16 @@ import type { RichBlock } from './richMessage.js';
 import { registerCommands } from './commands.js';
 import { telegramFormatter, markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from './formatter.js';
 import { logger } from '../../utils/logger.js';
-import { ICONS, formatWelcome, buildMainKeyboard } from './ui.js';
+import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
+import { CONFIG_PATH, getBackendUrl } from '../../config/userConfig.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
-const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 // ── Typed Rich API helpers ──
 
+// Thin wrappers around InputRichMessage construction.
+// These keep the rest of the codebase decoupled from the raw grammY type shape
+// and make it easy to swap payload formats without touching call sites.
 function buildRichMessagePayload(blocks: RichBlock[]): InputRichMessage<never> {
   return { blocks };
 }
@@ -54,7 +58,19 @@ function buildRichMessageMarkdownPayload(markdown: string): InputRichMessage<nev
   return { markdown };
 }
 
-// ── Draft throttle (minimum interval between draft updates) ──
+// ── Draft throttle & 429 backoff ────────────────────────────────────────────
+// Streaming generates rapid-fire draft updates. Without throttling, the bot
+// would hit Telegram's per-second rate limits (429 Too Many Requests).
+//
+// Strategy:
+//   1. DRAFT_THROTTLE_MS (250 ms) — minimum interval between draft updates
+//      for a given chatId. Rapid chunks are batched by sleeping.
+//   2. 429 backoff — when Telegram returns HTTP 429, we exponentially back off
+//      (×2 each time, max ×8). Subsequent draft calls sleep until the backoff
+//      window expires.
+//   3. Circuit breaker — after CONSECUTIVE_DRAFT_FAILURE_THRESHOLD (2) draft
+//      failures, we stop attempting rich drafts entirely and fall back to
+//      plain text edits (safeEdit with parse_mode omitted).
 
 const draftThrottleTimestamps = new Map<number, number>();
 const draftBackoffUntil = new Map<number, number>();
@@ -277,6 +293,26 @@ const activeDraftIds = new Set<number>();
 
 /**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
+ *
+ * This is the central adapter that translates abstract send/edit operations
+ * into concrete Telegram Bot API calls. It implements a multi-tier fallback
+ * pipeline for rich messages (Telegram Bot API 10.2):
+ *
+ *   Option A (blocks):  sendRichMessage({ blocks: [...] })
+ *     → Native rich blocks with zebra-striped tables, <details>, math, etc.
+ *     → Fastest to render; best user experience.
+ *
+ *   Option B (HTML):    sendRichMessage({ html: "..." })
+ *     → Server-side HTML→blocks parsing. Slightly slower but more robust
+ *       because it doesn't require perfect local AST construction.
+ *
+ *   Option C (markdown): sendRichMessage({ markdown: "..." })
+ *     → Fallback for edge cases where HTML parsing fails.
+ *
+ *   Option D (plain):   ctx.reply({ parse_mode: 'HTML' })
+ *     → Traditional grammY reply when RichMessage is entirely unsupported.
+ *
+ * Draft (streaming) path mirrors this with sendRichMessageDraft + editRich.
  */
 export function buildChannelReply(
   ctx: Context,
@@ -1288,6 +1324,7 @@ export class TelegramBot {
 
     logger.info('Telegram bot started. Listening for messages...');
 
+    this.runStartupChecks();
     this.startHealthCheck();
 
     // Use @grammyjs/runner for concurrent update processing.
@@ -1320,6 +1357,51 @@ export class TelegramBot {
       void this.performHealthCheck();
     }, HEALTH_CHECK_INTERVAL_MS);
     logger.debug('Health check started');
+  }
+
+  /**
+   * One-time startup diagnostics: checks config files and backend reachability.
+   * Logs warnings on failure but does NOT prevent startup (best-effort).
+   */
+  private runStartupChecks(): void {
+    // ── Config files ──
+
+    try {
+      fssync.accessSync(CONFIG_PATH, fssync.constants.R_OK);
+      JSON.parse(fssync.readFileSync(CONFIG_PATH, 'utf-8'));
+      logger.info('[boot] config.json           OK');
+    } catch (e) {
+      logger.warn(`[boot] config.json           FAILED — ${e instanceof Error ? e.message : e}`);
+    }
+
+    // ── Backend reachability ──
+    const probeBackend = (label: string, url: string) => {
+      const req = http.get(url, { timeout: 3000 }, (res) => {
+        logger.info(`[boot] ${label}  OK (HTTP ${res.statusCode})`);
+        res.resume();
+      });
+      req.on('error', (e) => {
+        logger.warn(`[boot] ${label}  UNREACHABLE — ${e.message}. Model routes that depend on this backend will fail until the service starts.`);
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        logger.warn(`[boot] ${label}  TIMEOUT — no response in 3s.`);
+      });
+    };
+
+    const web2apiUrl = getBackendUrl('web2api');
+    if (web2apiUrl) {
+      probeBackend('Web2API', web2apiUrl);
+    } else {
+      logger.info('[boot] Web2API              SKIPPED (not configured)');
+    }
+
+    const deepseekUrl = getBackendUrl('deepseek');
+    if (deepseekUrl) {
+      probeBackend('DeepSeek', deepseekUrl);
+    } else {
+      logger.info('[boot] DeepSeek             SKIPPED (not configured)');
+    }
   }
 
   private stopHealthCheck(): void {
@@ -1364,6 +1446,18 @@ export class TelegramBot {
   }
 
   private setupMiddleware(allowedUsers?: number[]): void {
+    // ── Middleware pipeline (executed in order for each incoming update) ──
+    //
+    // 1. Diagnostic logging — logs update latency (time from Telegram send to
+    //    bot receipt) and per-update processing duration.
+    // 2. Sequentialize — ensures messages within the same chat are processed
+    //    serially (no race conditions on session state), while /cancel bypasses
+    //    the queue so the user can always abort.
+    // 3. Whitelist auth — rejects messages from users not in the allowedUsers
+    //    list. Without this, any Telegram user could abuse the bot's compute.
+    //
+    // After these guards, the message handler (setupMessageHandler) runs.
+
     // Diagnostic logging middleware to track update latency
     this.bot.use(async (ctx, next) => {
       const start = Date.now();

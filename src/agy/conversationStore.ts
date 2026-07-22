@@ -21,14 +21,14 @@ import { logger } from '../utils/logger.js';
 /**
  * Persisted entry structure mapping a Telegram chat ID to an agy conversation context.
  */
-export interface StoreEntry {
+interface StoreEntry {
   conversationId: string;
   cwd: string;
   createdAt: string;
   model?: string;
 }
 
-export type Store = Record<string, StoreEntry>;
+type Store = Record<string, StoreEntry>;
 
 let migrationDone = false;
 
@@ -172,25 +172,4 @@ export async function deleteConversation(chatId: number): Promise<void> {
     .run();
 
   logger.info(`[conversationStore] Deleted conversation for chatId=${chatId}`);
-}
-
-/**
- * Return a map of all stored conversations (for /status or debugging).
- */
-export async function getAllConversations(): Promise<Store> {
-  await migrateLegacyJsonIfNeeded();
-  const db = getDb();
-  const rows = db.select().from(schema.conversations).all();
-
-  const store: Store = {};
-  for (const row of rows) {
-    store[row.chatId] = {
-      conversationId: row.conversationId,
-      cwd: row.cwd,
-      createdAt: row.createdAt,
-      model: row.model ?? undefined,
-    };
-  }
-
-  return store;
 }

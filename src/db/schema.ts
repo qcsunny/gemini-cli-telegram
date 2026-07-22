@@ -23,34 +23,21 @@ export const conversations = sqliteTable('conversations', {
   updatedAt: text('updated_at'),
 });
 
-/**
- * Conversation history table for tracking chat message history per session.
- */
-export const conversationHistory = sqliteTable('conversation_history', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  chatId: text('chat_id').notNull(),
-  conversationId: text('conversation_id'),
-  role: text('role').notNull(),
-  content: text('content').notNull(),
-  timestamp: text('timestamp').notNull(),
-});
-
-/**
- * Token usage table for recording token consumption metrics per session.
- */
-export const tokenUsage = sqliteTable('token_usage', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  chatId: text('chat_id').notNull(),
-  conversationId: text('conversation_id'),
-  promptTokens: integer('prompt_tokens').default(0),
-  completionTokens: integer('completion_tokens').default(0),
-  totalTokens: integer('total_tokens').default(0),
-  timestamp: text('timestamp').notNull(),
-});
-
 export type Conversation = typeof conversations.$inferSelect;
 export type NewConversation = typeof conversations.$inferInsert;
-export type ConversationHistoryEntry = typeof conversationHistory.$inferSelect;
-export type NewConversationHistoryEntry = typeof conversationHistory.$inferInsert;
-export type TokenUsageEntry = typeof tokenUsage.$inferSelect;
-export type NewTokenUsageEntry = typeof tokenUsage.$inferInsert;
+
+/**
+ * Messages table persists web2api / deepseek conversation history across restarts.
+ * Each row is one user or assistant turn in a backend conversation.
+ */
+export const messages = sqliteTable('messages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  conversationId: text('conversation_id').notNull(),
+  role: text('role', { enum: ['user', 'assistant'] }).notNull(),
+  content: text('content').notNull(),
+  backend: text('backend', { enum: ['web2api', 'deepseek', 'gemini-direct'] }).notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
+export type Message = typeof messages.$inferSelect;
+export type NewMessage = typeof messages.$inferInsert;

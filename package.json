@@ -1,10 +1,10 @@
 {
   "name": "gemini-cli-telegram",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Connect Gemini CLI to Telegram",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/qcsunny/gemini-cli-telegram.git"
+    "url": "git+https://github.com/user/gemini-cli-telegram.git"
   },
   "license": "Apache-2.0",
   "type": "module",
@@ -30,6 +30,7 @@
     "commander": "^15.0.0",
     "drizzle-orm": "^0.45.2",
     "grammy": "^1.45.1",
+    "lru-cache": "^11.5.2",
     "markdown-it": "^14.1.1",
     "markdown-it-cjk-friendly": "^2.0.2",
     "pino": "^10.3.1",

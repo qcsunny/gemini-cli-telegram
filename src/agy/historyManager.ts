@@ -14,7 +14,7 @@ import { logger } from '../utils/logger.js';
 /**
  * Summary information for a local agy session database file.
  */
-export interface SessionInfo {
+interface SessionInfo {
   uuid: string;
   mtime: number;
 }
@@ -26,7 +26,7 @@ export function listAvailableSessions(): SessionInfo[] {
   try {
     const dir = getConversationsDir();
     if (!fs.existsSync(dir)) return [];
-    
+
     const files = fs.readdirSync(dir);
     const sessions: SessionInfo[] = [];
     for (const f of files) {
@@ -47,6 +47,20 @@ export function listAvailableSessions(): SessionInfo[] {
   }
 }
 
+// NOTE: deleteSession(uuid) was here — permanently deletes .db/-shm/-wal files.
+// Currently unused: the /delete_session command uses its own inline file deletion.
+// function deleteSession(uuid: string): boolean {
+//   const dir = getConversationsDir();
+//   const dbPath = path.join(dir, `${uuid}.db`);
+//   const shmPath = path.join(dir, `${uuid}.db-shm`);
+//   const walPath = path.join(dir, `${uuid}.db-wal`);
+//   let deletedAny = false;
+//   if (fs.existsSync(dbPath)) { fs.unlinkSync(dbPath); deletedAny = true; }
+//   if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath);
+//   if (fs.existsSync(walPath)) fs.unlinkSync(walPath);
+//   return deletedAny;
+// }
+
 /**
  * Removes the most recent turn (user prompt & assistant steps) from an agy conversation SQLite database.
  * Deletes the last 15 step indices to roll back state.
@@ -60,15 +74,15 @@ export function undoLastTurn(uuid: string): boolean {
 
   try {
     const db = new Database(dbPath);
-    
+
     // Antigravity (agy) records many steps per turn (thinking, tools, generation).
     // The safest "undo" without deep protobuf parsing is to delete the last ~5 to 10 indices
     // or rely on the user to just clarify. For a true undo, we delete everything after
     // max(idx) - 10 as a heuristic.
-    
+
     const stmt = db.prepare('SELECT MAX(idx) as max_idx FROM steps');
     const result = stmt.get() as { max_idx: number } | undefined;
-    
+
     if (result && result.max_idx !== null && result.max_idx !== undefined && result.max_idx >= 0) {
       const max_idx = result.max_idx;
       const deleteStmt = db.prepare('DELETE FROM steps WHERE idx > ?');
@@ -77,42 +91,11 @@ export function undoLastTurn(uuid: string): boolean {
       db.close();
       return true;
     }
-    
+
     db.close();
     return false;
   } catch (e) {
     logger.error(`Error undoing turn in ${uuid}: ${e}`);
-    return false;
-  }
-}
-
-/**
- * Permanently deletes an agy session database file (`.db`) and its associated WAL/SHM files.
- *
- * @param uuid - The agy conversation UUID to delete.
- * @returns True if any files were deleted, false otherwise.
- */
-export function deleteSession(uuid: string): boolean {
-  try {
-    const dir = getConversationsDir();
-    const dbPath = path.join(dir, `${uuid}.db`);
-    const shmPath = path.join(dir, `${uuid}.db-shm`);
-    const walPath = path.join(dir, `${uuid}.db-wal`);
-
-    let deletedAny = false;
-    if (fs.existsSync(dbPath)) {
-      fs.unlinkSync(dbPath);
-      deletedAny = true;
-    }
-    if (fs.existsSync(shmPath)) {
-      fs.unlinkSync(shmPath);
-    }
-    if (fs.existsSync(walPath)) {
-      fs.unlinkSync(walPath);
-    }
-    return deletedAny;
-  } catch (e) {
-    logger.error(`Error deleting session ${uuid}: ${e}`);
     return false;
   }
 }

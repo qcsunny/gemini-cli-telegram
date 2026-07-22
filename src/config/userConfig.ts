@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { z } from 'zod';
+import { logger } from '../utils/logger.js';
 
 /** Base directory for daemon configuration and runtime files (~/.gemini-cli-telegram) */
 export const CONFIG_DIR = path.join(os.homedir(), '.gemini-cli-telegram');
@@ -42,15 +43,198 @@ export const userConfigSchema = z.object({
   notebookPath: z.string().optional(),
   geminiApiKey: z.string().optional(),
   deepseekApiKey: z.string().optional(),
+  /** HTTP health endpoint port (optional). If set, starts a /health HTTP server. */
+  healthPort: z.number().optional(),
+  /**
+   * Directory path for the /save command output (optional).
+   * If not set, defaults to ~/Documents/Obsidian/Inbox.
+   */
+  savePath: z.string().optional(),
   /** Solidified project list (id/name/path/description). Kept in the local,
    *  gitignored config so personal directory paths never reach the remote repo. */
   projects: z.array(projectInfoSchema).optional(),
+  /**
+   * Custom model fallback order (optional). When set, overrides the hardcoded
+   * ORDERED_MODELS array in messageLoop.ts. Each entry must be a model display
+   * name as used by the fallback system (e.g. 'Claude Opus 4.6 (Thinking)',
+   * 'Web2API: Gemini 3.5 Flash'). Models not present in this list are still
+   * reachable but won't appear in the fallback chain.
+   */
+  orderedModels: z.array(z.string()).optional(),
+  /**
+   * Backend service URLs for local proxy services.
+   * Foreign users can skip by omitting the key entirely (the corresponding
+   * model routes will not be available).
+   */
+  backends: z.object({
+    /** Web2API reverse proxy URL. Default: http://127.0.0.1:8081/v1 */
+    web2api: z.string().optional(),
+    /** Web2API shared secret key. Default: sk-gemini-local */
+    web2apiKey: z.string().optional(),
+    /** DeepSeek API proxy URL. Default: http://127.0.0.1:5001/v1 */
+    deepseek: z.string().optional(),
+  }).optional(),
+  /**
+   * Tuning parameters for runtime behavior.
+   * All fields are optional; omitted fields use the defaults shown in TUNING_DEFAULTS.
+   */
+  tuning: z.object({
+    /**
+     * Minimum interval (ms) between consecutive Telegram message edits during streaming.
+     * Controls how often the bot updates the "typing..." draft in the chat.
+     *
+     * - Lower values (e.g. 500):  Smoother streaming, more API calls, may hit Telegram rate limits.
+     * - Higher values (e.g. 3000): Less API traffic, but choppier visual updates.
+     *
+     * Default: 1000 (1 second) — balances smoothness and rate-limit safety.
+     */
+    debounceIntervalMs: z.number().optional(),
+    /**
+     * Absolute wall-clock timeout (ms) for a single model run. This timer is NEVER
+     * reset by activity and serves as a hard kill switch. If a model run exceeds
+     * this duration, it is forcibly terminated regardless of streaming progress.
+     *
+     * - Lower values (e.g. 300000 = 5min):  Kills stuck models faster, but may
+     *   truncate very long outputs (e.g. code generation, large documents).
+     * - Higher values (e.g. 1800000 = 30min): Allows extremely long outputs, but
+     *   stuck models waste more time/resources before being killed.
+     *
+     * Default: 900000 (15 minutes) — sufficient for ~180k Chinese chars at 200 char/s.
+     */
+    modelRunHardTimeoutMs: z.number().optional(),
+    /**
+     * Inactivity timeout (ms) — if the model produces NO output for this long, the
+     * run is killed as a suspected upstream stall. This timer resets on every
+     * streamed chunk, so actively streaming replies are never killed.
+     *
+     * - Lower values (e.g. 120000 = 2min):  Faster stall detection, but may kill
+     *   models that pause for "thinking" between chunks.
+     * - Higher values (e.g. 1800000 = 30min): More tolerant of slow models, but
+     *   genuine stalls waste more time before detection.
+     *
+     * Default: 600000 (10 minutes) — balances stall detection with slow-model tolerance.
+     */
+    modelRunInactivityMs: z.number().optional(),
+    /**
+     * Number of times each model is retried before falling back to the next tier.
+     * Applies per-model: if a model fails, it is retried up to this many times
+     * before the fallback chain advances to a weaker model.
+     *
+     * - Lower values (e.g. 1):  Fast fallback, but may abandon a model that fails
+     *   due to a transient error (rate limit, brief outage).
+     * - Higher values (e.g. 5): More resilient to transient errors, but slower to
+     *   fall back when a model is genuinely unavailable.
+     *
+     * Default: 3 — retries transient failures while still falling back promptly.
+     */
+    retriesPerModel: z.number().optional(),
+    /**
+     * Sliding window size for conversation history sent to web2api / deepseek / gemini-direct
+     * backends. These backends don't maintain server-side conversation state, so the full
+     * history must be sent with each request.
+     *
+     * - Lower values (e.g. 20):  Faster responses, less token usage, but less context.
+     * - Higher values (e.g. 80): More context, but higher latency and token costs.
+     *
+     * Default: 40 — sufficient context for multi-turn conversations without excessive cost.
+     */
+    maxHistoryMessages: z.number().optional(),
+    /**
+     * Time-to-live (ms) for cached raw Markdown messages used by the /save command.
+     * After this duration, cached entries are automatically evicted.
+     *
+     * - Lower values (e.g. 3600000 = 1h):   Frees memory faster, but /save may fail
+     *   if the user waits too long after receiving a reply.
+     * - Higher values (e.g. 604800000 = 7d): Allows /save for older messages, but
+     *   consumes more memory.
+     *
+     * Default: 86400000 (24 hours) — covers typical daily usage patterns.
+     */
+    cacheTtlMs: z.number().optional(),
+    /**
+     * Maximum number of entries in the message cache. When the cache reaches this
+     * limit, the least-recently-used entry is evicted to make room for new ones.
+     *
+     * - Lower values (e.g. 200):   Less memory usage, but evicts older messages faster.
+     * - Higher values (e.g. 5000): More messages retained, but higher memory footprint.
+     *
+     * Default: 1000 — handles ~1000 messages/day with room for burst traffic.
+     */
+    cacheMaxSize: z.number().optional(),
+  }).optional(),
 });
 
 /**
  * User configuration type inferred from Zod schema.
  */
 export type UserConfig = z.infer<typeof userConfigSchema>;
+
+/** Default tuning constants — used when config.tuning fields are omitted. */
+export const TUNING_DEFAULTS = {
+  debounceIntervalMs: 1000,
+  modelRunHardTimeoutMs: 900_000,
+  modelRunInactivityMs: 600_000,
+  retriesPerModel: 3,
+  maxHistoryMessages: 40,
+  cacheTtlMs: 24 * 60 * 60 * 1000,
+  cacheMaxSize: 1000,
+};
+
+/**
+ * Resolved tuning values: config overrides merged with defaults.
+ */
+export type TuningConfig = {
+  debounceIntervalMs: number;
+  modelRunHardTimeoutMs: number;
+  modelRunInactivityMs: number;
+  retriesPerModel: number;
+  maxHistoryMessages: number;
+  cacheTtlMs: number;
+  cacheMaxSize: number;
+};
+
+let _cachedTuning: TuningConfig | undefined;
+
+/** Default backend URLs — used when config.backends fields are omitted. */
+export const BACKEND_URL_DEFAULTS = {
+  web2api: 'http://127.0.0.1:8081/v1',
+  deepseek: 'http://127.0.0.1:5001/v1',
+  web2apiKey: 'sk-gemini-local',
+};
+
+/**
+ * Returns the configured backend URL for a given service, falling back to defaults.
+ * Returns null if neither config nor default is set (backend not available).
+ */
+export function getBackendUrl(service: 'web2api' | 'deepseek'): string | null {
+  const cfg = loadUserConfig();
+  return cfg?.backends?.[service] || BACKEND_URL_DEFAULTS[service] || null;
+}
+
+/** Returns the Web2API shared secret key, from config or default. */
+export function getWeb2ApiKey(): string {
+  const cfg = loadUserConfig();
+  return cfg?.backends?.web2apiKey || BACKEND_URL_DEFAULTS.web2apiKey;
+}
+
+/**
+ * Clears the cached tuning configuration. Called on SIGHUP to force a fresh read
+ * from disk on the next call to getTuningConfig().
+ */
+export function clearConfigCache(): void {
+  _cachedTuning = undefined;
+}
+
+/**
+ * Returns the resolved tuning configuration (config values + defaults).
+ * Cached after first call and cleared via clearConfigCache() on SIGHUP.
+ */
+export function getTuningConfig(): TuningConfig {
+  if (_cachedTuning) return _cachedTuning;
+  const cfg = loadUserConfig();
+  _cachedTuning = { ...TUNING_DEFAULTS, ...cfg?.tuning };
+  return _cachedTuning;
+}
 
 /**
  * Checks whether the configuration file exists on disk.
@@ -62,13 +246,18 @@ export function configExists(): boolean {
 /**
  * Synchronously loads and parses the user configuration file from disk.
  * Validates strictly using userConfigSchema.
- * Returns null if the file does not exist.
+ * Returns null if the file does not exist or is malformed/invalid.
  */
 export function loadUserConfig(): UserConfig | null {
   if (!fs.existsSync(CONFIG_PATH)) return null;
-  const content = fs.readFileSync(CONFIG_PATH, 'utf-8');
-  const parsed = JSON.parse(content);
-  return userConfigSchema.parse(parsed);
+  try {
+    const content = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    const parsed = JSON.parse(content);
+    return userConfigSchema.parse(parsed);
+  } catch (e) {
+    logger.warn(`[userConfig] Failed to load config.json: ${e instanceof Error ? e.message : e}. Falling back to defaults.`);
+    return null;
+  }
 }
 
 /**

@@ -1,9 +1,9 @@
 import { Bot as GrammyBot } from 'grammy';
 import { ProxyAgent as UndiciProxyAgent, fetch as UndiciFetch } from 'undici';
 
-const token = "8855898234:AAHR8-eQttz91staGVp7TAUfskrfrMqi1r8";
+const token = "<BOT_TOKEN>";
 const proxy = "http://127.0.0.1:7890";
-const chatId = 8431249190;
+const chatId = parseInt(process.env.CHAT_ID || '0');
 
 const clientConfig = {};
 const proxyAgent = new UndiciProxyAgent(proxy);

@@ -247,14 +247,6 @@ export class ProjectManager {
       await this.saveProjects();
     }
   }
-
-  async addProject(project: Omit<ProjectInfo, 'id'>): Promise<ProjectInfo> {
-    const id = crypto.randomUUID();
-    const newProject: ProjectInfo = { ...project, id };
-    this.projects.set(id, newProject);
-    await this.saveProjects();
-    return newProject;
-  }
 }
 
 /**

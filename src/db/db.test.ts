@@ -11,7 +11,6 @@ import {
   getConversationId,
   getCwd,
   getStoredModel,
-  getAllConversations,
   deleteConversation,
 } from '../agy/conversationStore.js';
 import { eq } from 'drizzle-orm';
@@ -51,52 +50,6 @@ describe('Drizzle ORM & Better-SQLite3 Database', () => {
     expect(row?.cwd).toBe('/path/to/project');
     expect(row?.model).toBe('Gemini 3.6 Flash');
   });
-
-  it('should insert and query conversationHistory table', () => {
-    const db = getDb(':memory:');
-    db.insert(schema.conversationHistory)
-      .values({
-        chatId: '1001',
-        conversationId: 'conv-uuid-1',
-        role: 'user',
-        content: 'Hello AI',
-        timestamp: new Date().toISOString(),
-      })
-      .run();
-
-    const historyRows = db
-      .select()
-      .from(schema.conversationHistory)
-      .where(eq(schema.conversationHistory.chatId, '1001'))
-      .all();
-
-    expect(historyRows.length).toBe(1);
-    expect(historyRows[0].role).toBe('user');
-    expect(historyRows[0].content).toBe('Hello AI');
-  });
-
-  it('should insert and query tokenUsage table', () => {
-    const db = getDb(':memory:');
-    db.insert(schema.tokenUsage)
-      .values({
-        chatId: '1001',
-        conversationId: 'conv-uuid-1',
-        promptTokens: 100,
-        completionTokens: 50,
-        totalTokens: 150,
-        timestamp: new Date().toISOString(),
-      })
-      .run();
-
-    const usageRows = db
-      .select()
-      .from(schema.tokenUsage)
-      .where(eq(schema.tokenUsage.chatId, '1001'))
-      .all();
-
-    expect(usageRows.length).toBe(1);
-    expect(usageRows[0].totalTokens).toBe(150);
-  });
 });
 
 describe('conversationStore with Drizzle ORM', () => {
@@ -129,14 +82,6 @@ describe('conversationStore with Drizzle ORM', () => {
     expect(convId).toBe('conv-uuid-2');
     expect(cwd).toBe('/workspace/2');
     expect(model).toBe('Model B');
-  });
-
-  it('should return all conversations via getAllConversations', async () => {
-    await setConversation(testChatId, 'conv-uuid-all', '/workspace/all', 'Model All');
-    const store = await getAllConversations();
-
-    expect(store[String(testChatId)]).toBeDefined();
-    expect(store[String(testChatId)].conversationId).toBe('conv-uuid-all');
   });
 
   it('should delete conversation entry', async () => {

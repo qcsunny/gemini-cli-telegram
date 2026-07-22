@@ -22,8 +22,9 @@ let sqliteDb: InstanceType<typeof Database> | null = null;
 
 /**
  * Returns default absolute path to the SQLite database file (~/.gemini-cli-telegram/db.sqlite).
+ * Internal — use getDb() instead.
  */
-export function getDefaultDbPath(): string {
+function getDefaultDbPath(): string {
   if (process.env['GEMINI_TELEGRAM_DB_PATH']) {
     return process.env['GEMINI_TELEGRAM_DB_PATH'];
   }
@@ -61,7 +62,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   const sqlite = new Database(targetPath);
   sqlite.pragma('journal_mode = WAL');
 
-  // Automatically ensure tables exist on initialization
+  // Automatically ensure the conversations table exists on initialization
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
       chat_id TEXT PRIMARY KEY,
@@ -71,22 +72,15 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       model TEXT,
       updated_at TEXT
     );
-    CREATE TABLE IF NOT EXISTS conversation_history (
+  `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      chat_id TEXT NOT NULL,
-      conversation_id TEXT,
-      role TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL,
-      timestamp TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS token_usage (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      chat_id TEXT NOT NULL,
-      conversation_id TEXT,
-      prompt_tokens INTEGER DEFAULT 0,
-      completion_tokens INTEGER DEFAULT 0,
-      total_tokens INTEGER DEFAULT 0,
-      timestamp TEXT NOT NULL
+      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct')),
+      created_at TEXT NOT NULL
     );
   `);
 
@@ -102,7 +96,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
 }
 
 /**
- * Safely closes active database connection.
+ * Safely closes active database connection. Used by tests for cleanup.
  */
 export function closeDb(): void {
   if (sqliteDb) {
