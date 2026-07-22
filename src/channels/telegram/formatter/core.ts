@@ -833,12 +833,16 @@ export function trimHtmlBr(html: string): string {
 
 export function normalizeMarkdownFences(markdown: string): string {
   if (!markdown) return markdown;
-  // 1. Split a fence delimiter that is glued to text on the same line onto its
-  //    own line, in both directions:
-  //    - opener glued to preceding text: `正文```python` -> `正文\n```python`
-  //    - closing fence glued to following text: `code```后面` -> `code\n```\n后面`
-  //    Also handles 4+ backtick fences (````markdown, ````` etc) in the same way.
-  let text = markdown.replace(/(^|[^`\n])(`{3,})([a-zA-Z0-9_+#.-]*)/g, '$1\n$2$3');
+  let inputLines = markdown.split('\n');
+  for (let i = 0; i < inputLines.length; i++) {
+    inputLines[i] = inputLines[i].replace(/(^|.+?)(`{3,}|~{3,})([a-zA-Z0-9_+#.-]*)/g, (match, before, fence, info) => {
+      if (/[^ \t>]/.test(before)) {
+        return before + '\n' + fence + info;
+      }
+      return match;
+    });
+  }
+  let text = inputLines.join('\n');
   text = text.replace(/(`{3,})([a-zA-Z0-9_+#.-]*)\n?([^\n`])/g, '$1$2\n$3');
   // 2. Isolate every fence delimiter (a line that is only ````` + optional lang)
   //    with blank lines so markdown-it parses it as a real fence instead of
