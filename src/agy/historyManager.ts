@@ -1,14 +1,27 @@
+/**
+ * @file historyManager.ts
+ * @description SQLite database management for native `agy` conversation files.
+ * Provides helper functions to list session databases, undo the most recent turn in a SQLite database,
+ * and physically delete session database files (`.db`, `-shm`, `-wal`).
+ */
+
 import { DatabaseSync } from 'node:sqlite';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getConversationsDir } from './agyCli.js';
 import { logger } from '../utils/logger.js';
 
+/**
+ * Summary information for a local agy session database file.
+ */
 export interface SessionInfo {
   uuid: string;
   mtime: number;
 }
 
+/**
+ * Scans the conversations directory for `.db` files and returns a list sorted by modification time (newest first).
+ */
 export function listAvailableSessions(): SessionInfo[] {
   try {
     const dir = getConversationsDir();
@@ -34,6 +47,13 @@ export function listAvailableSessions(): SessionInfo[] {
   }
 }
 
+/**
+ * Removes the most recent turn (user prompt & assistant steps) from an agy conversation SQLite database.
+ * Deletes the last 15 step indices to roll back state.
+ *
+ * @param uuid - The agy conversation UUID.
+ * @returns True if successful, false otherwise.
+ */
 export function undoLastTurn(uuid: string): boolean {
   const dbPath = path.join(getConversationsDir(), `${uuid}.db`);
   if (!fs.existsSync(dbPath)) return false;
@@ -66,6 +86,12 @@ export function undoLastTurn(uuid: string): boolean {
   }
 }
 
+/**
+ * Permanently deletes an agy session database file (`.db`) and its associated WAL/SHM files.
+ *
+ * @param uuid - The agy conversation UUID to delete.
+ * @returns True if any files were deleted, false otherwise.
+ */
 export function deleteSession(uuid: string): boolean {
   try {
     const dir = getConversationsDir();

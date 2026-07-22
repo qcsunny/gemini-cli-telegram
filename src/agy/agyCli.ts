@@ -1,14 +1,11 @@
 /**
- * @license
- * Copyright 2026 Google LLC
- * SPDX-License-Identifier: Apache-2.0
- *
- * agyCli.ts — thin subprocess wrapper around the `agy` CLI binary.
- *
- * Usage pattern:
- *   First message  → runAgyPrint({ prompt, cwd, onChunk, signal })
- *                    Returns the new conversation UUID (or '' on error)
- *   Follow-up      → runAgyPrint({ prompt, cwd, conversationId, onChunk, signal })
+ * @file agyCli.ts
+ * @description Subprocess wrapper, proxy client, and execution router for model runs.
+ * Supports:
+ *  1. Native `agy` binary execution via child process spawning (`runAgyPrint`).
+ *  2. Local Web2API proxy service (`runWeb2Api` at http://127.0.0.1:8081).
+ *  3. Local DeepSeek API proxy (`runDeepSeek` at http://127.0.0.1:5001).
+ *  4. Direct Gemini API connection (`runGeminiDirect` via Google AI REST SSE endpoints).
  */
 
 import { spawn, execFileSync } from 'node:child_process';

@@ -4,14 +4,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file conversation.ts
+ * @description Multi-step interactive conversation state manager.
+ * Persists transient chat conversation state (e.g. awaiting user input during setup/wizards) to
+ * `~/.gemini-cli-telegram/conversation-state.json`.
+ */
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
+/** State enumeration for interactive multi-step prompts */
 export type ConversationState = 
   | 'none'
   | 'awaiting_account_name';
 
+/** Context object holding the current state and step payload */
 export interface ConversationContext {
   state: ConversationState;
   data?: {

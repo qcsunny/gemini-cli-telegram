@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * gemini-cli-telegram — Connect Gemini CLI to Telegram.
+ * @file cli.ts
+ * @description Command-line executable entry point (`gemini-cli-telegram`).
+ * Handles CLI command routing for starting/stopping the daemon, checking status, tailing logs,
+ * running the setup wizard, and spawning background detached processes vs running in foreground (--live).
  */
 
 // Suppress Node.js deprecation warnings from upstream dependencies

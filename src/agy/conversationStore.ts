@@ -3,9 +3,11 @@
  * Copyright 2026 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  *
- * conversationStore.ts — persists Telegram chatId → agy conversation UUID mapping.
- *
- * Stored at ~/.gemini-cli-telegram/agy-conversations.json
+/**
+ * @file conversationStore.ts
+ * @description Persistent mapping store connecting Telegram `chatId` to `agy` conversation UUIDs,
+ * working directory paths (cwd), creation timestamps, and selected model overrides.
+ * Stored locally at `~/.gemini-cli-telegram/agy-conversations.json`.
  */
 
 import * as fs from 'node:fs/promises';
@@ -13,6 +15,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { logger } from '../utils/logger.js';
 
+/**
+ * Returns the absolute path to the local conversation store JSON file.
+ */
 function getStorePath(): string {
   return path.join(
     os.homedir(),
@@ -21,6 +26,9 @@ function getStorePath(): string {
   );
 }
 
+/**
+ * Persisted entry structure mapping a Telegram chat ID to an agy conversation context.
+ */
 interface StoreEntry {
   conversationId: string;
   cwd: string;
