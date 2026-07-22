@@ -6,62 +6,76 @@
 
 /**
  * @file logger.ts
- * @description Lightweight timestamped logging utility with configurable log levels.
+ * @description Structured Pino logger utility with pino-pretty support in development/TTY environments.
  * Log levels: debug < info < warn < error (controlled via process.env.LOG_LEVEL).
  */
 
-const levels = ['debug', 'info', 'warn', 'error'] as const;
-type LogLevel = (typeof levels)[number];
+import pino from 'pino';
+
+const isDev =
+  process.env['NODE_ENV'] === 'development' ||
+  process.env['NODE_ENV'] === 'test' ||
+  Boolean(process.stdout.isTTY) ||
+  !process.env['NODE_ENV'];
+
+const level = process.env['LOG_LEVEL'] || 'info';
 
 /**
- * Type guard to check if a string matches a valid LogLevel.
+ * Underlying Pino logger instance.
+ * Uses pino-pretty transport in development/local/TTY environments.
  */
-function isLogLevel(value: string): value is LogLevel {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  return levels.includes(value as LogLevel);
+export const pinoInstance = pino({
+  level,
+  ...(isDev
+    ? {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'SYS:standard',
+            ignore: 'pid,hostname',
+          },
+        },
+      }
+    : {}),
+});
+
+/**
+ * Helper to combine message string and variadic arguments for backward compatibility.
+ */
+function formatMsg(message: unknown, args: unknown[]): string {
+  const primary = typeof message === 'string' ? message : String(message);
+  if (args.length === 0) return primary;
+  const extra = args
+    .map((a) => (a instanceof Error ? a.stack || a.message : typeof a === 'object' ? JSON.stringify(a) : String(a)))
+    .join(' ');
+  return `${primary} ${extra}`;
 }
 
-const envLevel = process.env['LOG_LEVEL'] || 'info';
-const currentLevel: LogLevel = isLogLevel(envLevel) ? envLevel : 'info';
-const currentLevelIndex = levels.indexOf(currentLevel);
-
 /**
- * Generates an ISO timestamp string for log entry prefixes.
- */
-function formatTimestamp(): string {
-  return new Date().toISOString();
-}
-
-/**
- * Core logging method that outputs formatted log messages to process.stderr
- * if the level meets or exceeds the currently configured log level index.
- *
- * @param level - Log severity level
- * @param message - Primary message string
- * @param args - Additional contextual arguments to concatenate
- */
-function log(level: LogLevel, message: string, ...args: unknown[]): void {
-  if (levels.indexOf(level) < currentLevelIndex) {
-    return;
-  }
-  const prefix = `[${level.toUpperCase()}] ${formatTimestamp()} --`;
-  const line =
-    args.length > 0
-      ? `${prefix} ${message} ${args.map((a) => String(a)).join(' ')}`
-      : `${prefix} ${message}`;
-  process.stderr.write(line + '\n');
-}
-
-/**
- * Shared application logger instance.
+ * Shared application logger wrapper.
+ * Maps legacy logger methods (debug, info, warn, error) to Pino.
  */
 export const logger = {
-  debug: (message: string, ...args: unknown[]) =>
-    log('debug', message, ...args),
-  info: (message: string, ...args: unknown[]) =>
-    log('info', message, ...args),
-  warn: (message: string, ...args: unknown[]) =>
-    log('warn', message, ...args),
-  error: (message: string, ...args: unknown[]) =>
-    log('error', message, ...args),
+  pino: pinoInstance,
+  debug: (message: unknown, ...args: unknown[]) => {
+    if (pinoInstance.isLevelEnabled('debug')) {
+      pinoInstance.debug(formatMsg(message, args));
+    }
+  },
+  info: (message: unknown, ...args: unknown[]) => {
+    if (pinoInstance.isLevelEnabled('info')) {
+      pinoInstance.info(formatMsg(message, args));
+    }
+  },
+  warn: (message: unknown, ...args: unknown[]) => {
+    if (pinoInstance.isLevelEnabled('warn')) {
+      pinoInstance.warn(formatMsg(message, args));
+    }
+  },
+  error: (message: unknown, ...args: unknown[]) => {
+    if (pinoInstance.isLevelEnabled('error')) {
+      pinoInstance.error(formatMsg(message, args));
+    }
+  },
 };

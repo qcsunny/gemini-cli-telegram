@@ -25,16 +25,34 @@ describe('userConfig', () => {
     expect(loadUserConfig()).toBeNull();
   });
 
-  it('should load config if it exists', () => {
+  it('should load config if it exists and matches schema', () => {
     const mockConfig = {
       telegramBotToken: 'test-token',
       allowedUsers: [123],
+      model: 'gemini-2.5-flash',
+      projects: [
+        {
+          id: 'proj-1',
+          name: 'Project 1',
+          path: '/path/to/proj',
+        },
+      ],
     };
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockConfig));
 
     expect(configExists()).toBe(true);
     expect(loadUserConfig()).toEqual(mockConfig);
+  });
+
+  it('should throw ZodError when invalid config is loaded', () => {
+    const invalidConfig = {
+      allowedUsers: 'not-an-array',
+    };
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(invalidConfig));
+
+    expect(() => loadUserConfig()).toThrow();
   });
 
   it('should save config', () => {
