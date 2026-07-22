@@ -433,10 +433,9 @@ export async function processMessage(
       //     weakest model, it wraps back to the strongest. This handles
       //     temporary failures (rate limits, transient errors) where a model
       //     may recover after a brief cooldown.
-      //   • Total budget is MAX_LOOPS full loops = chain.length * RETRIES * MAX_LOOPS.
+      //   • Total budget is chain.length * RETRIES_PER_MODEL.
       const RETRIES_PER_MODEL = 3;
-      const MAX_LOOPS = 2;  // 最多循环 2 轮（默认模型→最弱→再回到默认模型→最弱）
-      const maxAttempts = chain.length * RETRIES_PER_MODEL * MAX_LOOPS;
+      const maxAttempts = chain.length * RETRIES_PER_MODEL;
 
       let modelToUse = chain[0];
       let chainIdx = 0;          // index into `chain`
