@@ -13,7 +13,7 @@
     "gemini-cli-telegram": "dist/cli.js"
   },
   "scripts": {
-    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc --build",
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc --build && mkdir -p dist/config && cp src/config/models.json dist/config/",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
     "test": "vitest run",
