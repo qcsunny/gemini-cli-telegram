@@ -24,7 +24,7 @@ import {
 import { ICONS } from './channels/telegram/ui.js';
 
 /** Valid setup step identifier flags */
-export type SetupStep = 'token' | 'users' | 'model';
+export type SetupStep = 'token' | 'users' | 'model' | 'auth';
 
 /**
  * Prompts the user with a question via readline interface.
@@ -225,11 +225,11 @@ export async function runSetup(only?: SetupStep): Promise<void> {
 
   let currentRl = rl;
 
-  const token = only === 'token' || !only
+  const token = only === 'token' || only === 'auth' || !only
     ? await setupToken(currentRl)
     : existing!.telegramBotToken;
 
-  const allowedUsers = only === 'users' || !only
+  const allowedUsers = only === 'users' || only === 'auth' || !only
     ? await setupUsers(currentRl, token)
     : existing!.allowedUsers;
 
