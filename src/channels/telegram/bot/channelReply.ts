@@ -23,7 +23,8 @@ import { draftBackoffUntil } from './rateLimiter.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
 
 export function getRichMessageApi(ctx: Context) {
-  return (ctx.api.config as any).useExtend?.('richMessage') ?? ctx.api;
+  const cfg = ctx.api.config as { useExtend?: (name: string) => unknown } | undefined;
+  return cfg?.useExtend?.('richMessage') ?? ctx.api;
 }
 
 // Thin wrappers around InputRichMessage construction.

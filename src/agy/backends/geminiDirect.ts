@@ -57,7 +57,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
   if (proxy) {
     const { ProxyAgent } = await import('undici');
     const dispatcher = new ProxyAgent(proxy);
-    (fetchOptions as any).dispatcher = dispatcher;
+    (fetchOptions as Record<string, unknown>)['dispatcher'] = dispatcher;
   }
 
   let outputBuf = '';
@@ -185,8 +185,8 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
     };
 
     if (thoughtStartTime) {
-      (finalResult as any).thinkingTime = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
-      (finalResult as any).thinkingTokens = thinkingTokens;
+      finalResult.thinkingTime = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
+      finalResult.thinkingTokens = thinkingTokens;
     }
 
     if (finalUsage) {

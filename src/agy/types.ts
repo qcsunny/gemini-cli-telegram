@@ -55,6 +55,10 @@ export interface AgyRunResult {
     cached: number;
     thinking: number;
   };
+  /** Gemini model thinking time in seconds (backend-specific) */
+  thinkingTime?: string;
+  /** Gemini model thinking token count (backend-specific) */
+  thinkingTokens?: number;
 }
 
 export interface ConversationTurn {

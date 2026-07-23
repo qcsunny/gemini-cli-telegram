@@ -214,7 +214,7 @@ export function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | u
       return undefined;
     }
     const db = new Database(dbPath, { readonly: true });
-    const rows = db.prepare('SELECT metadata FROM steps ORDER BY idx DESC').all() as any[];
+    const rows = db.prepare('SELECT metadata FROM steps ORDER BY idx DESC').all() as { metadata: Uint8Array }[];
     db.close();
     
     for (const row of rows) {
@@ -322,7 +322,7 @@ export function readConversationHistory(dbPath: string): ConversationTurn[] | nu
   try {
     if (!fssync.existsSync(dbPath)) return null;
     const db = new Database(dbPath, { readonly: true });
-    const rows = db.prepare('SELECT idx, step_type, status, step_payload, metadata, step_format, has_subtrajectory, error_details, permissions, task_details, render_info FROM steps ORDER BY idx ASC').all() as any[];
+    const rows = db.prepare('SELECT idx, step_type, status, step_payload, metadata, step_format, has_subtrajectory, error_details, permissions, task_details, render_info FROM steps ORDER BY idx ASC').all() as { idx: number; step_type: number; status: string; step_payload: Uint8Array; metadata: Uint8Array; step_format: string; has_subtrajectory: number; error_details: unknown; permissions: unknown; task_details: unknown; render_info: unknown }[];
     db.close();
 
     const turns: ConversationTurn[] = [];
@@ -343,7 +343,7 @@ export function readConversationHistory(dbPath: string): ConversationTurn[] | nu
         idx: Number(row.idx),
         status: Number(row.status ?? 0),
         stepFormat: Number(row.step_format ?? 0),
-        hasSubtrajectory: row.has_subtrajectory === 1 || row.has_subtrajectory === true,
+        hasSubtrajectory: row.has_subtrajectory === 1,
         usage: ((md?.['usage'] ?? undefined) as ConversationTurn['usage']),
         metadata: md,
         errorDetails: row.error_details instanceof Uint8Array ? extractTextFromProto(row.error_details) ?? decodePlainText(row.error_details) : null,
