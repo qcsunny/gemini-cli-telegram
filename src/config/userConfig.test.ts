@@ -12,7 +12,7 @@ vi.mock('node:os', () => ({
   homedir: () => '/mock/home',
 }));
 
-import { loadUserConfig, saveUserConfig, configExists, getTuningConfig, getBackendUrl, clearConfigCache, TUNING_DEFAULTS, BACKEND_URL_DEFAULTS } from './userConfig.js';
+import { loadUserConfig, saveUserConfig, configExists, getTuningConfig, getBackendUrl, clearConfigCache, getAgyDataDir, getBrowseRoot, TUNING_DEFAULTS, BACKEND_URL_DEFAULTS } from './userConfig.js';
 
 describe('userConfig', () => {
   beforeEach(() => {
@@ -171,6 +171,63 @@ describe('userConfig', () => {
 
       const cfg = loadUserConfig();
       expect(cfg?.modelsConfig).toBeUndefined();
+    });
+  });
+
+  describe('getAgyDataDir', () => {
+    it('should return default path when no config or env var', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      delete process.env['ANTIGRAVITY_USER_DIR'];
+      expect(getAgyDataDir()).toBe('/mock/home/.gemini/antigravity-cli');
+    });
+
+    it('should use ANTIGRAVITY_USER_DIR env var when set', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      process.env['ANTIGRAVITY_USER_DIR'] = '/custom/agy';
+      expect(getAgyDataDir()).toBe('/custom/agy');
+      delete process.env['ANTIGRAVITY_USER_DIR'];
+    });
+
+    it('should use config path override when set', () => {
+      const mockConfig = {
+        telegramBotToken: 'token',
+        allowedUsers: [1],
+        paths: { agyDataDir: '/config/agy' },
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockConfig));
+      expect(getAgyDataDir()).toBe('/config/agy');
+    });
+
+    it('should prefer env var over config', () => {
+      const mockConfig = {
+        telegramBotToken: 'token',
+        allowedUsers: [1],
+        paths: { agyDataDir: '/config/agy' },
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockConfig));
+      process.env['ANTIGRAVITY_USER_DIR'] = '/env/agy';
+      expect(getAgyDataDir()).toBe('/env/agy');
+      delete process.env['ANTIGRAVITY_USER_DIR'];
+    });
+  });
+
+  describe('getBrowseRoot', () => {
+    it('should return default Documents path when no config', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      expect(getBrowseRoot()).toBe('/mock/home/Documents');
+    });
+
+    it('should use config path override when set', () => {
+      const mockConfig = {
+        telegramBotToken: 'token',
+        allowedUsers: [1],
+        paths: { browseRoot: '/custom/browse' },
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(mockConfig));
+      expect(getBrowseRoot()).toBe('/custom/browse');
     });
   });
 });
