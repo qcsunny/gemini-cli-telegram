@@ -21,6 +21,8 @@ interface PricingInfo {
   cacheMultiplier?: number;
   /** How thinking/reasoning tokens are billed: 'none' | 'output-rate' | custom multiplier */
   thinkingMultiplier?: number | 'output-rate' | 'none';
+  /** Alternative rates when single request input exceeds 200K tokens — all input/output use these */
+  longContextRates?: { inputRate: number; outputRate: number };
 }
 
 /**
@@ -68,9 +70,12 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.1 Pro
+    // Gemini 3.1 Pro — ≤200K: $2/$12; >200K: $4/$18 (all input/output switches)
     pattern: /3\.1\s*pro/i,
-    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: {
+      inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none',
+      longContextRates: { inputRate: 4.00, outputRate: 18.00 }
+    }
   },
   {
     // Gemini 3.5 Flash-Lite
@@ -163,11 +168,16 @@ function calculateCost(
   const cacheMult = rates.cacheMultiplier ?? 0.25;
   const cachedRate = rates.inputRate * cacheMult;
 
+  // Check if single request exceeds 200K input tokens → use long-context rates
+  const isLongContext = rates.longContextRates !== undefined && inputTokens > 200_000;
+  const effectiveInputRate = isLongContext ? rates.longContextRates!.inputRate : rates.inputRate;
+  const effectiveOutputRate = isLongContext ? rates.longContextRates!.outputRate : rates.outputRate;
+
   // Input cost: uncached input at full rate + cache hits at discounted rate
-  const inputCost = (inputTokens / 1_000_000) * rates.inputRate + (cachedTokens / 1_000_000) * cachedRate;
+  const inputCost = (inputTokens / 1_000_000) * effectiveInputRate + (cachedTokens / 1_000_000) * cachedRate;
   
-  // Output cost
-  const outputCost = (outputTokens / 1_000_000) * rates.outputRate;
+  // Output cost — switches with tier
+  const outputCost = (outputTokens / 1_000_000) * effectiveOutputRate;
   
   // Thinking/reasoning cost — billed per provider policy
   let thinkingCost = 0;

@@ -94,5 +94,47 @@ describe('Pricing and Token Estimation', () => {
       // estimateTokens("test") = 1 word * 1.3 = 1.3 → 2
       expect(marker).toContain('(Estimated / 预估)');
     });
+
+    it('should switch to long-context rates when input exceeds 200K tokens', () => {
+      // Gemini 3.1 Pro: ≤200K $2/$12; >200K $4/$18 (all tokens use long-context rate)
+      
+      // Normal request (100K tokens) — base rates
+      const normalMarker = formatFooterMarker(
+        'Gemini 3.1 Pro (High)',
+        'test'.repeat(50000),
+        'response',
+        { input: 100_000, output: 1000, cached: 0, thinking: 0 }
+      );
+      // inputCost = (100000/1M)*2 = 0.2
+      // outputCost = (1000/1M)*12 = 0.012
+      // total = 0.212
+      expect(normalMarker).toContain('$0.212000');
+
+      // Long-context request (210K tokens) — all tokens at long-context rate
+      const longMarker = formatFooterMarker(
+        'Gemini 3.1 Pro (High)',
+        'test'.repeat(100000),
+        'tiny',
+        { input: 210_000, output: 100, cached: 0, thinking: 0 }
+      );
+      // inputCost = (210000/1M)*4 = 0.84
+      // outputCost = (100/1M)*18 = 0.0018
+      // total = 0.8418
+      expect(longMarker).toContain('$0.841800');
+    });
+
+    it('should not apply long-context rates for models without longContextRates', () => {
+      // Claude Sonnet has no longContextRates, so even 300K input uses standard rates
+      const marker = formatFooterMarker(
+        'Claude Sonnet 4.6 (Thinking)',
+        'test'.repeat(100000),
+        'response',
+        { input: 300_000, output: 5000, cached: 0, thinking: 0 }
+      );
+      // inputCost = (300000/1M)*3 = 0.9
+      // outputCost = (5000/1M)*15 = 0.075
+      // total = 0.975
+      expect(marker).toContain('$0.975000');
+    });
   });
 });
