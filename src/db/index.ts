@@ -12,32 +12,31 @@
 import Database from 'better-sqlite3';
 import { drizzle, BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as schema from './schema.js';
 import { logger } from '../utils/logger.js';
+import { getDbPath } from '../config/userConfig.js';
 
 let dbInstance: BetterSQLite3Database<typeof schema> | null = null;
 let sqliteDb: InstanceType<typeof Database> | null = null;
 
 /**
- * Returns default absolute path to the SQLite database file (~/.gemini-cli-telegram/db.sqlite).
+ * Returns default absolute path to the SQLite database file.
  * Internal — use getDb() instead.
  */
 function getDefaultDbPath(): string {
   if (process.env['GEMINI_TELEGRAM_DB_PATH']) {
     return process.env['GEMINI_TELEGRAM_DB_PATH'];
   }
-  const home = typeof os.homedir === 'function' ? os.homedir() : '/tmp';
-  const dir = path.join(home, '.gemini-cli-telegram');
+  const dbPath = getDbPath();
   try {
+    const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    return path.join(dir, 'db.sqlite');
+    return dbPath;
   } catch {
-    const tmpBase = typeof os.tmpdir === 'function' ? os.tmpdir() : '/tmp';
-    const tmpDir = path.join(tmpBase, '.gemini-cli-telegram');
+    const tmpDir = path.join('/tmp', 'gemini-cli-telegram');
     if (!fs.existsSync(tmpDir)) {
       try {
         fs.mkdirSync(tmpDir, { recursive: true });

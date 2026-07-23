@@ -21,7 +21,7 @@ import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd } from '../agy/conversationStore.js';
 import { clearWeb2ApiHistory, clearDeepSeekHistory } from '../agy/agyCli.js';
-import { loadUserConfig } from '../config/userConfig.js';
+import { loadUserConfig, CONFIG_DIR } from '../config/userConfig.js';
 
 /** Factory function type for building chat-bound media sender functions */
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
@@ -36,7 +36,7 @@ export class ProjectManager {
   private configDir: string;
 
   constructor() {
-    this.configDir = path.join(os.homedir(), '.gemini-cli-telegram');
+    this.configDir = CONFIG_DIR;
   }
 
   async initialize(): Promise<void> {

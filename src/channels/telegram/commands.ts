@@ -24,7 +24,7 @@ import { logger } from '../../utils/logger.js';
 import { messageCache } from '../../utils/messageCache.js';
 import type { ReplyContext } from '../../utils/messageCache.js';
 import { extractThoughtAndContent } from '../../agy/agyCli.js';
-import { loadUserConfig } from '../../config/userConfig.js';
+import { loadUserConfig, getNotebookPath } from '../../config/userConfig.js';
 import {
   ICONS,
   buildMainKeyboard,
@@ -532,7 +532,7 @@ function extractTitleFromMarkdown(answerMarkdown: string): string {
 
       // Resolve notebook path from user config or fallback to a default safe path
       const userConfig = loadUserConfig();
-      const folderPath = userConfig?.notebookPath || path.join(os.homedir(), '.gemini-cli-telegram', 'notebook');
+      const folderPath = userConfig?.notebookPath || getNotebookPath(userConfig);
       const filePath = path.join(folderPath, fileName);
 
       // Ensure directory exists

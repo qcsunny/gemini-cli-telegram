@@ -13,7 +13,7 @@
 import pino from 'pino';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
+import { getErrorLogPath } from '../config/userConfig.js';
 
 const isDev =
   process.env['NODE_ENV'] === 'development' ||
@@ -24,9 +24,9 @@ const isDev =
 const level = process.env['LOG_LEVEL'] || 'info';
 
 /**
- * Path to error.log file in daemon runtime directory (~/.gemini-cli-telegram/error.log)
+ * Path to error.log file (resolved from config paths.errorLog or CONFIG_DIR)
  */
-export const ERROR_LOG_PATH = path.join(os.homedir(), '.gemini-cli-telegram', 'error.log');
+export const ERROR_LOG_PATH = getErrorLogPath();
 
 /**
  * Underlying Pino logger instance.

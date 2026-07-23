@@ -6,12 +6,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { ChatScheduler, type ScheduledTask } from './scheduler.js';
 
 vi.mock('node:fs/promises');
-vi.mock('node:os');
+vi.mock('../config/userConfig.js', () => ({
+  getScheduledTasksPath: () => '/mock/home/gemini-cli-telegram/scheduled-tasks.json',
+}));
 vi.mock('../utils/logger.js', () => ({
   logger: {
     info: vi.fn(),
@@ -23,13 +24,11 @@ vi.mock('../utils/logger.js', () => ({
 
 describe('ChatScheduler', () => {
   let scheduler: ChatScheduler;
-  const mockHomedir = '/mock/home';
-  const mockConfigDir = path.join(mockHomedir, '.gemini-cli-telegram');
+  const mockConfigDir = '/mock/home/gemini-cli-telegram';
   const mockTasksFile = path.join(mockConfigDir, 'scheduled-tasks.json');
 
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(os.homedir).mockReturnValue(mockHomedir);
     vi.mocked(fs.mkdir).mockResolvedValue(undefined);
     vi.mocked(fs.readFile).mockResolvedValue('[]');
     vi.mocked(fs.writeFile).mockResolvedValue(undefined);
