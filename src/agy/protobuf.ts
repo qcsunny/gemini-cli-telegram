@@ -6,14 +6,14 @@
 
 import * as fssync from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import Database from 'better-sqlite3';
 import { logger } from '../utils/logger.js';
+import { getAgyDataDir } from '../config/userConfig.js';
 import type { AgyRunResult, ConversationTurn } from './types.js';
 
 /** Directory where agy stores conversation SQLite files. */
 export function getConversationsDir(): string {
-  return path.join(os.homedir(), '.gemini', 'antigravity-cli', 'conversations');
+  return path.join(getAgyDataDir(), 'conversations');
 }
 
 export function parseVarint(data: Uint8Array, pos: number): { val: number; nextPos: number } {

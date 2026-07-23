@@ -144,10 +144,10 @@ describe('processMessage', () => {
       expect.objectContaining({ model: 'Gemini 3.1 Pro (Low)' })
     );
 
-    // Fourth call uses the fallback model.
+    // Fourth call uses the fallback model (next in chain after Gemini 3.1 Pro (Low)).
     expect(runAgyPrint).toHaveBeenNthCalledWith(
       4,
-      expect.objectContaining({ model: 'Gemini 3.6 Flash (High)' })
+      expect.objectContaining({ model: 'Claude Sonnet 4.6 (Thinking)' })
     );
 
     // Warning should have been sent to channel (original + fallback models).
@@ -155,11 +155,11 @@ describe('processMessage', () => {
       expect.stringContaining('Gemini 3.1 Pro (Low)')
     );
     expect(mockReply.send).toHaveBeenCalledWith(
-      expect.stringContaining('Gemini 3.6 Flash (High)')
+      expect.stringContaining('Claude Sonnet 4.6 (Thinking)')
     );
 
     // Session model must have updated
-    expect(mockSession.model).toBe('Gemini 3.6 Flash (High)');
+    expect(mockSession.model).toBe('Claude Sonnet 4.6 (Thinking)');
     expect(mockSession.conversationId).toBe('fallback-conv-id');
 
     // Conversation should be saved to database with fallback model
@@ -167,14 +167,14 @@ describe('processMessage', () => {
       123456,
       'fallback-conv-id',
       '/test/project/path',
-      'Gemini 3.6 Flash (High)'
+      'Claude Sonnet 4.6 (Thinking)'
     );
   });
 
   it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
     // Chain from Web2API: Gemini Flash Lite is 24 models long under ordered fallback chain system.
     // Each model is retried 3x, then downgraded. When the LAST model in the chain
-    // (Web2API: Gemini 3.5 Flash Thinking Lite) also fails its 3 retries, the session must
+    // (Web2API: Gemini Auto) also fails its 3 retries, the session must
     // terminate — it must NOT wrap back to the first model for a 2nd pass.
     mockSession.model = 'Web2API: Gemini Flash Lite';
     const input: MultimodalInput = { text: 'hello full loop' };
@@ -193,9 +193,9 @@ describe('processMessage', () => {
     // First 3 attempts: original model.
     expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
     expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
-    // Last 3 attempts: downgraded last model.
-    expect(runAgyPrint).toHaveBeenNthCalledWith(70, expect.objectContaining({ model: 'Web2API: Gemini 3.5 Flash Thinking Lite' }));
-    expect(runAgyPrint).toHaveBeenNthCalledWith(72, expect.objectContaining({ model: 'Web2API: Gemini 3.5 Flash Thinking Lite' }));
+    // Last 3 attempts: downgraded last model (Web2API: Gemini Auto is index 22, the last before wrapping).
+    expect(runAgyPrint).toHaveBeenNthCalledWith(70, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(72, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
     // NO 73rd call: the loop did NOT wrap back to the first model.
     // Session model is unchanged (it never succeeded).
     expect(mockSession.model).toBe('Web2API: Gemini Flash Lite');

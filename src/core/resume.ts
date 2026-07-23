@@ -13,6 +13,7 @@
 
 import type { DaemonSession } from './types.js';
 import { listAvailableSessions as getAgySessions } from '../agy/historyManager.js';
+import { getAgyDataDir } from '../config/userConfig.js';
 
 /**
  * Metadata entry representing a resumable agy session in UI lists.
@@ -28,16 +29,18 @@ export interface SessionListEntry {
 }
 
 import Database from 'better-sqlite3';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 /**
  * Extracts conversation title and last modified timestamp for a given session UUID.
  * Queries conversation_summaries.db first; falls back to parsing transcript.jsonl.
  */
 function getSessionMetadata(uuid: string, defaultMtimeMs: number): { title: string; date: Date } {
+  const agyDir = getAgyDataDir();
   // 1. Primary: Query conversation_summaries.db for preview and authentic last_modified_time
   try {
-    const homeDir = process.env['HOME'] || '/root';
-    const dbPath = `${homeDir}/.gemini/antigravity-cli/conversation_summaries.db`;
+    const dbPath = path.join(agyDir, 'conversation_summaries.db');
     if (fs.existsSync(dbPath)) {
       const db = new Database(dbPath, { readonly: true });
       const row = db.prepare('SELECT title, preview, last_modified_time FROM conversation_summaries WHERE conversation_id = ?').get(uuid) as { title?: string; preview?: string; last_modified_time?: string } | undefined;
@@ -56,8 +59,7 @@ function getSessionMetadata(uuid: string, defaultMtimeMs: number): { title: stri
   // 2. Secondary fallback: transcript.jsonl
   let title = uuid.slice(0, 8);
   try {
-    const homeDir = process.env['HOME'] || '/root';
-    const transcriptPath = `${homeDir}/.gemini/antigravity-cli/brain/${uuid}/.system_generated/logs/transcript.jsonl`;
+    const transcriptPath = path.join(agyDir, 'brain', uuid, '.system_generated', 'logs', 'transcript.jsonl');
     if (fs.existsSync(transcriptPath)) {
       const content = fs.readFileSync(transcriptPath, 'utf8');
       const lines = content.split('\n');
@@ -102,8 +104,6 @@ function formatShortRelativeTime(date: Date): string {
   if (diffDay < 7) return `${diffDay}d ago`;
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
-
-import * as fs from 'fs';
 
 /**
  * List available sessions

@@ -1,8 +1,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import type { DaemonSession } from '../types.js';
 import { logger } from '../../utils/logger.js';
+import { getAgyDataDir } from '../../config/userConfig.js';
 
 export async function detectAndSendNewArtifacts(
   session: DaemonSession,
@@ -11,9 +11,7 @@ export async function detectAndSendNewArtifacts(
 ): Promise<void> {
   if (!session.sendMedia || !conversationId) return;
 
-  const baseDir =
-    process.env['ANTIGRAVITY_USER_DIR'] ||
-    path.join(os.homedir(), '.gemini', 'antigravity-cli');
+  const baseDir = getAgyDataDir();
 
   const artifactDir = path.join(baseDir, 'brain', conversationId);
   try {

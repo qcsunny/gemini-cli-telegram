@@ -1,4 +1,53 @@
 {
+  "tiers": [
+    {
+      "name": "旗舰推理",
+      "priority": 0,
+      "models": [
+        "Claude Opus 4.6 (Thinking)",
+        "DeepSeek: Pro Thinking",
+        "Claude Sonnet 4.6 (Thinking)"
+      ]
+    },
+    {
+      "name": "高级推理",
+      "priority": 1,
+      "models": [
+        "Web2API: Gemini 3.1 Pro Enhanced",
+        "Gemini 3.1 Pro (High)",
+        "Web2API: Gemini 3.1 Pro",
+        "DeepSeek: Pro",
+        "Gemini 3.1 Pro (Low)"
+      ]
+    },
+    {
+      "name": "通用能力",
+      "priority": 2,
+      "models": [
+        "Gemini 3.6 Flash (High)",
+        "Web2API: Gemini 3.6 Flash Thinking",
+        "DeepSeek: Flash Thinking Search",
+        "Gemini 3.6 Flash (Medium)",
+        "DeepSeek: Flash Thinking",
+        "Gemini 3.6 Flash (Low)",
+        "GPT-OSS 120B (Medium)"
+      ]
+    },
+    {
+      "name": "轻量快速",
+      "priority": 3,
+      "models": [
+        "Gemini 3.5 Flash (High)",
+        "DeepSeek: Flash Search",
+        "Gemini 3.5 Flash (Medium)",
+        "DeepSeek: Flash",
+        "Web2API: Gemini Auto",
+        "Gemini 3.5 Flash (Low)",
+        "Web2API: Gemini 3.5 Flash Thinking Lite",
+        "Web2API: Gemini Flash Lite"
+      ]
+    }
+  ],
   "defaultOrder": [
     "Gemini 3.6 Flash (High)",
     "Gemini 3.6 Flash (Medium)",
@@ -14,9 +63,8 @@
     "Web2API: Gemini 3.1 Pro Enhanced",
     "Web2API: Gemini 3.1 Pro",
     "Web2API: Gemini 3.6 Flash",
-    "Web2API: Gemini 3.5 Flash Thinking",
+    "Web2API: Gemini 3.6 Flash Thinking",
     "DeepSeek: Pro Thinking",
-    "Web2API: Gemini 3.5 Flash",
     "DeepSeek: Pro",
     "DeepSeek: Flash Thinking Search",
     "DeepSeek: Flash Thinking",
@@ -27,19 +75,18 @@
     "Web2API: Gemini Flash Lite"
   ],
   "routing": {
-    "Web2API: Gemini 3.1 Pro Enhanced":         "gemini-3.1-pro-enhanced",
-    "Web2API: Gemini 3.6 Flash":                "gemini-3.6-flash",
-    "Web2API: Gemini 3.5 Flash":                "gemini-3.5-flash",
-    "Web2API: Gemini 3.5 Flash Thinking":       "gemini-3.5-flash-thinking",
-    "Web2API: Gemini 3.5 Flash Thinking Lite":  "gemini-3.5-flash-thinking-lite",
-    "Web2API: Gemini 3.1 Pro":                  "gemini-3.1-pro",
-    "Web2API: Gemini Flash Lite":               "gemini-flash-lite",
-    "Web2API: Gemini Auto":                     "gemini-auto",
-    "DeepSeek: Flash":                          "deepseek-v4-flash",
-    "DeepSeek: Flash Thinking":                 "deepseek-v4-flash-thinking",
-    "DeepSeek: Flash Search":                   "deepseek-v4-flash-search",
-    "DeepSeek: Flash Thinking Search":          "deepseek-v4-flash-thinking-search",
-    "DeepSeek: Pro":                            "deepseek-v4-pro",
-    "DeepSeek: Pro Thinking":                   "deepseek-v4-pro-thinking"
+    "Web2API: Gemini 3.1 Pro Enhanced":        "gemini-3.1-pro-enhanced",
+    "Web2API: Gemini 3.6 Flash":               "gemini-3.6-flash",
+    "Web2API: Gemini 3.6 Flash Thinking":      "gemini-3.6-flash-thinking",
+    "Web2API: Gemini 3.5 Flash Thinking Lite": "gemini-3.5-flash-thinking-lite",
+    "Web2API: Gemini 3.1 Pro":                 "gemini-3.1-pro",
+    "Web2API: Gemini Flash Lite":              "gemini-flash-lite",
+    "Web2API: Gemini Auto":                    "gemini-auto",
+    "DeepSeek: Flash":                         "deepseek-v4-flash",
+    "DeepSeek: Flash Thinking":                "deepseek-v4-flash-thinking",
+    "DeepSeek: Flash Search":                  "deepseek-v4-flash-search",
+    "DeepSeek: Flash Thinking Search":         "deepseek-v4-flash-thinking-search",
+    "DeepSeek: Pro":                           "deepseek-v4-pro",
+    "DeepSeek: Pro Thinking":                  "deepseek-v4-pro-thinking"
   }
 }

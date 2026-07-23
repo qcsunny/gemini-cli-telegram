@@ -13,6 +13,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
@@ -22,6 +23,24 @@ const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 /** Main JSON configuration file path (project root) */
 export const CONFIG_DIR = PROJECT_ROOT;
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+
+/** Zod schema for a single model tier in the tiered fallback system */
+export const modelTierSchema = z.object({
+  /** Display name for this tier (e.g. "旗舰推理", "高级推理", "通用能力", "轻量快速") */
+  name: z.string(),
+  /** Priority level: 0 = highest priority (tried first) */
+  priority: z.number(),
+  /** Ordered list of model display names within this tier */
+  models: z.array(z.string()),
+});
+
+/** Zod schema for the complete models configuration (tiers + routing) */
+export const modelsConfigSchema = z.object({
+  /** Tiered model groups for structured fallback */
+  tiers: z.array(modelTierSchema),
+  /** Mapping from display model name to backend API model ID */
+  routing: z.record(z.string(), z.string()),
+});
 
 /** Zod schema for individual project configurations */
 export const projectInfoSchema = z.object({
@@ -55,7 +74,7 @@ export const userConfigSchema = z.object({
    * Custom file paths (optional). All default to CONFIG_DIR (project root).
    * Override any path to store data elsewhere.
    */
-  paths: z.object({
+   paths: z.object({
     /** SQLite database file. Default: CONFIG_DIR/db.sqlite */
     db: z.string().optional(),
     /** Main daemon log file. Default: CONFIG_DIR/daemon.log */
@@ -70,6 +89,10 @@ export const userConfigSchema = z.object({
     scheduledTasks: z.string().optional(),
     /** Legacy agy conversations JSON file. Default: CONFIG_DIR/agy-conversations.json */
     agyConversations: z.string().optional(),
+    /** agy CLI data directory (conversations, brain, OAuth token). Default: ~/.gemini/antigravity-cli */
+    agyDataDir: z.string().optional(),
+    /** Default browse root directory for /project_browse. Default: ~/Documents */
+    browseRoot: z.string().optional(),
   }).optional(),
   /**
    * Custom model fallback order (optional). When set, overrides the hardcoded
@@ -79,6 +102,13 @@ export const userConfigSchema = z.object({
    * reachable but won't appear in the fallback chain.
    */
   orderedModels: z.array(z.string()).optional(),
+  /**
+   * Tiered models configuration (optional). When set, overrides the hardcoded
+   * models.json and provides structured fallback with tier awareness.
+   * Each tier groups models by capability level, and the fallback system
+   * degrades tier-by-tier rather than model-by-model.
+   */
+  modelsConfig: modelsConfigSchema.optional(),
   /**
    * Backend service URLs for local proxy services.
    * Foreign users can skip by omitting the key entirely (the corresponding
@@ -268,6 +298,21 @@ export function getBackendUrl(service: 'web2api' | 'deepseek'): string | null {
 export function getWeb2ApiKey(): string {
   const cfg = loadUserConfig();
   return cfg?.backends?.web2apiKey || BACKEND_URL_DEFAULTS.web2apiKey;
+}
+
+const AGY_DATA_DIR_DEFAULT = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+
+export function getAgyDataDir(): string {
+  if (process.env['ANTIGRAVITY_USER_DIR']) return process.env['ANTIGRAVITY_USER_DIR'];
+  const cfg = loadUserConfig();
+  return cfg?.paths?.agyDataDir || AGY_DATA_DIR_DEFAULT;
+}
+
+const BROWSE_ROOT_DEFAULT = path.join(os.homedir(), 'Documents');
+
+export function getBrowseRoot(): string {
+  const cfg = loadUserConfig();
+  return cfg?.paths?.browseRoot || BROWSE_ROOT_DEFAULT;
 }
 
 /**

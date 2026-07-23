@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -250,5 +250,58 @@ describe('readConversationHistory', () => {
 
     const result = readConversationHistory(dbPath);
     expect(result).toEqual([]);
+  });
+});
+
+describe('isWeb2ApiModel / isDeepSeekModel', () => {
+  it('should identify Web2API models', async () => {
+    const { isWeb2ApiModel } = await import('../agy/agyCli.js');
+    expect(isWeb2ApiModel('Web2API: Gemini 3.6 Flash')).toBe(true);
+    expect(isWeb2ApiModel('Web2API: Gemini Auto')).toBe(true);
+  });
+
+  it('should not identify non-Web2API models', async () => {
+    const { isWeb2ApiModel } = await import('../agy/agyCli.js');
+    expect(isWeb2ApiModel('Gemini 3.6 Flash (High)')).toBe(false);
+    expect(isWeb2ApiModel('DeepSeek: Pro')).toBe(false);
+    expect(isWeb2ApiModel('Claude Opus 4.6 (Thinking)')).toBe(false);
+  });
+
+  it('should identify DeepSeek models', async () => {
+    const { isDeepSeekModel } = await import('../agy/agyCli.js');
+    expect(isDeepSeekModel('DeepSeek: Pro')).toBe(true);
+    expect(isDeepSeekModel('DeepSeek: Flash Thinking')).toBe(true);
+  });
+
+  it('should not identify non-DeepSeek models', async () => {
+    const { isDeepSeekModel } = await import('../agy/agyCli.js');
+    expect(isDeepSeekModel('Gemini 3.6 Flash (High)')).toBe(false);
+    expect(isDeepSeekModel('Web2API: Gemini Auto')).toBe(false);
+  });
+});
+
+describe('getAvailableModels', () => {
+  it('should return model list from config orderedModels when present', async () => {
+    const { getAvailableModels } = await import('../agy/agyCli.js');
+    const userConfig = await import('../config/userConfig.js');
+    vi.spyOn(userConfig, 'loadUserConfig').mockReturnValue({
+      telegramBotToken: 'token',
+      allowedUsers: [1],
+      orderedModels: ['custom-a', 'custom-b'],
+    } as any);
+
+    const models = await getAvailableModels();
+    expect(models).toEqual(['custom-a', 'custom-b']);
+  });
+
+  it('should fall back to default order when no config', async () => {
+    const { getAvailableModels } = await import('../agy/agyCli.js');
+    const userConfig = await import('../config/userConfig.js');
+    vi.spyOn(userConfig, 'loadUserConfig').mockReturnValue(null);
+
+    const models = await getAvailableModels();
+    // Should return models from models.json defaultOrder
+    expect(Array.isArray(models)).toBe(true);
+    expect(models.length).toBeGreaterThan(0);
   });
 });
