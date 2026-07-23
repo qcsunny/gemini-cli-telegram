@@ -62,7 +62,28 @@ function decodeBlob(val: unknown): unknown {
   return val;
 }
 
-function decodeStructuredBlob(val: unknown): unknown {
+function decodeMetadataBlob(val: unknown): unknown {
+  if (val instanceof Uint8Array) {
+    if (val.length === 0) return null;
+    return extractMetadataFromProto(val);
+  }
+  return val;
+}
+
+function decodeStepPayloadBlob(val: unknown): unknown {
+  if (val instanceof Uint8Array) {
+    if (val.length === 0) return null;
+    const text = extractTextFromProto(val);
+    const fields = extractMetadataFromProto(val);
+    const result: Record<string, unknown> = {};
+    if (text) result['text'] = text;
+    if (Object.keys(fields).length > 0) result['fields'] = fields;
+    return Object.keys(result).length > 0 ? result : decodeBlob(val);
+  }
+  return val;
+}
+
+function decodeDataBlob(val: unknown): unknown {
   if (val instanceof Uint8Array) {
     if (val.length === 0) return null;
     const text = extractTextFromProto(val);
@@ -92,8 +113,12 @@ export function dumpConversationDb(dbPath: string): DebugDump {
     tables[name] = rows.map(row => {
       const decoded: Record<string, unknown> = {};
       for (const [key, val] of Object.entries(row)) {
-        if (key === 'step_payload' || key === 'data' || key === 'metadata') {
-          decoded[key] = decodeStructuredBlob(val);
+        if (key === 'metadata') {
+          decoded[key] = decodeMetadataBlob(val);
+        } else if (key === 'step_payload') {
+          decoded[key] = decodeStepPayloadBlob(val);
+        } else if (key === 'data') {
+          decoded[key] = decodeDataBlob(val);
         } else {
           decoded[key] = decodeBlob(val);
         }
@@ -156,6 +181,14 @@ export function dumpSummaries(): SummaryDump {
   const db = new Database(dbPath, { readonly: true });
   const rows = db.prepare('SELECT * FROM conversation_summaries ORDER BY last_modified_time DESC').all() as SummaryRecord[];
   db.close();
+
+  for (const r of rows) {
+    if (r.workspace_uris) {
+      try {
+        r.workspace_uris = JSON.parse(decodeURIComponent(r.workspace_uris));
+      } catch { /* keep raw */ }
+    }
+  }
 
   const total = rows.length;
   const withTitle = rows.filter(r => r.title && r.title.trim().length > 0).length;
