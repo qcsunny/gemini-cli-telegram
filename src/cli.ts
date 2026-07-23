@@ -22,8 +22,8 @@ import {
   loadUserConfig,
   configExists,
   CONFIG_DIR,
-  PID_PATH,
-  LOG_PATH,
+  getPidPath,
+  getLogPath,
 } from './config/userConfig.js';
 import { startTelegramDaemon } from './index.js';
 
@@ -60,7 +60,7 @@ program
 
     if (isLive) {
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(PID_PATH, process.pid.toString());
+      fs.writeFileSync(getPidPath(config), process.pid.toString());
 
       // Redirect stdout/stderr to the canonical log file (append mode) so that
       // logs are always written to LOG_PATH regardless of how the process is
@@ -68,12 +68,12 @@ program
       // a stdio redirection (e.g. systemd StandardOutput=append:) holds a file
       // descriptor to a different inode than the on-disk log file after the log is
       // rotated/recreated, causing logs to silently disappear.
-      const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+      const logStream = fs.createWriteStream(getLogPath(config), { flags: 'a' });
       process.stdout.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stdout.write;
       process.stderr.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stderr.write;
 
       const cleanup = () => {
-        try { fs.unlinkSync(PID_PATH); } catch { /* ignore */ }
+        try { fs.unlinkSync(getPidPath(config)); } catch { /* ignore */ }
       };
       process.once('SIGTERM', () => { cleanup(); process.exit(0); });
       process.once('SIGINT', () => { cleanup(); process.exit(0); });
@@ -88,8 +88,8 @@ program
     } else {
       // --- Background mode (default): spawn detached child ---
 
-      if (fs.existsSync(PID_PATH)) {
-        const existingPid = parseInt(fs.readFileSync(PID_PATH, 'utf-8').trim(), 10);
+      if (fs.existsSync(getPidPath(config))) {
+        const existingPid = parseInt(fs.readFileSync(getPidPath(config), 'utf-8').trim(), 10);
         try {
           process.kill(existingPid, 0);
           console.log(`Daemon is already running (pid ${existingPid}). Use 'gemini-cli-telegram stop' first.`);
@@ -100,7 +100,7 @@ program
       }
 
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      const logFd = fs.openSync(LOG_PATH, 'a');
+      const logFd = fs.openSync(getLogPath(config), 'a');
 
       const scriptPath = path.resolve(
         new URL(import.meta.url).pathname,
@@ -121,7 +121,7 @@ program
       fs.closeSync(logFd);
 
       console.log(`Daemon started in background (pid ${child.pid}).`);
-      console.log(`Logs: ${LOG_PATH}`);
+      console.log(`Logs: ${getLogPath(config)}`);
       console.log(`Stop:  gemini-cli-telegram stop`);
 
       // Show the bot's Telegram link
@@ -141,17 +141,18 @@ program
   .command('stop')
   .description('Stop the running daemon')
   .action(() => {
-    if (!fs.existsSync(PID_PATH)) {
+    const pidPath = getPidPath();
+    if (!fs.existsSync(pidPath)) {
       console.log('No running daemon found.');
       process.exit(0);
     }
-    const pid = parseInt(fs.readFileSync(PID_PATH, 'utf-8').trim(), 10);
+    const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
     try {
       process.kill(pid, 'SIGTERM');
-      fs.unlinkSync(PID_PATH);
+      fs.unlinkSync(pidPath);
       console.log(`Daemon (pid ${pid}) stopped.`);
     } catch {
-      fs.unlinkSync(PID_PATH);
+      fs.unlinkSync(pidPath);
       console.log('Daemon was not running. Cleaned up stale pid file.');
     }
     process.exit(0);
@@ -161,16 +162,17 @@ program
   .command('status')
   .description('Check if the daemon is running')
   .action(() => {
-    if (!fs.existsSync(PID_PATH)) {
+    const pidPath = getPidPath();
+    if (!fs.existsSync(pidPath)) {
       console.log('Daemon is not running.');
       process.exit(0);
     }
-    const pid = parseInt(fs.readFileSync(PID_PATH, 'utf-8').trim(), 10);
+    const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
     try {
       process.kill(pid, 0); // signal 0 = check if alive
       console.log(`Daemon is running (pid ${pid}).`);
     } catch {
-      fs.unlinkSync(PID_PATH);
+      fs.unlinkSync(pidPath);
       console.log('Daemon is not running (cleaned up stale pid file).');
     }
     process.exit(0);
@@ -180,12 +182,13 @@ program
   .command('logs')
   .description('Show recent daemon logs')
   .action(() => {
-    if (!fs.existsSync(LOG_PATH)) {
+    const logPath = getLogPath();
+    if (!fs.existsSync(logPath)) {
       console.log('No log file found.');
       process.exit(0);
     }
     // Tail the last 50 lines
-    const content = fs.readFileSync(LOG_PATH, 'utf-8');
+    const content = fs.readFileSync(logPath, 'utf-8');
     const lines = content.split('\n');
     const tail = lines.slice(-50).join('\n');
     console.log(tail);

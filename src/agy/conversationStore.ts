@@ -12,11 +12,10 @@
  */
 
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import * as os from 'node:os';
 import { eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import { logger } from '../utils/logger.js';
+import { getAgyConversationsPath } from '../config/userConfig.js';
 
 /**
  * Persisted entry structure mapping a Telegram chat ID to an agy conversation context.
@@ -40,7 +39,7 @@ async function migrateLegacyJsonIfNeeded(): Promise<void> {
   migrationDone = true;
 
   try {
-    const jsonPath = path.join(os.homedir(), '.gemini-cli-telegram', 'agy-conversations.json');
+    const jsonPath = getAgyConversationsPath();
     const raw = await fs.readFile(jsonPath, 'utf-8').catch(() => null);
     if (!raw) return;
 

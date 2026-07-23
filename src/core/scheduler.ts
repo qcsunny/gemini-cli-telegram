@@ -12,9 +12,9 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import { logger } from '../utils/logger.js';
+import { getScheduledTasksPath } from '../config/userConfig.js';
 
 /**
  * Data structure representing a scheduled background chat task.
@@ -53,8 +53,8 @@ export class ChatScheduler {
   private readonly CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
 
   constructor() {
-    this.configDir = path.join(os.homedir(), '.gemini-cli-telegram');
-    this.tasksFile = path.join(this.configDir, 'scheduled-tasks.json');
+    this.tasksFile = getScheduledTasksPath();
+    this.configDir = path.dirname(this.tasksFile);
   }
 
   async initialize(callback: TaskCallback): Promise<void> {

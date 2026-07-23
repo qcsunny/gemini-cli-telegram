@@ -6,24 +6,22 @@
 
 /**
  * @file userConfig.ts
- * @description Manages persistence and loading of the daemon's local configuration (~/.gemini-cli-telegram/config.json).
- * Handles Telegram bot token, user whitelist, default model, proxy settings, and project list.
+ * @description Manages persistence and loading of the daemon's local configuration.
+ * Handles Telegram bot token, user whitelist, default model, proxy settings, project list,
+ * and configurable file paths.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 
-/** Base directory for daemon configuration and runtime files (~/.gemini-cli-telegram) */
-export const CONFIG_DIR = path.join(os.homedir(), '.gemini-cli-telegram');
-/** Main JSON configuration file path */
+/** Project root directory (auto-detected from import.meta.url) */
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** Main JSON configuration file path (project root) */
+export const CONFIG_DIR = PROJECT_ROOT;
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
-/** Process ID file path for daemon tracking */
-export const PID_PATH = path.join(CONFIG_DIR, 'daemon.pid');
-/** Canonical log output file path */
-export const LOG_PATH = path.join(CONFIG_DIR, 'daemon.log');
 
 /** Zod schema for individual project configurations */
 export const projectInfoSchema = z.object({
@@ -53,6 +51,26 @@ export const userConfigSchema = z.object({
   /** Solidified project list (id/name/path/description). Kept in the local,
    *  gitignored config so personal directory paths never reach the remote repo. */
   projects: z.array(projectInfoSchema).optional(),
+  /**
+   * Custom file paths (optional). All default to CONFIG_DIR (project root).
+   * Override any path to store data elsewhere.
+   */
+  paths: z.object({
+    /** SQLite database file. Default: CONFIG_DIR/db.sqlite */
+    db: z.string().optional(),
+    /** Main daemon log file. Default: CONFIG_DIR/daemon.log */
+    log: z.string().optional(),
+    /** Error log file. Default: CONFIG_DIR/error.log */
+    errorLog: z.string().optional(),
+    /** Process ID file. Default: CONFIG_DIR/daemon.pid */
+    pid: z.string().optional(),
+    /** Notebook directory for /save output. Default: CONFIG_DIR/notebook */
+    notebook: z.string().optional(),
+    /** Scheduled tasks JSON file. Default: CONFIG_DIR/scheduled-tasks.json */
+    scheduledTasks: z.string().optional(),
+    /** Legacy agy conversations JSON file. Default: CONFIG_DIR/agy-conversations.json */
+    agyConversations: z.string().optional(),
+  }).optional(),
   /**
    * Custom model fallback order (optional). When set, overrides the hardcoded
    * ORDERED_MODELS array in messageLoop.ts. Each entry must be a model display
@@ -168,6 +186,41 @@ export const userConfigSchema = z.object({
  * User configuration type inferred from Zod schema.
  */
 export type UserConfig = z.infer<typeof userConfigSchema>;
+
+// ── Path Resolvers ─────────────────────────────────────────────────────────
+// All paths resolve from config.json `paths.*` fields, falling back to CONFIG_DIR.
+
+function resolvePath(configPath: string | undefined, fallbackName: string): string {
+  return configPath || path.join(CONFIG_DIR, fallbackName);
+}
+
+export function getDbPath(config?: UserConfig | null): string {
+  return resolvePath(config?.paths?.db, 'db.sqlite');
+}
+
+export function getLogPath(config?: UserConfig | null): string {
+  return resolvePath(config?.paths?.log, 'daemon.log');
+}
+
+export function getErrorLogPath(config?: UserConfig | null): string {
+  return resolvePath(config?.paths?.errorLog, 'error.log');
+}
+
+export function getPidPath(config?: UserConfig | null): string {
+  return resolvePath(config?.paths?.pid, 'daemon.pid');
+}
+
+export function getNotebookPath(config?: UserConfig | null): string {
+  return resolvePath(config?.paths?.notebook, 'notebook');
+}
+
+export function getScheduledTasksPath(config?: UserConfig | null): string {
+  return resolvePath(config?.paths?.scheduledTasks, 'scheduled-tasks.json');
+}
+
+export function getAgyConversationsPath(config?: UserConfig | null): string {
+  return resolvePath(config?.paths?.agyConversations, 'agy-conversations.json');
+}
 
 /** Default tuning constants — used when config.tuning fields are omitted. */
 export const TUNING_DEFAULTS = {
