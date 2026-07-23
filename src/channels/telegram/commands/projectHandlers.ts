@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { logger } from '../../../utils/logger.js';
+import { getBrowseRoot } from '../../../config/userConfig.js';
 import { ICONS, buildMainKeyboard, buildProjectKeyboard, formatProjectInfo, escapeHtml } from '../ui.js';
 
 export const PROJECTS_PER_PAGE = 5;
@@ -99,7 +100,7 @@ export function registerProjectHandlers(
     
     let browsePath: string;
     if (!arg) {
-      browsePath = os.homedir();
+      browsePath = getBrowseRoot();
     } else if (arg.startsWith('~')) {
       browsePath = arg.replace(/^~(?=$|\/|\\)/, os.homedir());
     } else {
