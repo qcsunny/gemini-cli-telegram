@@ -11,9 +11,8 @@ import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
-import { getBrowseRoot } from '../../../config/userConfig.js';
+import { getBrowseRoot, getInboxDir } from '../../../config/userConfig.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
-import { loadUserConfig } from '../../../config/userConfig.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
 import { extractTitleFromMarkdown } from './helpers.js';
 import { PROJECTS_PER_PAGE } from './projectHandlers.js';
@@ -136,8 +135,7 @@ export function registerCallbackRouter(
         const dateStr = new Date().toISOString().slice(0, 10);
         const sanitizeTitle = (title || 'untitled').replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, '_').substring(0, 30);
         const filename = `${dateStr}_${sanitizeTitle}.md`;
-        const config = loadUserConfig();
-        const inboxDir = config?.savePath || `${process.env['HOME'] || '/root'}/Documents/Obsidian/Inbox`;
+        const inboxDir = getInboxDir();
         if (!fs.existsSync(inboxDir)) {
           fs.mkdirSync(inboxDir, { recursive: true });
         }

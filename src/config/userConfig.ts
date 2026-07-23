@@ -93,6 +93,8 @@ export const userConfigSchema = z.object({
     agyDataDir: z.string().optional(),
     /** Default browse root directory for /project_browse. Default: ~/Documents */
     browseRoot: z.string().optional(),
+    /** Default inbox directory for saving responses. Default: ~/Documents/Obsidian/Inbox */
+    inboxDir: z.string().optional(),
   }).optional(),
   /**
    * Custom model fallback order (optional). When set, overrides the hardcoded
@@ -313,6 +315,13 @@ const BROWSE_ROOT_DEFAULT = path.join(os.homedir(), 'Documents');
 export function getBrowseRoot(): string {
   const cfg = loadUserConfig();
   return cfg?.paths?.browseRoot || BROWSE_ROOT_DEFAULT;
+}
+
+const INBOX_DIR_DEFAULT = path.join(os.homedir(), 'Documents', 'Obsidian', 'Inbox');
+
+export function getInboxDir(): string {
+  const cfg = loadUserConfig();
+  return cfg?.paths?.inboxDir || cfg?.savePath || INBOX_DIR_DEFAULT;
 }
 
 /**
