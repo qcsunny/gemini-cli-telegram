@@ -13,5 +13,19 @@
       "path": "/abs/path/to/your/project",
       "description": "项目描述"
     }
-  ]
+  ],
+  "modelsConfig": {
+    "tiers": [
+      { "name": "旗舰推理", "priority": 0, "models": ["Claude Opus 4.6 (Thinking)", "DeepSeek: Pro Thinking"] },
+      { "name": "高级推理", "priority": 1, "models": ["Web2API: Gemini 3.1 Pro Enhanced", "Gemini 3.1 Pro (High)"] },
+      { "name": "通用能力", "priority": 2, "models": ["Gemini 3.6 Flash (High)", "Web2API: Gemini 3.6 Flash Thinking"] },
+      { "name": "轻量快速", "priority": 3, "models": ["Web2API: Gemini Flash Lite"] }
+    ],
+    "routing": {
+      "Web2API: Gemini 3.1 Pro Enhanced": "gemini-3.1-pro-enhanced",
+      "Web2API: Gemini 3.6 Flash": "gemini-3.6-flash",
+      "Web2API: Gemini 3.6 Flash Thinking": "gemini-3.6-flash-thinking",
+      "Web2API: Gemini Flash Lite": "gemini-flash-lite"
+    }
+  }
 }

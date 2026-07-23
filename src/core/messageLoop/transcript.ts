@@ -1,10 +1,10 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
 
 import { logger } from '../../utils/logger.js';
 import { extractThoughtAndContent } from '../../agy/agyCli.js';
 import { normalizeText } from './textUtils.js';
+import { getAgyDataDir } from '../../config/userConfig.js';
 
 export async function readThoughtFromTranscript(
   conversationId: string,
@@ -15,9 +15,7 @@ export async function readThoughtFromTranscript(
     return null;
   }
   const startTime = Date.now();
-  const baseDir =
-    process.env['ANTIGRAVITY_USER_DIR'] ||
-    path.join(os.homedir(), '.gemini', 'antigravity-cli');
+  const baseDir = getAgyDataDir();
 
   const filePath = path.join(
     baseDir,

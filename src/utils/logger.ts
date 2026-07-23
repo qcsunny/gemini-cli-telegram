@@ -13,7 +13,7 @@
 import pino from 'pino';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getErrorLogPath } from '../config/userConfig.js';
+import { fileURLToPath } from 'node:url';
 
 const isDev =
   process.env['NODE_ENV'] === 'development' ||
@@ -24,9 +24,11 @@ const isDev =
 const level = process.env['LOG_LEVEL'] || 'info';
 
 /**
- * Path to error.log file (resolved from config paths.errorLog or CONFIG_DIR)
+ * Path to error.log file. Inlined to avoid circular dependency with userConfig.ts
+ * (userConfig → logger → userConfig would cause CONFIG_DIR to be undefined).
  */
-export const ERROR_LOG_PATH = getErrorLogPath();
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+export const ERROR_LOG_PATH = path.join(PROJECT_ROOT, 'error.log');
 
 /**
  * Underlying Pino logger instance.

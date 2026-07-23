@@ -5,14 +5,13 @@
  */
 
 import type { Bot } from 'grammy';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import * as fs from 'node:fs';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
+import { getBrowseRoot } from '../../../config/userConfig.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { loadUserConfig } from '../../../config/userConfig.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
@@ -249,7 +248,7 @@ export function registerCallbackRouter(
 
     if (data === '/project_browse') {
       ctx.answerCallbackQuery('Browsing...').catch(e => logger.error(`Failed callback: ${e}`));
-      const browsePath = path.join(os.homedir(), 'Documents');
+      const browsePath = getBrowseRoot();
       
       // Update message to show scanning status
       await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });
@@ -294,7 +293,7 @@ export function registerCallbackRouter(
 
     if (data === '/project_scan_documents') {
       ctx.answerCallbackQuery('Scanning Documents...').catch(e => logger.error(`Failed callback: ${e}`));
-      const scanPath = path.join(os.homedir(), 'Documents');
+      const scanPath = getBrowseRoot();
       
       // Update message to show scanning status
       await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(scanPath)}</code>`, { parse_mode: 'HTML' });

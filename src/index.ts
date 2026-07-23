@@ -18,7 +18,7 @@ import {
 import { logger } from './utils/logger.js';
 import { loadUserConfig, clearConfigCache } from './config/userConfig.js';
 import { clearDefaultModelsCache, restoreHistoriesFromDb } from './agy/agyCli.js';
-import { clearModelOrderCache } from './core/messageLoop.js';
+import { clearModelOrderCache } from './core/modelRegistry.js';
 import { startHealthServer, stopHealthServer } from './utils/healthServer.js';
 
 export type { ChannelReply, DaemonSession, SessionOptions, MessageFormatter } from './core/types.js';
