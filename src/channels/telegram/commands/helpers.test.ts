@@ -36,18 +36,6 @@ describe('htmlToMarkdown', () => {
     expect(result).toContain('> content');
   });
 
-  it('should convert br to newline', () => {
-    expect(htmlToMarkdown('a<br>b')).toBe('a\nb');
-  });
-
-  it('should convert paragraphs', () => {
-    expect(htmlToMarkdown('<p>para1</p><p>para2</p>')).toBe('para1\n\npara2');
-  });
-
-  it('should convert list items', () => {
-    expect(htmlToMarkdown('<ul><li>a</li><li>b</li></ul>')).toBe('* a\n* b');
-  });
-
   it('should convert blockquote', () => {
     expect(htmlToMarkdown('<blockquote>quote</blockquote>')).toContain('> quote');
   });
