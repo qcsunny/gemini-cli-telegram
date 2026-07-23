@@ -49,7 +49,6 @@ export function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | nu
     const fieldNum = tag >> 3;
     
     if (fieldNum === 9 && wireType === 2) {
-      // Found field 9! Let's decode it
       let pLen;
       try {
         pLen = parseVarint(m, pos);
@@ -78,7 +77,7 @@ export function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | nu
         const subWireType = subTag & 7;
         const subFieldNum = subTag >> 3;
         
-        if (subWireType === 0) { // Varint
+        if (subWireType === 0) {
           let pSubVal;
           try {
             pSubVal = parseVarint(subM, subPos);
@@ -110,7 +109,6 @@ export function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | nu
       }
       return usage;
     } else {
-      // Skip this field
       if (wireType === 0) {
         let pVal;
         try {
@@ -139,8 +137,74 @@ export function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | nu
   return null;
 }
 
-/**
- * Exported for testing: full metadata protobuf decoder, extracting all known
+/** Quick heuristic: >60% printable / whitespace / common Unicode characters.
+ *  Also checks for binary markers: high ratio of U+FFFD replacement chars,
+ *  non-ASCII bytes that are typical protobuf binary (low code points), etc. */
+function isPrintableEnough(s: string): boolean {
+  let printable = 0;
+  let replacement = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 0xFFFD) {
+      replacement++;
+    } else if (code >= 32 && code <= 126) {
+      printable++;
+    } else if (code === 10 || code === 13 || code === 9) {
+      printable++;
+    } else if (code > 127) {
+      printable++;
+    }
+  }
+  if (replacement / s.length > 0.1) return false;
+  return printable / s.length > 0.6;
+}
+
+/** Try to recursively decode bytes as a nested protobuf message.
+ * Returns null if the bytes don't look like a protobuf message. */
+function tryDecodeNestedProto(bytes: Uint8Array): Record<string, unknown> | null {
+  const result: Record<string, unknown> = {};
+  let pos = 0;
+  let fields = 0;
+
+  while (pos < bytes.length) {
+    let pTag;
+    try { pTag = parseVarint(bytes, pos); } catch { break; }
+    const tag = pTag.val;
+    pos = pTag.nextPos;
+    if (pos > bytes.length) break;
+
+    const wireType = tag & 7;
+    const fieldNum = tag >> 3;
+
+    if (wireType === 0) {
+      try { const v = parseVarint(bytes, pos); result[`field${fieldNum}`] = v.val; pos = v.nextPos; fields++; } catch { break; }
+    } else if (wireType === 1) {
+      result[`field${fieldNum}`] = Buffer.from(bytes.slice(pos, pos + 8)).toString('hex');
+      pos += 8; fields++;
+    } else if (wireType === 2) {
+      try {
+        const pLen = parseVarint(bytes, pos);
+        const len = pLen.val;
+        pos = pLen.nextPos;
+        if (pos + len > bytes.length) break;
+        const slice = bytes.subarray(pos, pos + len);
+        const text = new TextDecoder().decode(slice);
+        const nested = tryDecodeNestedProto(slice);
+        result[`field${fieldNum}`] = nested !== null ? nested : text;
+        pos += len; fields++;
+      } catch { break; }
+    } else if (wireType === 5) {
+      result[`field${fieldNum}`] = Buffer.from(bytes.slice(pos, pos + 4)).toString('hex');
+      pos += 4; fields++;
+    } else {
+      pos++;
+    }
+  }
+
+  return fields > 0 ? result : null;
+}
+
+/** Exported for testing: full metadata protobuf decoder, extracting all known
  * fields for debugging. Returns a plain object with key/value pairs.
  */
 export function extractMetadataFromProto(m: Uint8Array): Record<string, unknown> {
@@ -175,14 +239,12 @@ export function extractMetadataFromProto(m: Uint8Array): Record<string, unknown>
         const slice = m.subarray(pos, pos + len);
         const decoded = new TextDecoder().decode(slice);
 
-        // Classify known string fields
+        // Classify known string fields first (do NOT attempt recursive decode on these)
         if (fieldNum === 4) {
           result['toolCall'] = decoded;
         } else if (fieldNum === 5) {
           if (!result['labels']) result['labels'] = [];
           (result['labels'] as string[]).push(decoded);
-        } else if (fieldNum === 9) {
-          result['field9_raw'] = decoded.slice(0, 120) + (decoded.length > 120 ? '...' : '');
         } else if (fieldNum === 12) {
           result['convId'] = decoded;
         } else if (fieldNum === 20) {
@@ -192,7 +254,25 @@ export function extractMetadataFromProto(m: Uint8Array): Record<string, unknown>
         } else if (fieldNum === 31) {
           result['description'] = decoded;
         } else {
-          result[`field${fieldNum}`] = decoded.length > 100 ? decoded.slice(0, 100) + '...' : decoded;
+          // Binary-looking data -> try recursive protobuf decode for unknown fields
+          if (!isPrintableEnough(decoded)) {
+            const nested = tryDecodeNestedProto(slice);
+            if (nested !== null) {
+              if (fieldNum === 9) {
+                result['field9'] = nested;
+              } else {
+                result[`field${fieldNum}`] = nested;
+              }
+              pos += len;
+              continue;
+            }
+          }
+          // Always produce a raw text preview for field9
+          if (fieldNum === 9) {
+            result['field9_raw'] = decoded.length > 120 ? decoded.slice(0, 120) + '...' : decoded;
+          } else {
+            result[`field${fieldNum}`] = decoded.length > 100 ? decoded.slice(0, 100) + '...' : decoded;
+          }
         }
         pos += len;
       } catch { break; }
