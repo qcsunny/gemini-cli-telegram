@@ -137,9 +137,7 @@ export function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | nu
   return null;
 }
 
-/** Quick heuristic: >60% printable / whitespace / common Unicode characters.
- *  Also checks for binary markers: high ratio of U+FFFD replacement chars,
- *  non-ASCII bytes that are typical protobuf binary (low code points), etc. */
+/** Quick heuristic: >60% printable / whitespace / common Unicode characters. */
 function isPrintableEnough(s: string): boolean {
   let printable = 0;
   let replacement = 0;
@@ -189,8 +187,14 @@ function tryDecodeNestedProto(bytes: Uint8Array): Record<string, unknown> | null
         if (pos + len > bytes.length) break;
         const slice = bytes.subarray(pos, pos + len);
         const text = new TextDecoder().decode(slice);
-        const nested = tryDecodeNestedProto(slice);
-        result[`field${fieldNum}`] = nested !== null ? nested : text;
+        
+        // If text is readable, store as text; otherwise try recursive decode
+        if (isPrintableEnough(text)) {
+          result[`field${fieldNum}`] = text;
+        } else {
+          const nested = tryDecodeNestedProto(slice);
+          result[`field${fieldNum}`] = nested !== null ? nested : text;
+        }
         pos += len; fields++;
       } catch { break; }
     } else if (wireType === 5) {
@@ -239,39 +243,62 @@ export function extractMetadataFromProto(m: Uint8Array): Record<string, unknown>
         const slice = m.subarray(pos, pos + len);
         const decoded = new TextDecoder().decode(slice);
 
-        // Classify known string fields first (do NOT attempt recursive decode on these)
-        if (fieldNum === 4) {
-          result['toolCall'] = decoded;
-        } else if (fieldNum === 5) {
-          if (!result['labels']) result['labels'] = [];
-          (result['labels'] as string[]).push(decoded);
-        } else if (fieldNum === 12) {
-          result['convId'] = decoded;
-        } else if (fieldNum === 20) {
-          result['convTree'] = decoded.slice(0, 120);
-        } else if (fieldNum === 30) {
-          result['title'] = decoded;
-        } else if (fieldNum === 31) {
-          result['description'] = decoded;
-        } else {
-          // Binary-looking data -> try recursive protobuf decode for unknown fields
-          if (!isPrintableEnough(decoded)) {
-            const nested = tryDecodeNestedProto(slice);
-            if (nested !== null) {
-              if (fieldNum === 9) {
-                result['field9'] = nested;
-              } else {
-                result[`field${fieldNum}`] = nested;
-              }
-              pos += len;
-              continue;
-            }
+        // For known string fields, check if text is printable first
+        const isKnownStringField = [4, 5, 12, 20, 30, 31].includes(fieldNum);
+        
+        if (isKnownStringField && isPrintableEnough(decoded)) {
+          // Keep as text for known string fields
+          if (fieldNum === 4) {
+            result['toolCall'] = decoded;
+          } else if (fieldNum === 5) {
+            if (!result['labels']) result['labels'] = [];
+            (result['labels'] as string[]).push(decoded);
+          } else if (fieldNum === 12) {
+            result['convId'] = decoded;
+          } else if (fieldNum === 20) {
+            result['convTree'] = decoded.slice(0, 120);
+          } else if (fieldNum === 30) {
+            result['title'] = decoded;
+          } else if (fieldNum === 31) {
+            result['description'] = decoded;
           }
-          // Always produce a raw text preview for field9
-          if (fieldNum === 9) {
-            result['field9_raw'] = decoded.length > 120 ? decoded.slice(0, 120) + '...' : decoded;
+        } else {
+          // Try recursive decode for ALL other fields
+          const nested = tryDecodeNestedProto(slice);
+          
+          if (nested !== null) {
+            // Successfully decoded as nested protobuf
+            if (fieldNum === 4) {
+              result['toolCall'] = nested;
+            } else if (fieldNum === 9) {
+              result['field9'] = nested;
+            } else if (fieldNum === 20) {
+              result['convTree'] = nested;
+            } else if (fieldNum === 28) {
+              result['field28'] = nested;
+            } else {
+              result[`field${fieldNum}`] = nested;
+            }
           } else {
-            result[`field${fieldNum}`] = decoded.length > 100 ? decoded.slice(0, 100) + '...' : decoded;
+            // Fall back to text
+            if (fieldNum === 4) {
+              result['toolCall'] = decoded;
+            } else if (fieldNum === 5) {
+              if (!result['labels']) result['labels'] = [];
+              (result['labels'] as string[]).push(decoded);
+            } else if (fieldNum === 9) {
+              result['field9_raw'] = decoded.length > 120 ? decoded.slice(0, 120) + '...' : decoded;
+            } else if (fieldNum === 12) {
+              result['convId'] = decoded;
+            } else if (fieldNum === 20) {
+              result['convTree'] = decoded.slice(0, 120);
+            } else if (fieldNum === 30) {
+              result['title'] = decoded;
+            } else if (fieldNum === 31) {
+              result['description'] = decoded;
+            } else {
+              result[`field${fieldNum}`] = decoded.length > 100 ? decoded.slice(0, 100) + '...' : decoded;
+            }
           }
         }
         pos += len;

@@ -17,6 +17,10 @@
 interface PricingInfo {
   inputRate: number;  // Cost per 1,000,000 tokens
   outputRate: number; // Cost per 1,000,000 tokens
+  /** Cache hit multiplier relative to input rate (e.g. 0.1 = 10% of input rate) */
+  cacheMultiplier?: number;
+  /** How thinking/reasoning tokens are billed: 'none' | 'output-rate' | custom multiplier */
+  thinkingMultiplier?: number | 'output-rate' | 'none';
 }
 
 /**
@@ -26,79 +30,79 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
     // DeepSeek V4 Pro
     pattern: /deepseek.*pro/i,
-    rates: { inputRate: 0.435, outputRate: 0.87 }
+    rates: { inputRate: 0.435, outputRate: 0.87, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
     // DeepSeek V4 Flash
     pattern: /deepseek.*flash/i,
-    rates: { inputRate: 0.14, outputRate: 0.28 }
+    rates: { inputRate: 0.14, outputRate: 0.28, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
     // DeepSeek R1
     pattern: /deepseek.*r1/i,
-    rates: { inputRate: 0.55, outputRate: 2.19 }
+    rates: { inputRate: 0.55, outputRate: 2.19, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
-    // Claude Opus (Thinking / 4.8 / 5)
+    // Claude Opus 4.x — Anthropic prompt caching is 10% of input rate, thinking billed at output rate
     pattern: /opus/i,
-    rates: { inputRate: 5.00, outputRate: 25.00 }
+    rates: { inputRate: 5.00, outputRate: 25.00, cacheMultiplier: 0.1, thinkingMultiplier: 'output-rate' }
   },
   {
-    // Claude Sonnet (Thinking / 3.5 / 5)
+    // Claude Sonnet 4.x — Anthropic prompt caching is 10% of input rate, thinking billed at output rate
     pattern: /sonnet|claude.*5/i,
-    rates: { inputRate: 3.00, outputRate: 15.00 }
+    rates: { inputRate: 3.00, outputRate: 15.00, cacheMultiplier: 0.1, thinkingMultiplier: 'output-rate' }
   },
   {
-    // GPT-OSS 120B (Medium)
+    // GPT-OSS 120B
     pattern: /gpt-oss|oss/i,
-    rates: { inputRate: 2.50, outputRate: 10.00 }
+    rates: { inputRate: 2.50, outputRate: 10.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.6 Flash
+    // Gemini 3.6 Flash — Google prompt caching is 25% of input rate
     pattern: /3\.6\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 7.50 }
+    rates: { inputRate: 1.50, outputRate: 7.50, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.5 Flash
     pattern: /3\.5\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 9.00 }
+    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.1 Pro
     pattern: /3\.1\s*pro/i,
-    rates: { inputRate: 2.00, outputRate: 12.00 }
+    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.5 Flash-Lite
     pattern: /3\.5\s*flash-lite|flash-lite/i,
-    rates: { inputRate: 0.30, outputRate: 2.50 }
+    rates: { inputRate: 0.30, outputRate: 2.50, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.x Flash (generic fallback for all 3.5/3.6 Flash variants)
+    // Gemini 3.x Flash (generic fallback)
     pattern: /3\s*flash/i,
-    rates: { inputRate: 0.50, outputRate: 3.00 }
+    rates: { inputRate: 0.50, outputRate: 3.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   // --- Generics / Fallbacks ---
   {
     // General Pro keyword
     pattern: /pro/i,
-    rates: { inputRate: 2.00, outputRate: 12.00 }
+    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
     // General Flash / Auto keyword
     pattern: /flash|auto/i,
-    rates: { inputRate: 1.50, outputRate: 9.00 }
+    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   }
 ];
 
 // Fallback pricing rates (Gemini 3.5 Flash)
-const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00 };
+const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' };
 
 /**
  * Heuristically estimate token usage for Gemini/multilingual text.
  * - Count CJK (Chinese, Japanese, Korean) characters.
  * - Strip CJK to isolate Western words and split by whitespace.
- * - Estimate: CJK characters count * 0.8 + English words count * 1.3.
+ * - Estimate: CJK characters count * 1.5 + English words count * 1.3.
  * - Return at least 1 token if input text is non-empty.
  */
 function estimateTokens(text: string): number {
@@ -117,7 +121,8 @@ function estimateTokens(text: string): number {
   const englishWords = westernText.trim().split(/\s+/).filter(Boolean);
   const englishWordsCount = englishWords.length;
 
-  const estimate = cjkCount * 0.8 + englishWordsCount * 1.3;
+  // Updated: CJK ratio 0.8→1.5 based on actual Gemini tokenizer behavior
+  const estimate = cjkCount * 1.5 + englishWordsCount * 1.3;
 
   let finalTokens = Math.ceil(estimate);
   if (text.trim().length === 1 && finalTokens > 1) {
@@ -134,16 +139,17 @@ export interface TokenUsage {
 }
 
 /**
- * Calculate input, output, and total costs based on model lookup and token counts.
- * Lookup is case-insensitive and partial.
- * Supports cached tokens discount (Gemini caching discount is 25% of input rate).
+ * Calculate input, output, cached, and thinking costs based on model pricing.
+ * - Cache hits are discounted per provider (Claude 10%, Gemini 25%)
+ * - Thinking/reasoning tokens billed per provider setting (Claude at output rate)
  */
 function calculateCost(
   modelName: string,
   inputTokens: number,
   outputTokens: number,
-  cachedTokens = 0
-): { inputCost: number; outputCost: number; totalCost: number } {
+  cachedTokens = 0,
+  thinkingTokens = 0
+): { inputCost: number; outputCost: number; thinkingCost: number; totalCost: number } {
   let rates = DEFAULT_RATES;
 
   for (const entry of PRICING_MATRIX) {
@@ -153,12 +159,28 @@ function calculateCost(
     }
   }
 
-  const cachedRate = rates.inputRate * 0.25;
-  const inputCost = (inputTokens / 1_000_000) * rates.inputRate + (cachedTokens / 1_000_000) * cachedRate;
-  const outputCost = (outputTokens / 1_000_000) * rates.outputRate;
-  const totalCost = inputCost + outputCost;
+  // Provider-specific cache multiplier (default 25% for Gemini/OpenAI-style)
+  const cacheMult = rates.cacheMultiplier ?? 0.25;
+  const cachedRate = rates.inputRate * cacheMult;
 
-  return { inputCost, outputCost, totalCost };
+  // Input cost: uncached input at full rate + cache hits at discounted rate
+  const inputCost = (inputTokens / 1_000_000) * rates.inputRate + (cachedTokens / 1_000_000) * cachedRate;
+  
+  // Output cost
+  const outputCost = (outputTokens / 1_000_000) * rates.outputRate;
+  
+  // Thinking/reasoning cost — billed per provider policy
+  let thinkingCost = 0;
+  if (thinkingTokens > 0 && rates.thinkingMultiplier !== 'none') {
+    const thinkingRate = rates.thinkingMultiplier === 'output-rate' 
+      ? rates.outputRate 
+      : rates.outputRate * Number(rates.thinkingMultiplier);
+    thinkingCost = (thinkingTokens / 1_000_000) * thinkingRate;
+  }
+
+  const totalCost = inputCost + outputCost + thinkingCost;
+
+  return { inputCost, outputCost, thinkingCost, totalCost };
 }
 
 /**
@@ -175,7 +197,7 @@ export function formatFooterMarker(
 ): string {
   if (usage) {
     const { input, output, cached, thinking } = usage;
-    const { totalCost } = calculateCost(modelName, input, output, cached);
+    const { totalCost } = calculateCost(modelName, input, output, cached, thinking);
     return `[footer: ${modelName} | ${input} | ${output} | $${totalCost.toFixed(6)} | ${cached} | ${thinking}]`;
   } else {
     const inputTokens = estimateTokens(inputPrompt);
