@@ -60,48 +60,48 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 2.50, outputRate: 10.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.6 Flash — Google prompt caching is 25% of input rate
+    // Gemini 3.6 Flash — Google prompt caching is 10% of input rate
     pattern: /3\.6\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 7.50, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 1.50, outputRate: 7.50, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.5 Flash
     pattern: /3\.5\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.1 Pro — ≤200K: $2/$12; >200K: $4/$18 (all input/output switches)
     pattern: /3\.1\s*pro/i,
     rates: {
-      inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none',
+      inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none',
       longContextRates: { inputRate: 4.00, outputRate: 18.00 }
     }
   },
   {
     // Gemini 3.5 Flash-Lite
     pattern: /3\.5\s*flash-lite|flash-lite/i,
-    rates: { inputRate: 0.30, outputRate: 2.50, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.30, outputRate: 2.50, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.x Flash (generic fallback)
     pattern: /3\s*flash/i,
-    rates: { inputRate: 0.50, outputRate: 3.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.50, outputRate: 3.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
   },
   // --- Generics / Fallbacks ---
   {
     // General Pro keyword
     pattern: /pro/i,
-    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
   },
   {
     // General Flash / Auto keyword
     pattern: /flash|auto/i,
-    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
   }
 ];
 
 // Fallback pricing rates (Gemini 3.5 Flash)
-const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' };
+const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' };
 
 /**
  * Heuristically estimate token usage for Gemini/multilingual text.
@@ -164,14 +164,16 @@ function calculateCost(
     }
   }
 
-  // Provider-specific cache multiplier (default 25% for Gemini/OpenAI-style)
-  const cacheMult = rates.cacheMultiplier ?? 0.25;
-  const cachedRate = rates.inputRate * cacheMult;
+  // Provider-specific cache multiplier (default 10% for Google Gemini, 10% for Anthropic Claude)
+  const cacheMult = rates.cacheMultiplier ?? 0.10;
 
   // Check if single request exceeds 200K input tokens → use long-context rates
   const isLongContext = rates.longContextRates !== undefined && inputTokens > 200_000;
   const effectiveInputRate = isLongContext ? rates.longContextRates!.inputRate : rates.inputRate;
   const effectiveOutputRate = isLongContext ? rates.longContextRates!.outputRate : rates.outputRate;
+
+  // Cache rate uses the effective input rate (long-context cache reads are priced higher)
+  const cachedRate = effectiveInputRate * cacheMult;
 
   // Input cost: uncached input at full rate + cache hits at discounted rate
   const inputCost = (inputTokens / 1_000_000) * effectiveInputRate + (cachedTokens / 1_000_000) * cachedRate;
