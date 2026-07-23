@@ -44,17 +44,17 @@ describe('Pricing and Token Estimation', () => {
       // total = 0.0183
       expect(claudeMarker).toContain('$0.018300');
 
-      // Gemini: cacheMultiplier=0.25 (25% of input rate)
+      // Gemini: cacheMultiplier=0.10 (10% of input rate)
       const geminiMarker = formatFooterMarker(
         'Gemini 3.6 Flash (High)',
         'test',
         'response',
         { input: 1000, output: 1000, cached: 1000, thinking: 0 }
       );
-      // inputCost = (1000/1M)*1.5 + (1000/1M)*(1.5*0.25) = 0.0015 + 0.000375 = 0.001875
+      // inputCost = (1000/1M)*1.5 + (1000/1M)*(1.5*0.10) = 0.0015 + 0.00015 = 0.00165
       // outputCost = (1000/1M)*7.5 = 0.0075
-      // total = 0.009375
-      expect(geminiMarker).toContain('$0.009375');
+      // total = 0.00915
+      expect(geminiMarker).toContain('$0.009150');
     });
 
     it('should estimate CJK tokens with updated ratio', () => {
