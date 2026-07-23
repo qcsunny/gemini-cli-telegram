@@ -13,6 +13,7 @@ import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
 import { getBrowseRoot, getInboxDir } from '../../../config/userConfig.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
+import { loadMessages } from '../../../agy/messageStore.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
 import { extractTitleFromMarkdown } from './helpers.js';
 import { PROJECTS_PER_PAGE } from './projectHandlers.js';
@@ -118,6 +119,29 @@ export function registerCallbackRouter(
       ctx.answerCallbackQuery('Saving latest response...').catch(e => logger.error(`Failed callback: ${e}`));
       const lastContext = messageCache.getLastReplyContext();
       if (!lastContext || (!lastContext.answerMarkdown.trim() && !lastContext.thinkingMarkdown.trim())) {
+        // Fallback: try loading from DB (survives restart)
+        const session = sessionManager.getSession(chatId);
+        const convId = session?.conversationId;
+        const model = session?.model || '';
+        if (convId) {
+          const backend = model.includes('DeepSeek') ? 'deepseek' as const : model.includes('Web2API') ? 'web2api' as const : 'gemini-direct' as const;
+          const msgs = loadMessages(convId, backend);
+          const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+          if (lastAssistant) {
+            const msgTitle = extractTitleFromMarkdown(lastAssistant.content);
+            let reassembled = '';
+            if (msgTitle) reassembled += `# ${msgTitle}\n\n`;
+            reassembled += lastAssistant.content;
+            const dateStr = new Date().toISOString().slice(0, 10);
+            const sanitizeTitle = (msgTitle || 'untitled').replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, '_').substring(0, 30);
+            const filename = `${dateStr}_${sanitizeTitle}.md`;
+            const inboxDir = getInboxDir();
+            if (!fs.existsSync(inboxDir)) fs.mkdirSync(inboxDir, { recursive: true });
+            fs.writeFileSync(`${inboxDir}/${filename}`, reassembled, 'utf8');
+            await ctx.reply(`${ICONS.save} <b>Saved Latest Response</b>\n\nFile: <code>${escapeHtml(filename)}</code>`, { parse_mode: 'HTML' });
+            return;
+          }
+        }
         await ctx.reply(`${ICONS.warning} <b>No AI response found to save.</b>\n\nGenerate a response first or reply to a message with <code>/save</code>.`, { parse_mode: 'HTML' });
         return;
       }
