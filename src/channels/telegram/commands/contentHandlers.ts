@@ -157,7 +157,7 @@ export function registerContentHandlers(
       }
 
       const target = sessions[idx - 1];
-      const chatsDir = path.join(session.config.storage.getProjectTempDir(), 'chats');
+      const chatsDir = path.join(session.config!.storage.getProjectTempDir(), 'chats');
       const sessionFilePath = path.join(chatsDir, target.fileName);
 
       // Check if this was the active session
@@ -166,7 +166,7 @@ export function registerContentHandlers(
       // Delete files
       await fsPromises.unlink(sessionFilePath);
 
-      const logsDir = path.join(session.config.storage.getProjectTempDir(), 'logs');
+      const logsDir = path.join(session.config!.storage.getProjectTempDir(), 'logs');
       const logPath = path.join(logsDir, `session-${target.id}.jsonl`);
       try {
         await fsPromises.unlink(logPath);

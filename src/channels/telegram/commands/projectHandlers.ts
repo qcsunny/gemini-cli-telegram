@@ -96,7 +96,7 @@ export function registerProjectHandlers(
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
     const session = sessionManager.getSession(chatId);
-    const baseDir = session?.config.getTargetDir() || process.cwd();
+    const baseDir = session?.config?.getTargetDir() || process.cwd();
     
     let browsePath: string;
     if (!arg) {

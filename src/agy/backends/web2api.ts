@@ -8,7 +8,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig, getBackendUrl, getWeb2ApiKey } from '../../config/userConfig.js';
 import { saveMessage } from '../messageStore.js';
-import { loadModelsConfig } from '../modelDetection.js';
+import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { web2apiHistories, makeWeb2ApiConvId } from '../conversationManager.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 

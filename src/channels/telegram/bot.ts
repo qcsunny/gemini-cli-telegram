@@ -280,31 +280,37 @@ function extractMediaInfo(
   ctx: Context,
   mediaType: TelegramMediaType,
 ): TelegramMediaInfo | undefined {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const msg = ctx.message as any;
+  const msg = ctx.message as {
+    caption?: string;
+    photo?: { file_id: string }[];
+    voice?: { file_id: string; mime_type?: string };
+    audio?: { file_id: string; mime_type?: string; file_name?: string };
+    video?: { file_id: string; mime_type?: string; file_name?: string };
+    document?: { file_id: string; mime_type?: string; file_name?: string };
+  } | undefined;
   if (!msg) return undefined;
-  const caption = msg.caption as string | undefined;
+  const caption = msg.caption;
 
   if (mediaType === 'photo') {
-    const photos = msg.photo as { file_id: string }[] | undefined;
+    const photos = msg.photo;
     if (!photos || photos.length === 0) return undefined;
     const photo = photos[photos.length - 1];
     if (!photo) return undefined;
     return { fileId: photo.file_id, mimeType: 'image/jpeg', caption };
   } else if (mediaType === 'voice') {
-    const voice = msg.voice as { file_id: string; mime_type?: string } | undefined;
+    const voice = msg.voice;
     if (!voice) return undefined;
     return { fileId: voice.file_id, mimeType: voice.mime_type || 'audio/ogg', caption };
   } else if (mediaType === 'audio') {
-    const audio = msg.audio as { file_id: string; mime_type?: string; file_name?: string } | undefined;
+    const audio = msg.audio;
     if (!audio) return undefined;
     return { fileId: audio.file_id, mimeType: audio.mime_type || 'audio/mpeg', caption, fileName: audio.file_name };
   } else if (mediaType === 'video') {
-    const video = msg.video as { file_id: string; mime_type?: string; file_name?: string } | undefined;
+    const video = msg.video;
     if (!video) return undefined;
     return { fileId: video.file_id, mimeType: video.mime_type || 'video/mp4', caption, fileName: video.file_name };
   } else if (mediaType === 'document') {
-    const doc = msg.document as { file_id: string; mime_type?: string; file_name?: string } | undefined;
+    const doc = msg.document;
     if (!doc) return undefined;
     return { fileId: doc.file_id, mimeType: doc.mime_type || 'application/octet-stream', caption, fileName: doc.file_name };
   }

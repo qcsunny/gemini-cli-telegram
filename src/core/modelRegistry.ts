@@ -10,7 +10,7 @@ import { logger } from '../utils/logger.js';
 
 // ── ModelsConfig (mirrors the structure in agyCli.ts) ────────────────────────
 
-interface ModelsConfig {
+export interface ModelsConfig {
   defaultOrder: string[];
   routing: Record<string, string>;
   tiers?: Array<{ name: string; priority: number; models: string[] }>;
@@ -18,7 +18,7 @@ interface ModelsConfig {
 
 let _parsedModels: ModelsConfig | null | undefined;
 
-function loadModelsConfig(): ModelsConfig | null {
+export function loadModelsConfig(): ModelsConfig | null {
   if (_parsedModels !== undefined) return _parsedModels;
 
   // 优先从用户配置 modelsConfig 读取
@@ -29,6 +29,7 @@ function loadModelsConfig(): ModelsConfig | null {
       routing: userCfg.modelsConfig.routing,
       tiers: userCfg.modelsConfig.tiers,
     };
+    logger.info(`[modelRegistry] Using modelsConfig from user config (${_parsedModels.defaultOrder.length} models, ${_parsedModels.tiers?.length ?? 0} tiers)`);
     return _parsedModels;
   }
 

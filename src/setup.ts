@@ -21,7 +21,10 @@ import {
   CONFIG_PATH,
   type UserConfig,
 } from './config/userConfig.js';
-import { ICONS } from './channels/telegram/ui.js';
+const ICONS = {
+  bot: '🤖', sparkles: '✨', loading: '⏳',
+  success: '✅', error: '🚫', user: '👤',
+};
 
 /** Valid setup step identifier flags */
 export type SetupStep = 'token' | 'users' | 'model' | 'auth';
