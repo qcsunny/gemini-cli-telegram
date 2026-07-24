@@ -144,10 +144,10 @@ describe('processMessage', () => {
       expect.objectContaining({ model: 'Gemini 3.1 Pro (Low)' })
     );
 
-    // Fourth call uses the fallback model (next in chain after Gemini 3.1 Pro (Low)).
+    // Fourth call uses the fallback model (next in tier-aware chain: OpenCode: Nemotron 3 Ultra Free).
     expect(runAgyPrint).toHaveBeenNthCalledWith(
       4,
-      expect.objectContaining({ model: 'Claude Sonnet 4.6 (Thinking)' })
+      expect.objectContaining({ model: 'OpenCode: Nemotron 3 Ultra Free' })
     );
 
     // Warning should have been sent to channel (original + fallback models).
@@ -155,11 +155,11 @@ describe('processMessage', () => {
       expect.stringContaining('Gemini 3.1 Pro (Low)')
     );
     expect(mockReply.send).toHaveBeenCalledWith(
-      expect.stringContaining('Claude Sonnet 4.6 (Thinking)')
+      expect.stringContaining('OpenCode: Nemotron 3 Ultra Free')
     );
 
     // Session model must have updated
-    expect(mockSession.model).toBe('Claude Sonnet 4.6 (Thinking)');
+    expect(mockSession.model).toBe('OpenCode: Nemotron 3 Ultra Free');
     expect(mockSession.conversationId).toBe('fallback-conv-id');
 
     // Conversation should be saved to database with fallback model
@@ -167,15 +167,15 @@ describe('processMessage', () => {
       123456,
       'fallback-conv-id',
       '/test/project/path',
-      'Claude Sonnet 4.6 (Thinking)'
+      'OpenCode: Nemotron 3 Ultra Free'
     );
   });
 
   it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
-    // Chain from Web2API: Gemini Flash Lite is 24 models long under ordered fallback chain system.
+    // Chain from Web2API: Gemini Flash Lite is 3 models long under monotonic downgrade tier system (Tier 3 models from index 7 to end).
     // Each model is retried 3x, then downgraded. When the LAST model in the chain
-    // (Web2API: Gemini Auto) also fails its 3 retries, the session must
-    // terminate — it must NOT wrap back to the first model for a 2nd pass.
+    // (OpenCode: North Mini Code Free) also fails its 3 retries, the session must
+    // terminate — it must NOT wrap back to higher tiers.
     mockSession.model = 'Web2API: Gemini Flash Lite';
     const input: MultimodalInput = { text: 'hello full loop' };
 
@@ -188,15 +188,15 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // chain.length (24) * RETRIES_PER_MODEL (3) = 72 total attempts, one loop.
-    expect(runAgyPrint).toHaveBeenCalledTimes(72);
+    // chain.length (3) * RETRIES_PER_MODEL (3) = 9 total attempts.
+    expect(runAgyPrint).toHaveBeenCalledTimes(9);
     // First 3 attempts: original model.
     expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
     expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
-    // Last 3 attempts: downgraded last model (Web2API: Gemini Auto is index 22, the last before wrapping).
-    expect(runAgyPrint).toHaveBeenNthCalledWith(70, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
-    expect(runAgyPrint).toHaveBeenNthCalledWith(72, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
-    // NO 73rd call: the loop did NOT wrap back to the first model.
+    // Last 3 attempts: downgraded last model (OpenCode: North Mini Code Free).
+    expect(runAgyPrint).toHaveBeenNthCalledWith(7, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(9, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
+    // NO 10th call.
     // Session model is unchanged (it never succeeded).
     expect(mockSession.model).toBe('Web2API: Gemini Flash Lite');
     // An error/termination message must have been surfaced to the channel.

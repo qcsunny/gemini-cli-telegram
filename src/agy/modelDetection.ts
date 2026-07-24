@@ -4,7 +4,7 @@
  */
 
 import { loadUserConfig } from '../config/userConfig.js';
-import { loadModelsConfig, clearModelOrderCache } from '../core/modelRegistry.js';
+import { loadModelsConfig, clearModelOrderCache, getEffectiveModelOrder } from '../core/modelRegistry.js';
 
 /** Returns true if the model name has a routing entry pointing to web2api */
 export function isWeb2ApiModel(model: string): boolean {
@@ -20,16 +20,18 @@ export function isDeepSeekModel(model: string): boolean {
   return model in cfg.routing && model.startsWith('DeepSeek:');
 }
 
+/** Returns true if the model name has a routing entry pointing to opencode */
+export function isOpenCodeModel(model: string): boolean {
+  const cfg = loadModelsConfig();
+  if (!cfg) return false;
+  return model in cfg.routing && model.startsWith('OpenCode:');
+}
+
 let _defaultModels: string[] | undefined;
 
 function getDefaultModels(): string[] {
   if (_defaultModels) return _defaultModels;
-  const cfg = loadModelsConfig();
-  if (cfg?.defaultOrder) {
-    _defaultModels = cfg.defaultOrder;
-  } else {
-    _defaultModels = [];
-  }
+  _defaultModels = getEffectiveModelOrder();
   return _defaultModels;
 }
 

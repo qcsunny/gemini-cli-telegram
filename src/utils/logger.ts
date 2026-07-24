@@ -8,6 +8,13 @@
  * @file logger.ts
  * @description Structured Pino logger utility with pino-pretty support in development/TTY environments.
  * Log levels: debug < info < warn < error (controlled via process.env.LOG_LEVEL).
+ *
+ * Production mode (daemon): pino writes directly to log files.
+ *   - daemon.log  ← info + warn
+ *   - error.log   ← error only
+ *   Systemd should NOT use StandardOutput/StandardError redirects.
+ *
+ * Dev mode (TTY/test): pino-pretty to stdout (no file output).
  */
 
 import pino from 'pino';
@@ -29,26 +36,56 @@ const level = process.env['LOG_LEVEL'] || 'info';
  */
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const ERROR_LOG_PATH = path.join(PROJECT_ROOT, 'error.log');
+export const DAEMON_LOG_PATH = path.join(PROJECT_ROOT, 'daemon.log');
+
+/**
+ * Simple stream wrapper: only passes info(30) and warn(40) to destination, skips error(50+).
+ */
+function createInfoWarnStream(dest: fs.WriteStream) {
+  return {
+    write(entry: string | object) {
+      const obj = typeof entry === 'string' ? JSON.parse(entry) : entry;
+      if (obj.level < 50) {
+        dest.write(typeof entry === 'string' ? entry : JSON.stringify(obj) + '\n');
+      }
+      return true;
+    },
+  };
+}
 
 /**
  * Underlying Pino logger instance.
- * Uses pino-pretty transport in development/local/TTY environments.
+ *
+ * - Dev mode: pino-pretty transport → stdout (colorized, human-readable).
+ * - Prod mode: multistream → daemon.log (info+warn) + error.log (error only).
+ *   Systemd service must NOT redirect stdout/stderr.
  */
-export const pinoInstance = pino({
-  level,
-  ...(isDev
-    ? {
-        transport: {
-          target: 'pino-pretty',
-          options: {
-            colorize: true,
-            translateTime: 'SYS:standard',
-            ignore: 'pid,hostname',
-          },
+export const pinoInstance = (() => {
+  if (isDev) {
+    return pino({
+      level,
+      transport: {
+        target: 'pino-pretty',
+        options: {
+          colorize: true,
+          translateTime: 'SYS:standard',
+          ignore: 'pid,hostname',
         },
-      }
-    : {}),
-});
+      },
+    });
+  }
+
+  const destDaemon = fs.createWriteStream(DAEMON_LOG_PATH, { flags: 'a' });
+  const destError = fs.createWriteStream(ERROR_LOG_PATH, { flags: 'a' });
+
+  return pino(
+    { level },
+    pino.multistream([
+      { stream: createInfoWarnStream(destDaemon), level: 'info' },
+      { stream: destError, level: 'error' },
+    ]),
+  );
+})();
 
 /**
  * Helper to combine message string and variadic arguments for backward compatibility.
@@ -85,15 +122,7 @@ export const logger = {
   },
   error: (message: unknown, ...args: unknown[]) => {
     if (pinoInstance.isLevelEnabled('error')) {
-      const formatted = formatMsg(message, args);
-      pinoInstance.error(formatted);
-      try {
-        const timestamp = new Date().toISOString();
-        fs.mkdirSync(path.dirname(ERROR_LOG_PATH), { recursive: true });
-        fs.appendFileSync(ERROR_LOG_PATH, `[${timestamp}] ${formatted}\n`);
-      } catch {
-        // Fail silent to prevent log writing errors from crashing the daemon
-      }
+      pinoInstance.error(formatMsg(message, args));
     }
   },
 };

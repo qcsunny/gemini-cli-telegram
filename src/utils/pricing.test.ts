@@ -74,7 +74,7 @@ describe('Pricing and Token Estimation', () => {
     });
 
     it('should not charge thinking tokens for models with thinkingMultiplier=none', () => {
-      // DeepSeek V4 Pro: thinkingMultiplier='none'
+      // DeepSeek V4 Pro: thinkingMultiplier='none', currency='CNY'
       const marker = formatFooterMarker(
         'DeepSeek: Pro Thinking',
         'test',
@@ -82,10 +82,11 @@ describe('Pricing and Token Estimation', () => {
         { input: 1000, output: 1000, cached: 0, thinking: 500 }
       );
       // Only input + output costs, no thinking cost
-      // inputCost = (1000/1M)*0.435 = 0.000435
-      // outputCost = (1000/1M)*0.87 = 0.00087
-      // total = 0.001305
-      expect(marker).toContain('$0.001305');
+      // inputCost = (1000/1M)*0.435 = 0.000435 USD → CNY
+      // outputCost = (1000/1M)*0.87 = 0.00087 USD → CNY
+      // total = 0.001305 USD * exchangeRate ≈ ¥0.009461
+      expect(marker).toContain('¥');
+      expect(marker).not.toContain('$');
     });
 
     it('should fallback to default rates for unknown models', () => {

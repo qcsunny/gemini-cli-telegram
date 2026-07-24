@@ -9,7 +9,13 @@
  * @description Token usage estimation and model pricing calculator module.
  * Provides heuristic token count estimates for CJK and Western text, model rate lookups,
  * footer marker string formatting, and footer string parsing for rich messages.
+ * DeepSeek models display cost in CNY (¥) using real-time Google exchange rates.
  */
+
+import { getCachedUsdToCnyRate } from './exchangeRate.js';
+
+// Re-export for callers that want to pre-warm the cache
+export { getUsdToCnyRate } from './exchangeRate.js';
 
 /**
  * Model pricing rates per 1,000,000 tokens in USD.
@@ -23,6 +29,8 @@ interface PricingInfo {
   thinkingMultiplier?: number | 'output-rate' | 'none';
   /** Alternative rates when single request input exceeds 200K tokens — all input/output use these */
   longContextRates?: { inputRate: number; outputRate: number };
+  /** Display currency: 'CNY' for DeepSeek models, 'USD' for others */
+  currency?: 'USD' | 'CNY';
 }
 
 /**
@@ -32,17 +40,17 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
     // DeepSeek V4 Pro: $0.435 / $0.003625 / $0.87
     pattern: /deepseek.*pro/i,
-    rates: { inputRate: 0.435, outputRate: 0.87, cacheMultiplier: 0.008333, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.435, outputRate: 0.87, cacheMultiplier: 0.008333, thinkingMultiplier: 'none', currency: 'CNY' }
   },
   {
     // DeepSeek V4 Flash: $0.14 / $0.0028 / $0.28
     pattern: /deepseek.*flash/i,
-    rates: { inputRate: 0.14, outputRate: 0.28, cacheMultiplier: 0.02, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.14, outputRate: 0.28, cacheMultiplier: 0.02, thinkingMultiplier: 'none', currency: 'CNY' }
   },
   {
     // DeepSeek R1
     pattern: /deepseek.*r1/i,
-    rates: { inputRate: 0.55, outputRate: 2.19, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.55, outputRate: 2.19, cacheMultiplier: 0.25, thinkingMultiplier: 'none', currency: 'CNY' }
   },
   {
     // Claude Opus 4.x: $5 / $0.50 / $25
@@ -154,7 +162,7 @@ function calculateCost(
   outputTokens: number,
   cachedTokens = 0,
   thinkingTokens = 0
-): { inputCost: number; outputCost: number; thinkingCost: number; totalCost: number } {
+): { inputCost: number; outputCost: number; thinkingCost: number; totalCost: number; currency: 'USD' | 'CNY' } {
   let rates = DEFAULT_RATES;
 
   for (const entry of PRICING_MATRIX) {
@@ -176,10 +184,10 @@ function calculateCost(
   const cachedRate = effectiveInputRate * cacheMult;
 
   // Input cost: uncached input at full rate + cache hits at discounted rate
-  const inputCost = (inputTokens / 1_000_000) * effectiveInputRate + (cachedTokens / 1_000_000) * cachedRate;
+  let inputCost = (inputTokens / 1_000_000) * effectiveInputRate + (cachedTokens / 1_000_000) * cachedRate;
   
   // Output cost — switches with tier
-  const outputCost = (outputTokens / 1_000_000) * effectiveOutputRate;
+  let outputCost = (outputTokens / 1_000_000) * effectiveOutputRate;
   
   // Thinking/reasoning cost — billed per provider policy
   let thinkingCost = 0;
@@ -190,9 +198,19 @@ function calculateCost(
     thinkingCost = (thinkingTokens / 1_000_000) * thinkingRate;
   }
 
+  const currency = rates.currency ?? 'USD';
+
+  // Convert to CNY if needed (synchronous: use cached rate)
+  if (currency === 'CNY') {
+    const rate = getCachedUsdToCnyRate();
+    inputCost *= rate;
+    outputCost *= rate;
+    thinkingCost *= rate;
+  }
+
   const totalCost = inputCost + outputCost + thinkingCost;
 
-  return { inputCost, outputCost, thinkingCost, totalCost };
+  return { inputCost, outputCost, thinkingCost, totalCost, currency };
 }
 
 /**
@@ -209,13 +227,15 @@ export function formatFooterMarker(
 ): string {
   if (usage) {
     const { input, output, cached, thinking } = usage;
-    const { totalCost } = calculateCost(modelName, input, output, cached, thinking);
-    return `[footer: ${modelName} | ${input} | ${output} | $${totalCost.toFixed(6)} | ${cached} | ${thinking}]`;
+    const { totalCost, currency } = calculateCost(modelName, input, output, cached, thinking);
+    const sym = currency === 'CNY' ? '¥' : '$';
+    return `[footer: ${modelName} | ${input} | ${output} | ${sym}${totalCost.toFixed(6)} | ${cached} | ${thinking}]`;
   } else {
     const inputTokens = estimateTokens(inputPrompt);
     const outputTokens = estimateTokens(outputText);
-    const { totalCost } = calculateCost(modelName, inputTokens, outputTokens);
-    return `[footer: ${modelName} (Estimated / 预估) | ${inputTokens} | ${outputTokens} | $${totalCost.toFixed(6)}]`;
+    const { totalCost, currency } = calculateCost(modelName, inputTokens, outputTokens);
+    const sym = currency === 'CNY' ? '¥' : '$';
+    return `[footer: ${modelName} (Estimated / 预估) | ${inputTokens} | ${outputTokens} | ${sym}${totalCost.toFixed(6)}]`;
   }
 }
 

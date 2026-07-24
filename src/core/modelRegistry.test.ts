@@ -19,7 +19,7 @@ import {
   getEffectiveModelOrder,
   getEffectiveTiers,
   getChannelModel,
-  buildChannelAwareChain,
+  buildTierAwareChain,
   clearModelOrderCache,
 } from './modelRegistry.js';
 import * as userConfig from '../config/userConfig.js';
@@ -198,41 +198,41 @@ describe('modelRegistry', () => {
     });
   });
 
-  describe('buildChannelAwareChain', () => {
+  describe('buildTierAwareChain', () => {
     beforeEach(() => {
       vi.spyOn(userConfig, 'loadUserConfig').mockReturnValue(null);
     });
 
-    it('should build circular chain starting from the given model', () => {
-      const chain = buildChannelAwareChain('model-b1');
-      // model-b1 is at index 2 in ['model-a1', 'model-a2', 'model-b1', 'model-b2']
-      // Chain: [model-b1, model-b2, model-a1, model-a2]
-      expect(chain).toEqual(['model-b1', 'model-b2', 'model-a1', 'model-a2']);
+    it('should build fallback chain starting from startModel down to lower tiers (monotonic)', () => {
+      const chain = buildTierAwareChain('model-b1');
+      // Starts at Tier B (model-b1), no lower tiers
+      expect(chain).toEqual(['model-b1', 'model-b2']);
     });
 
-    it('should start from the first model when given the strongest', () => {
-      const chain = buildChannelAwareChain('model-a1');
+    it('should start from the first model of highest tier and include all models', () => {
+      const chain = buildTierAwareChain('model-a1');
       expect(chain).toEqual(['model-a1', 'model-a2', 'model-b1', 'model-b2']);
     });
 
-    it('should start from the last model and wrap completely', () => {
-      const chain = buildChannelAwareChain('model-b2');
-      expect(chain).toEqual(['model-b2', 'model-a1', 'model-a2', 'model-b1']);
+    it('should start from the second model of highest tier and exclude the first (monotonic)', () => {
+      const chain = buildTierAwareChain('model-a2');
+      expect(chain).toEqual(['model-a2', 'model-b1', 'model-b2']);
     });
 
-    it('should prepend unknown model and return full list', () => {
-      const chain = buildChannelAwareChain('unknown-model');
+    it('should only include startModel when it is the last in the lowest tier', () => {
+      const chain = buildTierAwareChain('model-b2');
+      expect(chain).toEqual(['model-b2']);
+    });
+
+    it('should append unknown model and include all from effective order', () => {
+      const chain = buildTierAwareChain('unknown-model');
       expect(chain).toEqual(['unknown-model', 'model-a1', 'model-a2', 'model-b1', 'model-b2']);
     });
 
-    it('should have the same length as the model list', () => {
-      const chain = buildChannelAwareChain('model-a2');
-      expect(chain).toHaveLength(4);
-    });
-
-    it('should contain all models exactly once', () => {
-      const chain = buildChannelAwareChain('model-b1');
-      expect(new Set(chain).size).toBe(4);
+    it('should filter out skipped models', () => {
+      const skip = new Set(['model-a2', 'model-b1']);
+      const chain = buildTierAwareChain('model-a1', skip);
+      expect(chain).toEqual(['model-a1', 'model-b2']);
     });
   });
 });

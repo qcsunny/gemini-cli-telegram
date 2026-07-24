@@ -36,6 +36,8 @@ export const modelTierSchema = z.object({
 
 /** Zod schema for the complete models configuration (tiers + routing) */
 export const modelsConfigSchema = z.object({
+  /** Channel display order for /models list (e.g. ["agy","deepseek","opencode","web2api"]) */
+  channelOrder: z.array(z.string()).optional(),
   /** Tiered model groups for structured fallback */
   tiers: z.array(modelTierSchema),
   /** Mapping from display model name to backend API model ID */

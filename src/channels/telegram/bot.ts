@@ -490,24 +490,24 @@ export class TelegramBot {
     // This allows /cancel to run even while a message handler is busy.
     this.runner = run(this.bot, {
       runner: {
-        // Shorter long-poll timeout so the proxy can't silently kill an idle
-        // 30s connection (which caused updates to pile up and redeliver late).
         fetch: { timeout: 10 },
         silent: true,
       },
     });
 
     // runner.task() resolves when the runner stops (via runner.stop())
-    await this.runner.task();
+    // Catch errors so 409 Conflict doesn't crash the process via unhandled rejection.
+    const runnerTask = this.runner?.task();
+    runnerTask?.catch((e) => {
+      logger.error(`Runner stopped with error: ${e}`);
+    });
   }
 
   async stop(): Promise<void> {
     logger.info('Stopping Telegram bot...');
     this.stopHealthCheck();
     await this.sessionManager.destroyAll();
-    if (this.runner?.isRunning()) {
-      this.runner.stop();
-    }
+    this.bot.stop();
     logger.info('Telegram bot stopped.');
   }
 
@@ -574,13 +574,21 @@ export class TelegramBot {
   private async performHealthCheck(): Promise<void> {
     try {
       if (!this.runner?.isRunning()) {
-        logger.warn('Runner appears to have stopped. Attempting restart...');
+        logger.warn('Runner appears to have stopped. Stopping old runner, waiting 10s, then restarting...');
+        // Stop old runner to release getUpdates connection
+        try { this.runner?.stop(); } catch { /* ignore */ }
+        await new Promise((r) => setTimeout(r, 10000));
         try {
           this.runner = run(this.bot, {
             runner: {
               fetch: { timeout: 30 },
               silent: true,
             },
+          });
+          // Catch runner errors to prevent unhandled rejection
+          const newTask = this.runner?.task();
+          newTask?.catch((e) => {
+            logger.error(`Runner stopped with error: ${e}`);
           });
           logger.info('Runner restarted successfully');
         } catch (e) {

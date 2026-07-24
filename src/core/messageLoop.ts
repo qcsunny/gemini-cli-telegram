@@ -21,12 +21,17 @@ import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
 import { getTuningConfig } from '../config/userConfig.js';
-import { getEffectiveModelOrder, getChannelModel, buildChannelAwareChain } from './modelRegistry.js';
+import { getEffectiveModelOrder, getChannelModel, buildTierAwareChain } from './modelRegistry.js';
 import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError, isRateLimitOrUnavailableError } from './backendHealth.js';
 
 import { withTimeout } from './messageLoop/threading.js';
 import { stripWholeMessageCodeFence, normalizeCodeFences, stripSearchResultPayloads } from './messageLoop/textUtils.js';
 import { detectAndSendNewArtifacts } from './messageLoop/artifact.js';
+
+const sleep = (ms: number) => {
+  if (process.env['VITEST'] || process.env['NODE_ENV'] === 'test') return Promise.resolve();
+  return new Promise(r => setTimeout(r, ms));
+};
 
 // Callers use getTuningConfig() at runtime so SIGHUP-triggered cache clears take effect.
 
@@ -146,19 +151,18 @@ export async function processMessage(
       session._busySince = Date.now();
       session.turnCount++;
 
-      // Build the circular fallback chain starting from the session's current model.
-      // buildChannelAwareChain walks the effective model list (config or hardcoded):
-      // starting at the session model, it appends all weaker models, then wraps
-      // around to the strongest models (those above the session model) to form a
-      // complete circular chain.
-      const chain = buildChannelAwareChain(session.model || getEffectiveModelOrder()[0]);
+      // Build a capability-tier-aware fallback chain (T0 -> T1 -> T2 -> T3).
+      // Guarantees monotonic downgrade (只降不升). Models that permanently failed
+      // are skipped via skipModels.
+      const skipModels = new Set<string>();
+      const chain = buildTierAwareChain(session.model || getEffectiveModelOrder()[0], skipModels);
 
       // Retry policy (per the agreed design):
       //   • Each model is attempted up to retriesPerModel times (configurable via tuning).
       //   • On exhausting a model's retries, downgrade to the next-weaker
-      //     model in the fallback chain (starting from the session's model).
-      //   • The chain is walked in a CIRCULAR fashion: after reaching the
-      //     weakest model, it wraps back to the strongest. This handles
+      //     model in the capability-based fallback chain.
+      //   • The chain is walked downward (只降不升): it never upgrades back to higher tiers.
+      //   • Total budget is chain.length * retriesPerModel.
       //     temporary failures (rate limits, transient errors) where a model
       //     may recover after a brief cooldown.
       //   • Total budget is chain.length * retriesPerModel.
@@ -311,9 +315,26 @@ export async function processMessage(
 
           // ANY non-success is eligible for a retry/downgrade (rate-limit,
           // auth error, process termination, hard timeout, generic error).
-          const reason = isRateLimitOrUnavailableError(stderr, output)
-            ? '频控或上游不可用'
+          const isRateLimited = isRateLimitOrUnavailableError(stderr, output);
+          const isPermanent = isConnectionError(result.stderr) || isConnectionError(result.output);
+          const reason = isRateLimited
+            ? '频控或上游不可用 (429/配额)'
             : (stderr.trim() || output.trim() || '未知错误');
+
+          // Adaptive skip: permanently failed models (connection errors) are
+          // excluded from the rest of this session's fallback chain.
+          if (isPermanent) {
+            skipModels.add(modelToUse);
+            logger.info(`[messageLoop] Permanently skipping model "${modelToUse}" — connection error`);
+          }
+
+          // Exponential backoff on rate-limit before retry
+          if (isRateLimited && failsForModel < retriesPerModel) {
+            const backoffMs = Math.min(1000 * Math.pow(2, failsForModel), 30000);
+            logger.info(`[messageLoop] Rate-limited, backing off ${backoffMs}ms before retry`);
+            await sleep(backoffMs);
+          }
+
           failsForModel++;
           if (failsForModel < retriesPerModel) continue; // retry same model
           if (await advanceModel(reason)) continue;          // downgrade to next
@@ -332,9 +353,25 @@ export async function processMessage(
           // process termination, and generic failures) — not just rate-limits.
           const errMsg = e?.message || String(e);
           lastErrorMessage = errMsg;
-          const reason = isRateLimitOrUnavailableError(errMsg, '')
-            ? '频控或上游不可用'
+          const isRateLimited = isRateLimitOrUnavailableError(errMsg, '');
+          const isPermanent = isConnectionError(e);
+          const reason = isRateLimited
+            ? '频控或上游不可用 (429/配额)'
             : errMsg;
+
+          // Adaptive skip: permanently failed models are excluded from the rest of this session
+          if (isPermanent) {
+            skipModels.add(modelToUse);
+            logger.info(`[messageLoop] Permanently skipping model "${modelToUse}" — connection error`);
+          }
+
+          // Exponential backoff on rate-limit before retry
+          if (isRateLimited && failsForModel < retriesPerModel) {
+            const backoffMs = Math.min(1000 * Math.pow(2, failsForModel), 30000);
+            logger.info(`[messageLoop] Rate-limited, backing off ${backoffMs}ms before retry`);
+            await sleep(backoffMs);
+          }
+
           failsForModel++;
           if (failsForModel < retriesPerModel) continue; // retry same model
           if (await advanceModel(reason)) continue;          // downgrade to next

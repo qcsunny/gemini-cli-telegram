@@ -3,7 +3,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions} from '../../../core/types.js';
 import { logger } from '../../../utils/logger.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
-import { ICONS, buildMainKeyboard, buildModelKeyboard, formatSessionStats, formatHelp } from '../ui.js';
+import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, formatSessionStats, formatHelp } from '../ui.js';
 
 export function registerConfigHandlers(
   bot: Bot,
@@ -20,18 +20,22 @@ export function registerConfigHandlers(
       const session = sessionManager.getSession(chatId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
+      const page = 0;
+      const start = page * MODELS_PER_PAGE;
+      const pageModels = models.slice(start, start + MODELS_PER_PAGE);
+      const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
 
-      const modelItems = models.map((m, i) => ({
-        id: (i + 1).toString(),
+      const modelItems = pageModels.map((m, i) => ({
+        id: ((page * MODELS_PER_PAGE) + i + 1).toString(),
         display: m,
         active: m === currentModel,
       }));
 
       await ctx.reply(
-        `${ICONS.model} <b>Model Selection</b>\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
+        `${ICONS.model} <b>Model Selection</b> (Page ${page + 1}/${totalPages})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
-          reply_markup: buildModelKeyboard(modelItems),
+          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page),
         },
       );
       return;
