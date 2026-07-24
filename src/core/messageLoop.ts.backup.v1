@@ -22,7 +22,7 @@ import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
 import { getTuningConfig } from '../config/userConfig.js';
 import { getEffectiveModelOrder, getChannelModel, buildTierAwareChain } from './modelRegistry.js';
-import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError } from './backendHealth.js'; // isRateLimitOrUnavailableError is now handled by parseErrorMessage
+import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError, isRateLimitOrUnavailableError } from './backendHealth.js';
 
 import { withTimeout } from './messageLoop/threading.js';
 import { stripWholeMessageCodeFence, normalizeCodeFences, stripSearchResultPayloads } from './messageLoop/textUtils.js';
@@ -315,10 +315,11 @@ export async function processMessage(
 
           // ANY non-success is eligible for a retry/downgrade (rate-limit,
           // auth error, process termination, hard timeout, generic error).
-          const parsed = parseErrorMessage(stderr || output || '未知错误');
-          const isRateLimited = parsed.type === 'rate_limit';
-          const isPermanent = parsed.type === 'connection' || parsed.type === 'auth' || parsed.type === 'critical';
-          const reason = parsed.message;
+          const isRateLimited = isRateLimitOrUnavailableError(stderr, output);
+          const isPermanent = isConnectionError(result.stderr) || isConnectionError(result.output);
+          const reason = isRateLimited
+            ? '频控或上游不可用 (429/配额)'
+            : (stderr.trim() || output.trim() || '未知错误');
 
           // Adaptive skip: permanently failed models (connection errors) are
           // excluded from the rest of this session's fallback chain.
@@ -352,10 +353,11 @@ export async function processMessage(
           // process termination, and generic failures) — not just rate-limits.
           const errMsg = e?.message || String(e);
           lastErrorMessage = errMsg;
-          const parsed = parseErrorMessage(errMsg);
-          const isRateLimited = parsed.type === 'rate_limit';
-          const isPermanent = isConnectionError(e) || parsed.type === 'auth' || parsed.type === 'critical';
-          const reason = parsed.message;
+          const isRateLimited = isRateLimitOrUnavailableError(errMsg, '');
+          const isPermanent = isConnectionError(e);
+          const reason = isRateLimited
+            ? '频控或上游不可用 (429/配额)'
+            : errMsg;
 
           // Adaptive skip: permanently failed models are excluded from the rest of this session
           if (isPermanent) {
@@ -586,133 +588,6 @@ export async function processMessage(
     session._busySince = undefined;
     session.childPid = undefined;
   }
-}
-
-/**
- * Error code mapping for better error detection and user-friendly messages
- */
-const ERROR_CODE_MAP: Record<string, {
-    type: string;
-    message: string;
-    suggestion: string;
-}> = {
-    // Rate Limit
-    "429": { type: "rate_limit", message: "请求频率超限（频控）", suggestion: "等待1-2分钟后重试，或切换模型" },
-    "quota": { type: "rate_limit", message: "配额已用完", suggestion: "配额用尽，等待恢复或降级模型" },
-    "exhausted": { type: "rate_limit", message: "资源耗尽", suggestion: "请稍后重试" },
-    "rate_limit": { type: "rate_limit", message: "请求频率超限", suggestion: "降低调用频率或降级模型" },
-    "rate_limit_exceeded": { type: "rate_limit", message: "请求频率超限", suggestion: "降低调用频率或降级模型" },
-
-    // Connection
-    "ECONNREFUSED": { type: "connection", message: "连接被拒绝", suggestion: "服务端未启动，请检查服务状态" },
-    "ECONNRESET": { type: "connection", message: "连接重置", suggestion: "网络不稳定，请稍后重试" },
-    "ENETUNREACH": { type: "connection", message: "网络不可达", suggestion: "检查网络连接" },
-    "ETIMEDOUT": { type: "connection", message: "连接超时", suggestion: "增加超时时间或检查网络" },
-    "socket hang up": { type: "connection", message: "连接挂起", suggestion: "网络不稳定，请稍后重试" },
-    "connection refused": { type: "connection", message: "连接被拒绝", suggestion: "检查后端服务状态" },
-
-    // Authentication
-    "401": { type: "auth", message: "认证失败（Token 无效）", suggestion: "检查配置文件中的 token" },
-    "403": { type: "auth", message: "禁止访问（无权限）", suggestion: "检查 bot token 是否正确" },
-    "invalid token": { type: "auth", message: "Token 无效", suggestion: "重新配置 bot token" },
-    "unauthorized": { type: "auth", message: "未授权（401）", suggestion: "检查 bot token 是否正确" },
-    "authentication failed": { type: "auth", message: "认证失败", suggestion: "检查 bot token 是否正确" },
-
-    // Timeout
-    "timeout": { type: "timeout", message: "请求超时", suggestion: "增加超时时间或检查网络" },
-    "client timeout": { type: "timeout", message: "客户端超时", suggestion: "增加超时时间" },
-    "upstream timeout": { type: "timeout", message: "上游超时", suggestion: "增加超时时间" },
-
-    // Backend Unavailable
-    "backend_unavailable": { type: "backend", message: "后端不可用", suggestion: "后端正在维护，请稍后重试" },
-
-    // Unknown
-    "unknown": { type: "unknown", message: "未知错误", suggestion: "请稍后重试或降级模型" },
-};
-
-/**
- * Error severity levels
- */
-const ERROR_SEVERITY: Record<string, "critical" | "warning" | "info"> = {
-    // Critical - immediate attention needed
-    "ECONNREFUSED": "critical",
-    "401": "critical",
-    "403": "critical",
-    "invalid_token": "critical",
-
-    // Warning - can retry
-    "429": "warning",
-    "quota": "warning",
-    "ETIMEDOUT": "warning",
-    "ECONNRESET": "warning",
-
-    // Info - normal errors
-    "backend_unavailable": "info",
-    "unknown": "info",
-};
-
-/**
- * Extract error channel from error message
- */
-function extractErrorChannel(reason: string): string | undefined {
-    const lowerReason = reason.toLowerCase();
-    if (lowerReason.includes('agy')) return 'agy (本地)';
-    if (lowerReason.includes('deepseek')) return 'deepseek-api (代理)';
-    if (lowerReason.includes('web2api')) return 'web2api (代理)';
-    if (lowerReason.includes('opencode')) return 'opencode (本地)';
-    return undefined;
-}
-
-/**
- * Parse error message and extract key information
- */
-function parseErrorMessage(reason: string): {
-    type: string;
-    code: string;
-    channel: string | undefined;
-    message: string;
-    suggestion: string;
-} {
-    const text = reason.trim();
-    const lowerText = text.toLowerCase();
-
-    // Find error type
-    let errorType = 'unknown';
-    let errorCode = '';
-
-    // Check for specific error codes
-    for (const [code, info] of Object.entries(ERROR_CODE_MAP)) {
-        if (lowerText.includes(code) || lowerText.includes(info.type)) {
-            errorType = info.type;
-            errorCode = code;
-            break;
-        }
-    }
-
-    // Extract error code from message
-    if (!errorCode && lowerText.match(/\d{3}/)) {
-        const match = lowerText.match(/(\d{3})/);
-        if (match) {
-            errorCode = match[1];
-            errorType = 'unknown'; // Don't assume type without mapping
-        }
-    }
-
-    // Extract channel
-    const channel = extractErrorChannel(reason);
-
-    // Build suggestion
-    const suggestion = ERROR_CODE_MAP[errorCode]?.suggestion || ERROR_SEVERITY[errorCode] === 'critical'
-        ? ERROR_CODE_MAP['unknown']?.suggestion || '请稍后重试或降级模型'
-        : ERROR_CODE_MAP['unknown']?.suggestion || '请稍后重试';
-
-    return {
-        type: errorType,
-        code: errorCode,
-        channel,
-        message: text,
-        suggestion,
-    };
 }
 
 // ── Model registry & fallback helpers ──────────────────────────────────────
