@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm run test:ci
+
+      - name: Package release archive
+        run: |
+          TAG="${{ github.ref_name }}"
+          PKG="gemini-cli-telegram-${TAG}.tar.gz"
+          tar czf "${PKG}" \
+            --transform "s,^,gemini-cli-telegram-${TAG}/," \
+            dist/ \
+            package.json \
+            package-lock.json \
+            README.md \
+            LICENSE \
+            setup.sh
+          echo "ASSET=${PKG}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
+
+

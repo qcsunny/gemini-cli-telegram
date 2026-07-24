@@ -43,29 +43,37 @@ export { runWeb2Api } from './backends/web2api.js';
 export { runGeminiDirect } from './backends/geminiDirect.js';
 export { runOpenCode } from './backends/opencode.js';
 
-/** Path to the agy binary — prefer explicit env var, then search PATH, then common fallbacks. */
+let _agyPath: string | undefined;
+
+/** Path to the agy binary — prefer explicit env var, then search PATH, then common fallbacks. Cached after first resolution. */
 export function getAgyPath(): string {
+  if (_agyPath) return _agyPath;
   if (process.env['AGY_PATH']) {
-    return process.env['AGY_PATH'];
+    _agyPath = process.env['AGY_PATH'];
+    return _agyPath;
   }
-  // Attempt to resolve via PATH at runtime (sync, called rarely)
   try {
     const resolved = execFileSync('which', ['agy'], { encoding: 'utf8' }).trim();
-    if (resolved) return resolved;
+    if (resolved) {
+      _agyPath = resolved;
+      return _agyPath;
+    }
   } catch {
     // fall through to defaults
   }
-  // Common install locations as fallback (ordered by likelihood)
   const candidates = [
     path.join(os.homedir(), '.local', 'bin', 'agy'),
     '/usr/local/bin/agy',
     '/usr/bin/agy',
   ];
   for (const p of candidates) {
-    if (fssync.existsSync(p)) return p;
+    if (fssync.existsSync(p)) {
+      _agyPath = p;
+      return _agyPath;
+    }
   }
-  // Last resort — rely on PATH resolution at spawn time
-  return 'agy';
+  _agyPath = 'agy';
+  return _agyPath;
 }
 
 /**
