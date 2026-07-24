@@ -186,11 +186,12 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
     out.push(node as RichText);
   };
 
-  const walk = (tk: MarkdownToken[]) => {
+  const walk = (tk: MarkdownToken[], depth = 0) => {
+    if (depth > 64) return;
     for (const token of tk) {
       switch (token.type) {
         case 'inline':
-          if (token.children) walk(token.children);
+          if (token.children) walk(token.children, depth + 1);
           break;
         case 'text':
         case 'code_inline':
@@ -326,7 +327,7 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
               }
             }
           }
-          if (token.children) walk(token.children);
+          if (token.children) walk(token.children, depth + 1);
           break;
         }
       }
@@ -650,154 +651,127 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
 }
 
 export function markdownToRichBlocks(markdown: string): RichBlock[] {
-  // Reset media store for this conversion
+  if (typeof markdown !== 'string' || !markdown) return [];
+
   resetMediaStore();
-  // Extract every LaTeX formula into a private-use-area placeholder BEFORE
-  // parsing so markdown-it never splits formula internals ( ) { } across
-  // tokens. Restored as mathematical_expression entities in inlineToRichText.
-  const { text: placeholderText, math } = extractMath(markdown ?? '');
+  const { text: placeholderText, math } = extractMath(markdown);
   mathPlaceholderStore = math;
-  // Normalize fences (isolate ` ``` ` glued to text, surround with blank lines)
-  // BEFORE structure normalization so markdown-it recognizes them as real fences.
-  // The HTML path (markdownToHtmlSnippet) already does this; the RichBlocks path
-  // was missing this step, causing fence code blocks with nested backticks or
-  // language annotations like ````markdown` to fail parsing.
-  const fenced = normalizeMarkdownFences(placeholderText);
-  // Normalize structure (heading/bullet spacing, mid-line bullet splits,
-  // glued `---` separators) BEFORE parsing — without this the streaming
-  // render path parsed the raw markdown directly and collapsed bullets
-  // that the model joined on a single line. The HTML path already runs
-  // its own normalization; this keeps the RichBlocks path consistent.
-  const tokens = md.parse(normalizeMarkdownStructure(fenced), {}) as any as MarkdownToken[];
-  const blocks = markdownTokensToRichBlocks(tokens, math);
 
-  if (blocks.length === 0 && markdown && markdown.trim()) {
-    blocks.push({ type: 'paragraph', text: markdown.trim() });
-  }
+  let result: RichBlock[];
+  try {
+    const fenced = normalizeMarkdownFences(placeholderText);
+    const tokens = md.parse(normalizeMarkdownStructure(fenced), {}) as any as MarkdownToken[];
+    const blocks = markdownTokensToRichBlocks(tokens, math);
 
-  // ── Post-processing ──
+    result = blocks.length === 0 && markdown.trim()
+      ? [{ type: 'paragraph', text: markdown.trim() }]
+      : blocks;
 
-  // 1. Standalone checkbox conversion: paragraphs starting with [x] or [ ]
-  //    that are NOT inside a list are wrapped into a single-item list block so
-  //    Telegram renders them as native checkboxes instead of plain text.
-  for (let bi = 0; bi < blocks.length; bi++) {
-    const b = blocks[bi];
-    if (b.type === 'paragraph') {
-      const rawText = extractStringFromRichText(b.text).trim();
-      const cbMatch = rawText.match(/^\[([ xX])\]\s*/);
-      if (cbMatch) {
-        const prefixLen = cbMatch[0].length;
-        let strippedText: RichText = b.text;
-        if (typeof strippedText === 'string') {
-          strippedText = strippedText.slice(prefixLen);
-        } else if (Array.isArray(strippedText)) {
-          strippedText = strippedText.map((item, idx) => {
-            if (idx === 0 && typeof item === 'string' && item.startsWith(cbMatch[0])) {
-              return item.slice(prefixLen);
+    // Post-processing: standalone checkbox conversion
+    for (let bi = 0; bi < result.length; bi++) {
+      const b = result[bi];
+      if (b.type === 'paragraph') {
+        const rawText = extractStringFromRichText(b.text).trim();
+        const cbMatch = rawText.match(/^\[([ xX])\]\s*/);
+        if (cbMatch) {
+          const prefixLen = cbMatch[0].length;
+          let strippedText: RichText = b.text;
+          if (typeof strippedText === 'string') {
+            strippedText = strippedText.slice(prefixLen);
+          } else if (Array.isArray(strippedText)) {
+            strippedText = strippedText.map((item, idx) => {
+              if (idx === 0 && typeof item === 'string' && item.startsWith(cbMatch[0])) {
+                return item.slice(prefixLen);
+              }
+              return item;
+            });
+            if (strippedText.length === 1 && typeof strippedText[0] === 'string') {
+              strippedText = strippedText[0];
             }
-            return item;
-          });
-          if (strippedText.length === 1 && typeof strippedText[0] === 'string') {
-            strippedText = (strippedText[0] as string);
           }
+          result[bi] = {
+            type: 'list',
+            is_ordered: false,
+            items: [{
+              has_checkbox: true,
+              is_checked: cbMatch[1] !== ' ' ? true : undefined,
+              blocks: [{ type: 'paragraph', text: trimRichText(strippedText) }],
+            }],
+          } as RichBlock;
         }
-        blocks[bi] = {
-          type: 'list',
-          is_ordered: false,
-          items: [{
-            has_checkbox: true,
-            is_checked: cbMatch[1] !== ' ' ? true : undefined,
-            blocks: [{ type: 'paragraph', text: trimRichText(strippedText) }],
-          }],
-        } as RichBlock;
       }
     }
+
+    // Filter out empty blocks, flatten deep nesting
+    result = result.filter(b => isMeaningfulBlock(b, 0)).map(b => flattenDepth(b, 0));
+  } finally {
+    mathPlaceholderStore = [];
+    resetMediaStore();
   }
+  return result;
+}
 
-  // 2. Empty node protection: filter out any block whose text/content is
-  //    empty or whitespace-only. This prevents Telegram from rejecting the
-  //    payload (empty block bodies cause 400 errors).
-  const MAX_DEPTH = 16;
+const MAX_DEPTH = 16;
 
-  function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
-    if (depth > MAX_DEPTH) return false;
-    const b = blk as unknown as Record<string, unknown>;
-    const type = b['type'] as string;
-    if (type === 'paragraph' || type === 'heading') {
-      const text = b['text'];
-      if (!text) return false;
-      if (typeof text === 'string' && !text.trim()) return false;
-      if (Array.isArray(text) && text.length === 0) return false;
-      return true;
-    }
-    if (type === 'pre') {
-      const text = b['text'];
-      return typeof text === 'string' && text.length > 0;
-    }
-    if (type === 'footer') {
-      const text = b['text'];
-      return typeof text === 'string' && text.length > 0;
-    }
-    if (type === 'blockquote' || type === 'details') {
-      const innerBlocks = (b['blocks'] as RichBlock[]) ?? [];
-      const filtered = innerBlocks.filter(child => isMeaningfulBlock(child, depth + 1));
-      if (filtered.length === 0) return false;
-      (b['blocks'] as RichBlock[]) = filtered;
-      return true;
-    }
-    if (type === 'list') {
-      const items = (b['items'] as InputRichBlockListItem<never>[]) ?? [];
-      if (items.length === 0) return false;
-      for (const item of items) {
-        item.blocks = item.blocks.filter(child => isMeaningfulBlock(child, depth + 1));
-      }
-      const hasAnyItem = items.some(item => item.blocks.length > 0);
-      return hasAnyItem;
-    }
-    if (type === 'anchor' || type === 'divider' || type === 'mathematical_expression') {
-      return true;
-    }
-    if (type === 'table') {
-      return true;
-    }
-    if (type === 'thinking') {
-      return true;
-    }
+function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
+  if (depth > MAX_DEPTH) return false;
+  const b = blk as unknown as Record<string, unknown>;
+  const type = b['type'] as string;
+  if (type === 'paragraph' || type === 'heading') {
+    const text = b['text'];
+    if (!text) return false;
+    if (typeof text === 'string' && !text.trim()) return false;
+    if (Array.isArray(text) && text.length === 0) return false;
     return true;
   }
-
-  const filtered = blocks.filter(b => isMeaningfulBlock(b, 0));
-
-  // 3. Depth flattening: Telegram enforces a maximum nesting depth (16).
-  //    Any nested list/blockquote beyond this limit is flattened one level.
-  function flattenDepth(blk: RichBlock, depth: number): RichBlock {
-    if (depth < MAX_DEPTH) return blk;
-    if (blk.type === 'list') {
-      const items = (blk as any).items as InputRichBlockListItem<never>[];
-      for (const item of items) {
-        item.blocks = item.blocks.flatMap(child => {
-          if (child.type === 'list') {
-            const nestedItems = (child as any).items as InputRichBlockListItem<never>[];
-            return nestedItems.flatMap(ni => ni.blocks);
-          }
-          return [flattenDepth(child, depth + 1)];
-        });
-      }
+  if (type === 'pre') {
+    const text = b['text'];
+    return typeof text === 'string' && text.length > 0;
+  }
+  if (type === 'footer') {
+    const text = b['text'];
+    return typeof text === 'string' && text.length > 0;
+  }
+  if (type === 'blockquote' || type === 'details') {
+    const innerBlocks = (b['blocks'] as RichBlock[]) ?? [];
+    const filtered = innerBlocks.filter(child => isMeaningfulBlock(child, depth + 1));
+    if (filtered.length === 0) return false;
+    (b['blocks'] as RichBlock[]) = filtered;
+    return true;
+  }
+  if (type === 'list') {
+    const items = (b['items'] as InputRichBlockListItem<never>[]) ?? [];
+    if (items.length === 0) return false;
+    for (const item of items) {
+      item.blocks = item.blocks.filter(child => isMeaningfulBlock(child, depth + 1));
     }
-    if (blk.type === 'blockquote' || blk.type === 'details') {
-      const inner = (blk as any).blocks as RichBlock[];
-      (blk as any).blocks = inner.flatMap(child => {
-        if (child.type === 'blockquote') return (child as any).blocks as RichBlock[];
+    return items.some(item => item.blocks.length > 0);
+  }
+  return !!(type === 'anchor' || type === 'divider' || type === 'mathematical_expression' || type === 'table' || type === 'thinking');
+}
+
+function flattenDepth(blk: RichBlock, depth: number): RichBlock {
+  if (depth < MAX_DEPTH) return blk;
+  if (blk.type === 'list') {
+    const items = (blk as any).items as InputRichBlockListItem<never>[];
+    for (const item of items) {
+      item.blocks = item.blocks.flatMap(child => {
+        if (child.type === 'list') {
+          const nestedItems = (child as any).items as InputRichBlockListItem<never>[];
+          return nestedItems.flatMap(ni => ni.blocks);
+        }
         return [flattenDepth(child, depth + 1)];
       });
     }
-    return blk;
   }
-
-  const flattened = filtered.map(b => flattenDepth(b, 0));
-
-  mathPlaceholderStore = [];
-  return flattened;
+  if (blk.type === 'blockquote' || blk.type === 'details') {
+    const inner = (blk as any).blocks as RichBlock[];
+    (blk as any).blocks = inner.flatMap(child => {
+      if (child.type === 'blockquote') return (child as any).blocks as RichBlock[];
+      return [flattenDepth(child, depth + 1)];
+    });
+  }
+  return blk;
 }
 
 
