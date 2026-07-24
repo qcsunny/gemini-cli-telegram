@@ -216,12 +216,15 @@ function handleLinkClose(state: RenderState) {
 }
 
 
-export function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
+const MAX_TOKEN_DEPTH = 64;
+
+export function renderTokens(tokens: MarkdownToken[], state: RenderState, depth = 0): void {
+  if (depth > MAX_TOKEN_DEPTH) return;
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     switch (token.type) {
       case 'inline':
-        if (token.children) renderTokens(token.children, state);
+        if (token.children) renderTokens(token.children, state, depth + 1);
         break;
       case 'text':
         appendText(state, token.content ?? '');
@@ -385,7 +388,7 @@ export function renderTokens(tokens: MarkdownToken[], state: RenderState): void 
                 listStack: [],
               };
               if (t.children) {
-                renderTokens(t.children, cellState);
+                renderTokens(t.children, cellState, depth + 1);
               }
               const cellHtml = renderIRToHtml(cellState);
               const tag = isHeader ? 'th' : 'td';
@@ -420,7 +423,7 @@ export function renderTokens(tokens: MarkdownToken[], state: RenderState): void 
                 listStack: [],
               };
               if (t.children) {
-                renderTokens(t.children, cellState);
+                renderTokens(t.children, cellState, depth + 1);
               }
               currentRow.push(cellState.text.trim());
             }
@@ -468,7 +471,7 @@ export function renderTokens(tokens: MarkdownToken[], state: RenderState): void 
         state.text += '───\n\n';
         break;
       default:
-        if (token.children) renderTokens(token.children, state);
+        if (token.children) renderTokens(token.children, state, depth + 1);
         break;
     }
   }
@@ -492,7 +495,7 @@ export function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
     tables: isHtml ? [] : undefined,
   };
 
-  renderTokens(tokens as MarkdownToken[], state);
+  renderTokens(tokens as MarkdownToken[], state, 0);
 
   // Close any remaining open styles
   for (let i = state.openStyles.length - 1; i >= 0; i--) {
@@ -540,72 +543,64 @@ export const STYLE_MARKERS: Record<
   spoiler: { open: '<span class="tg-spoiler">', close: '</span>' },
 };
 
-export function renderIRToHtml(ir: MarkdownIR): string {
+/**
+ * Render IR with format-specific markers.
+ * Shared implementation for both HTML and MarkdownV2 — avoids
+ * duplicating the boundary-sorting span-rendering algorithm.
+ */
+function renderIR(
+  ir: MarkdownIR,
+  getStyleMarkers: (style: MarkdownStyle, info?: string) => { open: string; close: string },
+  getLinkMarkers: (href: string) => { open: string; close: string },
+  escapeText: (text: string) => string,
+  skipEscapeInCode: boolean,
+): string {
   const { text, styles, links } = ir;
   if (!text) return '';
 
   const boundaries = new Set<number>([0, text.length]);
 
   const sorted = styles
-    .filter((s) => STYLE_MARKERS[s.style] && s.end > s.start)
+    .filter((s) => s.end > s.start)
     .sort((a, b) => {
       if (a.start !== b.start) return a.start - b.start;
       if (a.end !== b.end) return b.end - a.end;
       return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
     });
 
-  const startsAt = new Map<number, StyleSpan[]>();
+  const styleStarts = new Map<number, { span: StyleSpan; open: string; close: string }[]>();
   for (const span of sorted) {
+    const markers = getStyleMarkers(span.style, span.info);
+    if (!markers.open && !markers.close) continue;
     boundaries.add(span.start);
     boundaries.add(span.end);
-    const bucket = startsAt.get(span.start);
-    if (bucket) bucket.push(span);
-    else startsAt.set(span.start, [span]);
+    const bucket = styleStarts.get(span.start);
+    if (bucket) bucket.push({ span, open: markers.open, close: markers.close });
+    else styleStarts.set(span.start, [{ span, open: markers.open, close: markers.close }]);
   }
 
-  for (const spans of startsAt.values()) {
-    spans.sort((a, b) => {
-      if (a.end !== b.end) return b.end - a.end;
-      return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
+  for (const items of styleStarts.values()) {
+    items.sort((a, b) => {
+      if (a.span.end !== b.span.end) return b.span.end - a.span.end;
+      return (STYLE_RANK.get(a.span.style) ?? 0) - (STYLE_RANK.get(b.span.style) ?? 0);
     });
   }
 
-  type RenderLink = {
-    start: number;
-    end: number;
-    open: string;
-    close: string;
-  };
-  const linkStarts = new Map<number, RenderLink[]>();
+  const linkStarts = new Map<number, { open: string; close: string; end: number }[]>();
   for (const link of links) {
     if (!link.href || link.start >= link.end) continue;
-    const safeHref = escapeHtmlAttr(link.href);
-    const rl: RenderLink = {
-      start: link.start,
-      end: link.end,
-      open: `<a href="${safeHref}">`,
-      close: '</a>',
-    };
-    boundaries.add(rl.start);
-    boundaries.add(rl.end);
-    const bucket = linkStarts.get(rl.start);
-    if (bucket) bucket.push(rl);
-    else linkStarts.set(rl.start, [rl]);
+    const markers = getLinkMarkers(link.href);
+    boundaries.add(link.start);
+    boundaries.add(link.end);
+    const bucket = linkStarts.get(link.start);
+    if (bucket) bucket.push({ open: markers.open, close: markers.close, end: link.end });
+    else linkStarts.set(link.start, [{ open: markers.open, close: markers.close, end: link.end }]);
   }
 
   const points = [...boundaries].sort((a, b) => a - b);
-  const stack: { close: string; end: number }[] = [];
+  const stack: { close: string; end: number; isCode: boolean }[] = [];
 
-  type OpenItem =
-    | { end: number; open: string; close: string; kind: 'link'; index: number }
-    | {
-        end: number;
-        open: string;
-        close: string;
-        kind: 'style';
-        style: MarkdownStyle;
-        index: number;
-      };
+  type OpenEntry = { open: string; close: string; end: number; isCode: boolean; index: number };
 
   let out = '';
 
@@ -613,40 +608,26 @@ export function renderIRToHtml(ir: MarkdownIR): string {
     const pos = points[i];
 
     while (stack.length && stack[stack.length - 1]?.end === pos) {
-      const item = stack.pop();
-      if (item) out += item.close;
+      out += stack.pop()!.close;
     }
 
-    const openItems: OpenItem[] = [];
+    const openItems: OpenEntry[] = [];
 
     const openLinks = linkStarts.get(pos);
     if (openLinks) {
       for (const [index, link] of openLinks.entries()) {
-        openItems.push({ ...link, kind: 'link', index });
+        openItems.push({ ...link, isCode: false, index });
       }
     }
 
-    const openStyles = startsAt.get(pos);
+    const openStyles = styleStarts.get(pos);
     if (openStyles) {
-      for (const [index, span] of openStyles.entries()) {
-        let openMarker = '';
-        let closeMarker = '';
-        if (span.style === 'code_block') {
-          const lang = span.info ? escapeHtmlAttr(span.info) : '';
-          const classAttr = lang ? ` class="language-${lang}"` : '';
-          openMarker = `<pre><code${classAttr}>`;
-          closeMarker = '</code></pre>';
-        } else {
-          const m = STYLE_MARKERS[span.style];
-          openMarker = m.open;
-          closeMarker = m.close;
-        }
+      for (const [index, item] of openStyles.entries()) {
         openItems.push({
-          end: span.end,
-          open: openMarker,
-          close: closeMarker,
-          kind: 'style',
-          style: span.style,
+          open: item.open,
+          close: item.close,
+          end: item.span.end,
+          isCode: item.span.style === 'code' || item.span.style === 'code_block',
           index,
         });
       }
@@ -655,28 +636,47 @@ export function renderIRToHtml(ir: MarkdownIR): string {
     if (openItems.length > 0) {
       openItems.sort((a, b) => {
         if (a.end !== b.end) return b.end - a.end;
-        if (a.kind !== b.kind) return a.kind === 'link' ? -1 : 1;
-        if (a.kind === 'style' && b.kind === 'style') {
-          return (
-            (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0)
-          );
-        }
+        if (a.isCode !== b.isCode) return a.isCode ? 1 : -1;
         return a.index - b.index;
       });
       for (const item of openItems) {
         out += item.open;
-        stack.push({ close: item.close, end: item.end });
+        stack.push({ close: item.close, end: item.end, isCode: item.isCode });
       }
     }
 
     const next = points[i + 1];
     if (next === undefined) break;
     if (next > pos) {
-      out += escapeHtml(text.slice(pos, next));
+      const segment = text.slice(pos, next);
+      const insideCode = stack.some((s) => s.isCode);
+      out += insideCode && skipEscapeInCode ? segment : escapeText(segment);
     }
   }
 
   return out;
+}
+
+export function renderIRToHtml(ir: MarkdownIR): string {
+  return renderIR(
+    ir,
+    (style, info) => {
+      if (style === 'code_block') {
+        const lang = info ? escapeHtmlAttr(info) : '';
+        return {
+          open: `<pre><code${lang ? ` class="language-${lang}"` : ''}>`,
+          close: '</code></pre>',
+        };
+      }
+      return STYLE_MARKERS[style] ?? { open: '', close: '' };
+    },
+    (href) => ({
+      open: `<a href="${escapeHtmlAttr(href)}">`,
+      close: '</a>',
+    }),
+    (text) => escapeHtml(text),
+    false,
+  );
 }
 
 
@@ -794,7 +794,7 @@ export function findSafeCutPoint(markdown: string, maxLen: number): number {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     // toggle fence state on lines that are exactly a fence delimiter
-    if (/^\s*```[a-zA-Z0-9_+#.-]*\s*$/.test(line)) {
+    if (/^\s*(?:```|~~~)[a-zA-Z0-9_+#.-]*\s*$/.test(line)) {
       inFence = !inFence;
     }
     const lineEnd = acc + line.length; // index of '\n' after this line
@@ -1169,165 +1169,31 @@ export function isEligibleMainHeading(blk: { type: string; size?: number; text?:
 // ── IR → Telegram MarkdownV2 ──
 
 function renderIRToMarkdownV2(ir: MarkdownIR): string {
-  const { text, styles, links } = ir;
-  if (!text) return '';
-
-  const boundaries = new Set<number>([0, text.length]);
-
-  const sorted = styles
-    .filter((s) => s.end > s.start)
-    .sort((a, b) => {
-      if (a.start !== b.start) return a.start - b.start;
-      if (a.end !== b.end) return b.end - a.end;
-      return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
-    });
-
-  const startsAt = new Map<number, StyleSpan[]>();
-  for (const span of sorted) {
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-    const bucket = startsAt.get(span.start);
-    if (bucket) bucket.push(span);
-    else startsAt.set(span.start, [span]);
-  }
-
-  for (const spans of startsAt.values()) {
-    spans.sort((a, b) => {
-      if (a.end !== b.end) return b.end - a.end;
-      return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
-    });
-  }
-
-  type RenderLink = {
-    start: number;
-    end: number;
-    open: string;
-    close: string;
-  };
-  const linkStarts = new Map<number, RenderLink[]>();
-  for (const link of links) {
-    if (!link.href || link.start >= link.end) continue;
-    const escapedUrl = escapeMarkdownV2(link.href);
-    const rl: RenderLink = {
-      start: link.start,
-      end: link.end,
+  return renderIR(
+    ir,
+    (style, info) => {
+      switch (style) {
+        case 'code_block': return { open: `\`\`\`${info ? escapeMarkdownV2(info) : ''}\n`, close: '```' };
+        case 'code': return { open: '`', close: '`' };
+        case 'bold': return { open: '*', close: '*' };
+        case 'italic': return { open: '_', close: '_' };
+        case 'underline': return { open: '__', close: '__' };
+        case 'strikethrough': return { open: '~', close: '~' };
+        case 'spoiler': return { open: '||', close: '||' };
+        default: return { open: '', close: '' };
+      }
+    },
+    (href) => ({
       open: '[',
-      close: `](${escapedUrl})`,
-    };
-    boundaries.add(rl.start);
-    boundaries.add(rl.end);
-    const bucket = linkStarts.get(rl.start);
-    if (bucket) bucket.push(rl);
-    else linkStarts.set(rl.start, [rl]);
-  }
-
-  const points = [...boundaries].sort((a, b) => a - b);
-  const stack: { close: string; end: number; style?: MarkdownStyle }[] = [];
-
-  type OpenItem =
-    | { end: number; open: string; close: string; kind: 'link'; index: number }
-    | {
-        end: number;
-        open: string;
-        close: string;
-        kind: 'style';
-        style: MarkdownStyle;
-        index: number;
-      };
-
-  let out = '';
-
-  for (let i = 0; i < points.length; i++) {
-    const pos = points[i];
-
-    while (stack.length && stack[stack.length - 1]?.end === pos) {
-      const item = stack.pop();
-      if (item) out += item.close;
-    }
-
-    const openItems: OpenItem[] = [];
-
-    const openLinks = linkStarts.get(pos);
-    if (openLinks) {
-      for (const [index, link] of openLinks.entries()) {
-        openItems.push({ ...link, kind: 'link', index });
-      }
-    }
-
-    const openStyles = startsAt.get(pos);
-    if (openStyles) {
-      for (const [index, span] of openStyles.entries()) {
-        let openMarker = '';
-        let closeMarker = '';
-        if (span.style === 'code_block') {
-          const lang = span.info ? escapeMarkdownV2(span.info) : '';
-          openMarker = `\`\`\`${lang}\n`;
-          closeMarker = '```';
-        } else if (span.style === 'code') {
-          openMarker = '`';
-          closeMarker = '`';
-        } else if (span.style === 'bold') {
-          openMarker = '*';
-          closeMarker = '*';
-        } else if (span.style === 'italic') {
-          openMarker = '_';
-          closeMarker = '_';
-        } else if (span.style === 'underline') {
-          openMarker = '__';
-          closeMarker = '__';
-        } else if (span.style === 'strikethrough') {
-          openMarker = '~';
-          closeMarker = '~';
-        } else if (span.style === 'spoiler') {
-          openMarker = '||';
-          closeMarker = '||';
-        }
-
-        openItems.push({
-          end: span.end,
-          open: openMarker,
-          close: closeMarker,
-          kind: 'style',
-          style: span.style,
-          index,
-        });
-      }
-    }
-
-    if (openItems.length > 0) {
-      openItems.sort((a: any, b: any) => {
-        if (a.end !== b.end) return b.end - a.end;
-        if (a.kind !== b.kind) return a.kind === 'link' ? -1 : 1;
-        if (a.kind === 'style' && b.kind === 'style') {
-          return (
-            (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0)
-          );
-        }
-        return a.index - b.index;
-      });
-      for (const item of openItems) {
-        out += item.open;
-        stack.push({ close: item.close, end: item.end, style: item.kind === 'style' ? item.style : undefined });
-      }
-    }
-
-    const next = points[i + 1];
-    if (next === undefined) break;
-    if (next > pos) {
-      const segment = text.slice(pos, next);
-      const isInsideCode = stack.some(item => item.style === 'code' || item.style === 'code_block');
-      if (isInsideCode) {
-        out += segment;
-      } else {
-        out += escapeMarkdownV2(segment);
-      }
-    }
-  }
-
-  return out;
+      close: `](${escapeMarkdownV2(href)})`,
+    }),
+    (text) => escapeMarkdownV2(text),
+    true,
+  );
 }
 
 export function markdownToMarkdownV2(markdown: string): string {
+  if (typeof markdown !== 'string' || !markdown) return '';
   const ir = markdownToIR(markdown);
   return renderIRToMarkdownV2(ir);
 }

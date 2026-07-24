@@ -4,12 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/**
- * @file formatter.ts
- * @description Barrel re-export for the formatter module.
- * The actual implementation has been split into formatter/core.ts, html.ts,
- * blocks.ts, and media.ts. This file maintains backward compatibility for
- * existing `import { ... } from './formatter.js'` statements.
- */
-
-export * from './formatter/index.js';
+export * from './formatter/core.js';
+export * from './formatter/html.js';
+export * from './formatter/blocks.js';
+export * from './formatter/media.js';
