@@ -28,9 +28,7 @@ import { withTimeout } from './messageLoop/threading.js';
 import { stripWholeMessageCodeFence, normalizeCodeFences, stripSearchResultPayloads } from './messageLoop/textUtils.js';
 import { detectAndSendNewArtifacts } from './messageLoop/artifact.js';
 
-// Read tuning defaults once at import time; callers use getTuningConfig() for runtime values.
-const tuning = getTuningConfig();
-const DEBOUNCE_INTERVAL_MS = tuning.debounceIntervalMs;
+// Callers use getTuningConfig() at runtime so SIGHUP-triggered cache clears take effect.
 
 /**
  * Channel-agnostic message processing loop using local agy CLI wrapper.
@@ -105,7 +103,7 @@ export async function processMessage(
   const updateMessageStream = async (isFinal = false) => {
     if (isFinished && !isFinal) return;
     const now = Date.now();
-    if (!isFinal && now - lastEditTime < DEBOUNCE_INTERVAL_MS) return;
+    if (!isFinal && now - lastEditTime < getTuningConfig().debounceIntervalMs) return;
     lastEditTime = now;
 
     activeUpdatePromise = activeUpdatePromise.then(async () => {
@@ -175,9 +173,6 @@ export async function processMessage(
       let lastResult: any = null;
       let lastErrorMessage = '';
 
-      const escReason = (s: string) =>
-        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
-
       // Advance to the next model in the fallback chain. The chain is circular:
       // after the last (weakest) model, it wraps to the first (strongest) model.
       // Returns true if there is a next model to try, false if we've completed
@@ -201,7 +196,7 @@ export async function processMessage(
         const logTag = switchedChannel ? `[messageLoop] 🔀 Channel switch ${prevCh}→${nextCh}` : '[messageLoop]';
         logger.warn(`${logTag} Model "${prevModel}" failed (${reason}). Downgrading to "${modelToUse}" (attempt ${attempts}/${maxAttempts}).`);
         const switchNote = switchedChannel ? `（切换至 ${nextCh} 通道）` : '';
-        await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escReason(reason)}），正在自动降级至 \`${modelToUse}\`${switchNote} 重试...`);
+        await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escapeHtml(reason).slice(0, 200)}），正在自动降级至 \`${modelToUse}\`${switchNote} 重试...`);
         return true;
       };
 
