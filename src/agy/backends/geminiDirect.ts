@@ -6,6 +6,7 @@
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig } from '../../config/userConfig.js';
 import { geminiDirectHistories } from '../conversationManager.js';
+import { ProxyAgent } from 'undici';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
 function mapModelToGeminiId(model: string): string {
@@ -55,7 +56,6 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
   };
 
   if (proxy) {
-    const { ProxyAgent } = await import('undici');
     const dispatcher = new ProxyAgent(proxy);
     (fetchOptions as Record<string, unknown>)['dispatcher'] = dispatcher;
   }

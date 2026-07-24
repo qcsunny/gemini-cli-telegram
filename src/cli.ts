@@ -99,7 +99,9 @@ program
       }
 
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      const logFd = fs.openSync(getLogPath(config), 'a');
+      const logPath = getLogPath(config);
+      const logFd = fs.openSync(logPath, 'a');
+      const errFd = fs.openSync(logPath + '.err', 'a');
 
       const scriptPath = path.resolve(
         new URL(import.meta.url).pathname,
@@ -107,7 +109,7 @@ program
 
       const child = spawn(process.execPath, ['--no-warnings', scriptPath, 'start', '--live'], {
         detached: true,
-        stdio: ['ignore', logFd, logFd],
+        stdio: ['ignore', logFd, errFd],
         env: {
           ...process.env,
           _GEMINI_CLI_TELEGRAM_DAEMON: '1',
@@ -118,9 +120,11 @@ program
 
       child.unref();
       fs.closeSync(logFd);
+      fs.closeSync(errFd);
 
       console.log(`Daemon started in background (pid ${child.pid}).`);
-      console.log(`Logs: ${getLogPath(config)}`);
+      console.log(`Logs: ${logPath}`);
+      console.log(`Errors: ${logPath}.err`);
       console.log(`Stop:  gemini-cli-telegram stop`);
 
       // Show the bot's Telegram link
