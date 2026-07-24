@@ -89,6 +89,20 @@ export interface ThinkingStep {
 }
 
 /**
+ * Compatibility config object attached to each DaemonSession.
+ * Provides backward-compatible accessors for legacy command handlers.
+ */
+export interface SessionConfig {
+  getModel: () => string;
+  setModel: (modelName: string, quiet?: boolean) => void;
+  getTargetDir: () => string;
+  getWorkspaceContext: () => { addDirectory: (dir: string) => void };
+  storage: {
+    getProjectTempDir: () => string;
+  };
+}
+
+/**
  * Autopilot configuration for self-reply mode
  */
 export interface AutopilotConfig {
@@ -144,8 +158,7 @@ export interface DaemonSession {
   sendMedia?: SendMediaFn;
   /** Autopilot / self-reply until configuration */
   autopilot?: AutopilotConfig;
-  /** Compatibility field for config */
-  config?: any;
+  config?: SessionConfig;
   /** PID of the currently running agy child process (set by agyCli onSpawn, cleared on close). */
   childPid?: number;
   /** Timestamp (ms) when session.busy was set to true — used by health check for stuck detection. */

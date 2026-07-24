@@ -9,7 +9,7 @@ import { logger } from '../../utils/logger.js';
 import { getTuningConfig, getBackendUrl } from '../../config/userConfig.js';
 import { loadUserConfig } from '../../config/userConfig.js';
 import { saveMessage } from '../messageStore.js';
-import { loadModelsConfig } from '../modelDetection.js';
+import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { deepseekHistories, makeDeepSeekConvId } from '../conversationManager.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 

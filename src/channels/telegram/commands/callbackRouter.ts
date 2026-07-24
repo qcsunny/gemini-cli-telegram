@@ -96,7 +96,7 @@ export function registerCallbackRouter(
     if (data === '/model') {
       ctx.answerCallbackQuery('Loading models...').catch(e => logger.error(`Failed callback: ${e}`));
       const session = sessionManager.getSession(chatId);
-      const currentModel = session?.config.getModel() || 'unknown';
+      const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
 
       const modelItems = models.map((m, i) => ({
@@ -245,7 +245,7 @@ export function registerCallbackRouter(
 
       const stats = formatSessionStats({
         sessionId: session.sessionId,
-        model: session.config.getModel(),
+        model: session.config!.getModel(),
         turnCount: session.turnCount,
         createdAt: session.createdAt,
         project: session.currentProject,
@@ -420,7 +420,7 @@ export function registerCallbackRouter(
 
       try {
         const session = await sessionManager.getOrCreate(chatId, defaultOptions);
-        session.config.setModel(modelName, false);
+        session.config!.setModel(modelName, false);
         await ctx.editMessageText(
           `${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${modelName}</code>`,
           {

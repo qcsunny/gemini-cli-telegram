@@ -36,12 +36,13 @@ function getDefaultDbPath(): string {
     }
     return dbPath;
   } catch {
+    logger.warn('[db] Failed to create db directory, falling back to /tmp');
     const tmpDir = path.join('/tmp', 'gemini-cli-telegram');
     if (!fs.existsSync(tmpDir)) {
       try {
         fs.mkdirSync(tmpDir, { recursive: true });
-      } catch {
-        /* ignore */
+      } catch (e2) {
+        logger.warn(`[db] Failed to create tmp directory: ${e2}`);
       }
     }
     return path.join(tmpDir, 'db.sqlite');
@@ -101,8 +102,8 @@ export function closeDb(): void {
   if (sqliteDb) {
     try {
       sqliteDb.close();
-    } catch {
-      /* ignore */
+    } catch (e) {
+      logger.warn(`[db] Error closing database: ${e}`);
     }
     sqliteDb = null;
     dbInstance = null;

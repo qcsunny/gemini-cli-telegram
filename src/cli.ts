@@ -10,7 +10,6 @@
 
 // Suppress Node.js deprecation warnings from upstream dependencies
 process.noDeprecation = true;
-(process as unknown as { emitWarning: typeof process.emitWarning }).emitWarning = () => {};
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
