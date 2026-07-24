@@ -268,7 +268,8 @@ export async function processMessage(
                 const parsed = extractThoughtAndContent(rawStreamBuffer);
                 if (parsed.thought) {
                   thoughtBuffer = parsed.thought;
-                  answerBuffer = parsed.content;
+                  // Use rawStreamBuffer for answerBuffer during streaming to avoid content loss
+                  answerBuffer = rawStreamBuffer;
                 } else {
                   answerBuffer = rawStreamBuffer;
                 }
