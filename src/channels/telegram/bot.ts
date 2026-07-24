@@ -122,7 +122,7 @@ async function withSession(
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
-  let session;
+  let session: DaemonSession;
   try {
     session = await sessionManager.getOrCreate(chatId, defaultOptions);
   } catch (e) {
