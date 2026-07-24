@@ -6,6 +6,8 @@
 
 import { restoreAllHistories } from './messageStore.js';
 
+const MAX_HISTORY_ENTRIES = 100;
+
 export interface Web2ApiMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -15,6 +17,15 @@ export interface Web2ApiMessage {
 export const web2apiHistories = new Map<string, Web2ApiMessage[]>();
 export const deepseekHistories = new Map<string, Web2ApiMessage[]>();
 export const geminiDirectHistories = new Map<string, any[]>();
+
+export function trimHistoryMaps(): void {
+  for (const map of [web2apiHistories, deepseekHistories, geminiDirectHistories]) {
+    if (map.size <= MAX_HISTORY_ENTRIES) continue;
+    const keys = [...map.keys()];
+    const toDelete = keys.slice(0, map.size - MAX_HISTORY_ENTRIES);
+    for (const k of toDelete) map.delete(k);
+  }
+}
 
 export function makeWeb2ApiConvId(): string {
   return `web2api-${globalThis.crypto.randomUUID()}`;
@@ -36,4 +47,9 @@ export function clearDeepSeekHistory(conversationId: string): void {
 /** Clear the Web2API history for a given conversationId (called on /new). */
 export function clearWeb2ApiHistory(conversationId: string): void {
   web2apiHistories.delete(conversationId);
+}
+
+/** Clear the gemini-direct history for a given conversationId (called on /new). */
+export function clearGeminiDirectHistory(conversationId: string): void {
+  geminiDirectHistories.delete(conversationId);
 }

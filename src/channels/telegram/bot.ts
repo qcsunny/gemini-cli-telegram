@@ -42,10 +42,11 @@ import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 import { CONFIG_PATH, getBackendUrl } from '../../config/userConfig.js';
 import { buildChannelReply } from './bot/channelReply.js';
+import { startBackoffCleanup } from './bot/rateLimiter.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
 
-export { record429Backoff, reset429Backoff, is429Error, get429RetryAfter } from './bot/rateLimiter.js';
+export { record429Backoff, reset429Backoff, is429Error, get429RetryAfter, startBackoffCleanup } from './bot/rateLimiter.js';
 export { buildChannelReply } from './bot/channelReply.js';
 
 // ── Constants ──
@@ -462,6 +463,7 @@ export class TelegramBot {
 
   async start(): Promise<void> {
     logger.info('Starting Telegram bot...');
+    startBackoffCleanup();
 
     await this.bot.api.setMyCommands([
       { command: 'start', description: 'Start the bot with welcome menu' },

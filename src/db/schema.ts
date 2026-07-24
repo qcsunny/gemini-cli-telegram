@@ -23,8 +23,7 @@ export const conversations = sqliteTable('conversations', {
   updatedAt: text('updated_at'),
 });
 
-export type Conversation = typeof conversations.$inferSelect;
-export type NewConversation = typeof conversations.$inferInsert;
+
 
 /**
  * Messages table persists web2api / deepseek conversation history across restarts.
@@ -39,5 +38,4 @@ export const messages = sqliteTable('messages', {
   createdAt: text('created_at').notNull(),
 });
 
-export type Message = typeof messages.$inferSelect;
-export type NewMessage = typeof messages.$inferInsert;
+

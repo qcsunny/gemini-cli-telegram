@@ -325,11 +325,12 @@ export function getInboxDir(): string {
 }
 
 /**
- * Clears the cached tuning configuration. Called on SIGHUP to force a fresh read
- * from disk on the next call to getTuningConfig().
+ * Clears the cached tuning and user config. Called on SIGHUP to force a fresh read
+ * from disk on the next call to getTuningConfig() / loadUserConfig().
  */
 export function clearConfigCache(): void {
   _cachedTuning = undefined;
+  _configCache = undefined;
 }
 
 /**
@@ -350,19 +351,29 @@ export function configExists(): boolean {
   return fs.existsSync(CONFIG_PATH);
 }
 
+const CONFIG_CACHE_TTL = 5_000;
+let _configCache: { result: UserConfig | null; ts: number } | undefined;
+
 /**
  * Synchronously loads and parses the user configuration file from disk.
  * Validates strictly using userConfigSchema.
  * Returns null if the file does not exist or is malformed/invalid.
+ * Results are cached for CONFIG_CACHE_TTL ms to avoid repeated I/O + Zod validation.
  */
 export function loadUserConfig(): UserConfig | null {
+  if (_configCache && Date.now() - _configCache.ts < CONFIG_CACHE_TTL) {
+    return _configCache.result;
+  }
   if (!fs.existsSync(CONFIG_PATH)) return null;
   try {
     const content = fs.readFileSync(CONFIG_PATH, 'utf-8');
     const parsed = JSON.parse(content);
-    return userConfigSchema.parse(parsed);
+    const result = userConfigSchema.parse(parsed);
+    _configCache = { result, ts: Date.now() };
+    return result;
   } catch (e) {
     logger.warn(`[userConfig] Failed to load config.json: ${e instanceof Error ? e.message : e}. Falling back to defaults.`);
+    _configCache = { result: null, ts: Date.now() };
     return null;
   }
 }

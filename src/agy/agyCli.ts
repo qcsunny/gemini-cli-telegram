@@ -31,7 +31,7 @@ import type { AgyRunOptions, AgyRunResult } from './types.js';
 // Re-export all types and functions for backward compatibility
 export type { AgyRunOptions, AgyRunResult, AgyStreamEvent, ConversationTurn } from './types.js';
 export { isWeb2ApiModel, isDeepSeekModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
-export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory } from './conversationManager.js';
+export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearGeminiDirectHistory } from './conversationManager.js';
 export { extractUsageFromProto, extractMetadataFromProto, readUsageFromDatabase, readConversationHistory } from './protobuf.js';
 export { normalizeThinkingTags, extractThoughtBlocksAndSegments, extractThoughtAndContent } from './thoughtParser.js';
 export { getConversationsDir } from './protobuf.js';

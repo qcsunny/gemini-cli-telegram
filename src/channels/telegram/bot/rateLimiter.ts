@@ -1,7 +1,26 @@
 import { logger } from '../../../utils/logger.js';
 
+const BACKOFF_CLEANUP_INTERVAL = 300_000;
+
 export const draftBackoffUntil = new Map<number, number>();
 const draftBackoffMultiplier = new Map<number, number>();
+
+let _backoffCleanupTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Start periodic cleanup of expired backoff entries. */
+export function startBackoffCleanup(): void {
+  if (_backoffCleanupTimer) return;
+  _backoffCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [chatId, until] of draftBackoffUntil) {
+      if (now >= until) {
+        draftBackoffUntil.delete(chatId);
+        draftBackoffMultiplier.delete(chatId);
+      }
+    }
+  }, BACKOFF_CLEANUP_INTERVAL);
+  _backoffCleanupTimer.unref();
+}
 
 export function record429Backoff(chatId: number, retryAfterSec?: number): void {
   const mult = Math.min((draftBackoffMultiplier.get(chatId) ?? 1) * 2, 8);
