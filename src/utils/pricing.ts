@@ -30,14 +30,14 @@ interface PricingInfo {
  */
 const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
-    // DeepSeek V4 Pro
+    // DeepSeek V4 Pro: $0.435 / $0.003625 / $0.87
     pattern: /deepseek.*pro/i,
-    rates: { inputRate: 0.435, outputRate: 0.87, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.435, outputRate: 0.87, cacheMultiplier: 0.008333, thinkingMultiplier: 'none' }
   },
   {
-    // DeepSeek V4 Flash
+    // DeepSeek V4 Flash: $0.14 / $0.0028 / $0.28
     pattern: /deepseek.*flash/i,
-    rates: { inputRate: 0.14, outputRate: 0.28, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.14, outputRate: 0.28, cacheMultiplier: 0.02, thinkingMultiplier: 'none' }
   },
   {
     // DeepSeek R1
@@ -45,63 +45,63 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 0.55, outputRate: 2.19, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
   },
   {
-    // Claude Opus 4.x — Anthropic prompt caching is 10% of input rate, thinking billed at output rate
+    // Claude Opus 4.x: $5 / $0.50 / $25
     pattern: /opus/i,
     rates: { inputRate: 5.00, outputRate: 25.00, cacheMultiplier: 0.1, thinkingMultiplier: 'output-rate' }
   },
   {
-    // Claude Sonnet 4.x — Anthropic prompt caching is 10% of input rate, thinking billed at output rate
+    // Claude Sonnet 4.x: $3 / $0.30 / $15
     pattern: /sonnet|claude.*5/i,
     rates: { inputRate: 3.00, outputRate: 15.00, cacheMultiplier: 0.1, thinkingMultiplier: 'output-rate' }
   },
   {
-    // GPT-OSS 120B
+    // GPT-OSS 120B: $0.60 / $0.06 / $2.40
     pattern: /gpt-oss|oss/i,
-    rates: { inputRate: 2.50, outputRate: 10.00, cacheMultiplier: 0.25, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.60, outputRate: 2.40, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.6 Flash — Google prompt caching is 10% of input rate
+    // Gemini 3.6 Flash: $1.50 / $0.15 / $7.50
     pattern: /3\.6\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 7.50, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
+    rates: { inputRate: 1.50, outputRate: 7.50, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.5 Flash
+    // Gemini 3.5 Flash: $1.50 / $0.15 / $9.00
     pattern: /3\.5\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
+    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.1 Pro — ≤200K: $2/$12; >200K: $4/$18 (all input/output switches)
+    // Gemini 3.1 Pro — ≤200K: $2/$12; >200K: $4/$18
     pattern: /3\.1\s*pro/i,
     rates: {
-      inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none',
+      inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none',
       longContextRates: { inputRate: 4.00, outputRate: 18.00 }
     }
   },
   {
-    // Gemini 3.5 Flash-Lite
+    // Gemini 3.5 Flash-Lite: $0.25 / $0.03 / $1.50
     pattern: /3\.5\s*flash-lite|flash-lite/i,
-    rates: { inputRate: 0.30, outputRate: 2.50, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.25, outputRate: 1.50, cacheMultiplier: 0.12, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.x Flash (generic fallback)
     pattern: /3\s*flash/i,
-    rates: { inputRate: 0.50, outputRate: 3.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
+    rates: { inputRate: 0.50, outputRate: 3.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   },
   // --- Generics / Fallbacks ---
   {
     // General Pro keyword
     pattern: /pro/i,
-    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
+    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   },
   {
     // General Flash / Auto keyword
     pattern: /flash|auto/i,
-    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' }
+    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   }
 ];
 
 // Fallback pricing rates (Gemini 3.5 Flash)
-const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.10, thinkingMultiplier: 'none' };
+const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' };
 
 /**
  * Heuristically estimate token usage for Gemini/multilingual text.
