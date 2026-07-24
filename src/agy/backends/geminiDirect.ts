@@ -125,7 +125,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
                     inThoughts = true;
                     const timeAttr = ' time="0.0"'; // updated when thoughts finish or generation finishes
                     const tokensAttr = thinkingTokens ? ` tokens="${thinkingTokens}"` : '';
-                    onChunk?.(`<thought-gemini${timeAttr}${tokensAttr}>`);
+                    onChunk?.(`<thought${timeAttr}${tokensAttr}>`);
                   }
                   thoughtBuf += text;
                   outputBuf += text;
@@ -137,7 +137,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
                   }
                   if (inThoughts) {
                     inThoughts = false;
-                    onChunk?.('</thought-gemini>\n\n');
+                    onChunk?.('</thought>\n\n');
                   }
                   contentBuf += text;
                   outputBuf += text;
@@ -154,7 +154,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
 
     if (inThoughts) {
       inThoughts = false;
-      onChunk?.('</thought-gemini>');
+      onChunk?.('</thought>');
     }
     opts.onEvent?.({ type: 'done' });
 
@@ -166,7 +166,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
       const timeAttr = `time="${durationSec}"`;
       const tokensAttr = thinkingTokens ? ` tokens="${thinkingTokens}"` : '';
       
-      outputBuf = `<thought-gemini ${timeAttr}${tokensAttr}>${thoughtBuf}</thought-gemini>\n\n${contentBuf}`;
+      outputBuf = `<thought ${timeAttr}${tokensAttr}>${thoughtBuf}</thought>\n\n${contentBuf}`;
     } else {
       outputBuf = contentBuf;
     }

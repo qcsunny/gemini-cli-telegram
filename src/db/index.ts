@@ -79,7 +79,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       conversation_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL,
-      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct')),
+      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode')),
       created_at TEXT NOT NULL
     );
   `);

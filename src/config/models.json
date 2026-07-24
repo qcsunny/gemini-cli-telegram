@@ -1,4 +1,5 @@
 {
+  "channelOrder": ["agy", "deepseek", "opencode", "web2api"],
   "tiers": [
     {
       "name": "旗舰推理",
@@ -17,7 +18,8 @@
         "Gemini 3.1 Pro (High)",
         "Web2API: Gemini 3.1 Pro",
         "DeepSeek: Pro",
-        "Gemini 3.1 Pro (Low)"
+        "Gemini 3.1 Pro (Low)",
+        "OpenCode: Nemotron 3 Ultra Free"
       ]
     },
     {
@@ -30,11 +32,13 @@
         "Gemini 3.6 Flash (Medium)",
         "DeepSeek: Flash Thinking",
         "Gemini 3.6 Flash (Low)",
-        "GPT-OSS 120B (Medium)"
+        "GPT-OSS 120B (Medium)",
+        "OpenCode: Laguna S 2.1 Free",
+        "OpenCode: MiMo V2.5 Free"
       ]
     },
     {
-      "name": "轻量快速",
+      "name": "轻量与免费",
       "priority": 3,
       "models": [
         "Gemini 3.5 Flash (High)",
@@ -44,35 +48,11 @@
         "Web2API: Gemini Auto",
         "Gemini 3.5 Flash (Low)",
         "Web2API: Gemini 3.5 Flash Thinking Lite",
-        "Web2API: Gemini Flash Lite"
+        "Web2API: Gemini Flash Lite",
+        "OpenCode: DeepSeek V4 Flash Free",
+        "OpenCode: North Mini Code Free"
       ]
     }
-  ],
-  "defaultOrder": [
-    "Gemini 3.6 Flash (High)",
-    "Gemini 3.6 Flash (Medium)",
-    "Gemini 3.6 Flash (Low)",
-    "Gemini 3.5 Flash (High)",
-    "Gemini 3.5 Flash (Medium)",
-    "Gemini 3.5 Flash (Low)",
-    "Gemini 3.1 Pro (High)",
-    "Gemini 3.1 Pro (Low)",
-    "Claude Sonnet 4.6 (Thinking)",
-    "Claude Opus 4.6 (Thinking)",
-    "GPT-OSS 120B (Medium)",
-    "Web2API: Gemini 3.1 Pro Enhanced",
-    "Web2API: Gemini 3.1 Pro",
-    "Web2API: Gemini 3.6 Flash",
-    "Web2API: Gemini 3.6 Flash Thinking",
-    "DeepSeek: Pro Thinking",
-    "DeepSeek: Pro",
-    "DeepSeek: Flash Thinking Search",
-    "DeepSeek: Flash Thinking",
-    "Web2API: Gemini 3.5 Flash Thinking Lite",
-    "DeepSeek: Flash Search",
-    "DeepSeek: Flash",
-    "Web2API: Gemini Auto",
-    "Web2API: Gemini Flash Lite"
   ],
   "routing": {
     "Web2API: Gemini 3.1 Pro Enhanced":        "gemini-3.1-pro-enhanced",
@@ -87,6 +67,20 @@
     "DeepSeek: Flash Search":                  "deepseek-v4-flash-search",
     "DeepSeek: Flash Thinking Search":         "deepseek-v4-flash-thinking-search",
     "DeepSeek: Pro":                           "deepseek-v4-pro",
-    "DeepSeek: Pro Thinking":                  "deepseek-v4-pro-thinking"
+    "DeepSeek: Pro Thinking":                  "deepseek-v4-pro-thinking",
+    "OpenCode: DeepSeek V4 Flash":             "opencode/deepseek-v4-flash",
+    "OpenCode: DeepSeek V4 Pro":               "opencode/deepseek-v4-pro",
+    "OpenCode: DeepSeek V4 Flash Free":        "opencode/deepseek-v4-flash-free",
+    "OpenCode: Nemotron 3 Ultra Free":         "opencode/nemotron-3-ultra-free",
+    "OpenCode: North Mini Code Free":          "opencode/north-mini-code-free",
+    "OpenCode: Laguna S 2.1 Free":             "opencode/laguna-s-2.1-free",
+    "OpenCode: MiMo V2.5 Free":              "opencode/mimo-v2.5-free"
+  },
+  "descriptions": {
+    "OpenCode: Nemotron 3 Ultra Free":       "综合推理最强，代码能力顶级 · 适用：复杂算法设计、架构决策、高难度调试",
+    "OpenCode: DeepSeek V4 Flash Free":      "速度快、成本低、能力均衡 · 适用：日常编码、中等复杂度任务、高频调用",
+    "OpenCode: Laguna S 2.1 Free":           "Agent编码能力突出，工具调用强 · 适用：自动化工作流、多步骤任务、MLOps管道",
+    "OpenCode: MiMo V2.5 Free":              "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解",
+    "OpenCode: North Mini Code Free":        "轻量高效，响应迅速 · 适用：简单脚本编写、代码片段生成、快速原型设计"
   }
 }

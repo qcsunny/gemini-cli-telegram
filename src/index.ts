@@ -74,8 +74,6 @@ export async function startTelegramDaemon(
     clearModelOrderCache();
   });
 
-  await bot.start();
-
   // Restore web2api/deepseek conversation histories from SQLite (survive restarts)
   restoreHistoriesFromDb();
 }

@@ -14,7 +14,7 @@ import { messageCache } from '../../../utils/messageCache.js';
 import { getBrowseRoot, getInboxDir } from '../../../config/userConfig.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { loadMessages } from '../../../agy/messageStore.js';
-import { ICONS, buildMainKeyboard, buildModelKeyboard, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
+import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
 import { extractTitleFromMarkdown } from './helpers.js';
 import { PROJECTS_PER_PAGE } from './projectHandlers.js';
 
@@ -98,18 +98,48 @@ export function registerCallbackRouter(
       const session = sessionManager.getSession(chatId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
+      const page = 0;
+      const start = page * MODELS_PER_PAGE;
+      const pageModels = models.slice(start, start + MODELS_PER_PAGE);
+      const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
 
-      const modelItems = models.map((m, i) => ({
-        id: (i + 1).toString(),
+      const modelItems = pageModels.map((m, i) => ({
+        id: ((page * MODELS_PER_PAGE) + i + 1).toString(),
         display: m,
         active: m === currentModel,
       }));
 
       await ctx.editMessageText(
-        `${ICONS.model} <b>Model Selection</b>\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
+        `${ICONS.model} <b>Model Selection</b> (Page ${page + 1}/${totalPages})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
-          reply_markup: buildModelKeyboard(modelItems),
+          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page),
+        },
+      );
+      return;
+    }
+
+    if (data.startsWith('/model_page ')) {
+      const page = parseInt(data.replace('/model_page ', ''), 10);
+      const session = sessionManager.getSession(chatId);
+      const currentModel = session?.config?.getModel() || 'unknown';
+      const models = await getAvailableModels();
+      const start = page * MODELS_PER_PAGE;
+      const pageModels = models.slice(start, start + MODELS_PER_PAGE);
+      const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
+
+      ctx.answerCallbackQuery(`Page ${page + 1}`).catch(e => logger.error(`Failed callback: ${e}`));
+      const modelItems = pageModels.map((m, i) => ({
+        id: ((page * MODELS_PER_PAGE) + i + 1).toString(),
+        display: m,
+        active: m === currentModel,
+      }));
+
+      await ctx.editMessageText(
+        `${ICONS.model} <b>Model Selection</b> (Page ${page + 1}/${totalPages})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page),
         },
       );
       return;

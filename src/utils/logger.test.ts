@@ -10,15 +10,16 @@ import * as fs from 'node:fs';
 describe('logger', () => {
   beforeEach(async () => {
     vi.resetModules();
+    // Force production mode so pino uses multistream → file output (not pino-pretty → stdout)
+    vi.stubEnv('NODE_ENV', 'production');
   });
 
   afterEach(async () => {
-    const { ERROR_LOG_PATH } = await import('./logger.js');
-    if (fs.existsSync(ERROR_LOG_PATH)) {
-      try {
-        fs.unlinkSync(ERROR_LOG_PATH);
-      } catch {
-        // ignore cleanup error
+    vi.unstubAllEnvs();
+    const { ERROR_LOG_PATH, DAEMON_LOG_PATH } = await import('./logger.js');
+    for (const p of [ERROR_LOG_PATH, DAEMON_LOG_PATH]) {
+      if (fs.existsSync(p)) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
       }
     }
   });
@@ -50,13 +51,19 @@ describe('logger', () => {
   });
 
   it('should write error logs to error.log file', async () => {
-    const { logger, ERROR_LOG_PATH } = await import('./logger.js');
+    const { logger, pinoInstance, ERROR_LOG_PATH } = await import('./logger.js');
 
     if (fs.existsSync(ERROR_LOG_PATH)) {
       fs.unlinkSync(ERROR_LOG_PATH);
     }
 
     logger.error('unit test error writing to log', new Error('test failure details'));
+
+    // pino multistream is async — flush and wait for file write
+    await new Promise<void>((resolve) => {
+      pinoInstance.flush();
+      setTimeout(resolve, 200);
+    });
 
     expect(fs.existsSync(ERROR_LOG_PATH)).toBe(true);
     const content = fs.readFileSync(ERROR_LOG_PATH, 'utf-8');

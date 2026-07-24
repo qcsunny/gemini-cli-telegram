@@ -44,8 +44,8 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
       'Content-Length': Buffer.byteLength(body),
+      ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
     },
   };
 
@@ -80,7 +80,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
               if (!inThoughts) {
                 inThoughts = true;
                 const timeAttr = ' time="0.0"';
-                const startTag = `<thought-gemini${timeAttr}>`;
+                const startTag = `<thinking${timeAttr}>`;
                 if (onChunk) onChunk(startTag);
               }
               thoughtBuf += reasoning;
@@ -94,7 +94,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
               }
               if (inThoughts) {
                 inThoughts = false;
-                const endTag = '</thought-gemini>\n\n';
+                const endTag = '</thinking>\n\n';
                 if (onChunk) onChunk(endTag);
               }
               contentBuf += delta;
@@ -110,7 +110,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
       res.on('end', () => {
         if (inThoughts) {
           inThoughts = false;
-          if (onChunk) onChunk('</thought-gemini>');
+          if (onChunk) onChunk('</thinking>');
         }
         opts.onEvent?.({ type: 'done' });
 
@@ -118,7 +118,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
         if (thoughtStartTime) {
           if (!thoughtEndTime) thoughtEndTime = Date.now();
           const durationSec = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
-          finalOutput = `<thought-gemini time="${durationSec}">${thoughtBuf}</thought-gemini>\n\n${contentBuf}`;
+          finalOutput = `<thinking time="${durationSec}">${thoughtBuf}</thinking>\n\n${contentBuf}`;
         } else {
           finalOutput = contentBuf;
         }
@@ -147,7 +147,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (thoughtStartTime) {
         if (!thoughtEndTime) thoughtEndTime = Date.now();
         const durationSec = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
-        finalOutput = `<thought-gemini time="${durationSec}">${thoughtBuf}</thought-gemini>\n\n${contentBuf}`;
+        finalOutput = `<thinking time="${durationSec}">${thoughtBuf}</thinking>\n\n${contentBuf}`;
       } else {
         finalOutput = contentBuf;
       }

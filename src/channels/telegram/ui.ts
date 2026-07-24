@@ -87,13 +87,16 @@ export function buildMainKeyboard(): InlineKeyboard {
     .text(`${ICONS.help} Help`, '/help');
 }
 
-/**
- * Builds an inline keyboard displaying available AI models for selection.
- */
-export function buildModelKeyboard(models: Array<{ id: string; display: string; active?: boolean }>): InlineKeyboard {
+export const MODELS_PER_PAGE = 8;
+
+export function buildModelKeyboard(
+  models: Array<{ id: string; display: string; active?: boolean }>,
+  hasMore = false,
+  page = 0,
+): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   const chunkSize = 1;
-  
+
   for (let i = 0; i < models.length; i += chunkSize) {
     const chunk = models.slice(i, i + chunkSize);
     for (const model of chunk) {
@@ -103,7 +106,22 @@ export function buildModelKeyboard(models: Array<{ id: string; display: string; 
     }
     keyboard.row();
   }
-  
+
+  const navRow: Array<{ text: string; callback: string }> = [];
+  if (page > 0) {
+    navRow.push({ text: '« Prev', callback: `/model_page ${page - 1}` });
+  }
+  if (hasMore) {
+    navRow.push({ text: 'Next »', callback: `/model_page ${page + 1}` });
+  }
+
+  if (navRow.length > 0) {
+    for (const btn of navRow) {
+      keyboard.text(btn.text, btn.callback);
+    }
+    keyboard.row();
+  }
+
   keyboard.text(`${ICONS.back} Main Menu`, '/start');
   return keyboard;
 }

@@ -18,8 +18,14 @@ export const web2apiHistories = new Map<string, Web2ApiMessage[]>();
 export const deepseekHistories = new Map<string, Web2ApiMessage[]>();
 export const geminiDirectHistories = new Map<string, any[]>();
 
+export const opencodeHistories = new Map<string, Web2ApiMessage[]>();
+
+export function clearOpenCodeHistory(conversationId: string): void {
+  opencodeHistories.delete(conversationId);
+}
+
 export function trimHistoryMaps(): void {
-  for (const map of [web2apiHistories, deepseekHistories, geminiDirectHistories]) {
+  for (const map of [web2apiHistories, deepseekHistories, geminiDirectHistories, opencodeHistories]) {
     if (map.size <= MAX_HISTORY_ENTRIES) continue;
     const keys = [...map.keys()];
     const toDelete = keys.slice(0, map.size - MAX_HISTORY_ENTRIES);
@@ -35,9 +41,13 @@ export function makeDeepSeekConvId(): string {
   return `deepseek-${globalThis.crypto.randomUUID()}`;
 }
 
-/** Restore web2api/deepseek/gemini-direct conversation histories from SQLite on startup. */
+export function makeOpenCodeConvId(): string {
+  return `opencode-${globalThis.crypto.randomUUID()}`;
+}
+
+/** Restore web2api/deepseek/gemini-direct/opencode conversation histories from SQLite on startup. */
 export function restoreHistoriesFromDb(): void {
-  restoreAllHistories(web2apiHistories, deepseekHistories, geminiDirectHistories);
+  restoreAllHistories(web2apiHistories, deepseekHistories, geminiDirectHistories, opencodeHistories);
 }
 
 export function clearDeepSeekHistory(conversationId: string): void {

@@ -9,7 +9,7 @@ import { eq, and } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import { logger } from '../utils/logger.js';
 
-type Backend = 'web2api' | 'deepseek' | 'gemini-direct';
+type Backend = 'web2api' | 'deepseek' | 'gemini-direct' | 'opencode';
 
 export interface StoredMessage {
   role: 'user' | 'assistant';
@@ -95,6 +95,7 @@ export function restoreAllHistories(
   web2apiHistories: Map<string, StoredMessage[]>,
   deepseekHistories: Map<string, StoredMessage[]>,
   geminiDirectHistories: Map<string, StoredMessage[]>,
+  opencodeHistories?: Map<string, StoredMessage[]>,
 ): void {
   try {
     const db = getDb();
@@ -114,6 +115,7 @@ export function restoreAllHistories(
         row.backend === 'web2api' ? web2apiHistories :
         row.backend === 'deepseek' ? deepseekHistories :
         row.backend === 'gemini-direct' ? geminiDirectHistories :
+        row.backend === 'opencode' ? opencodeHistories :
         null;
       if (map) {
         map.set(row.conversationId, msgs);
