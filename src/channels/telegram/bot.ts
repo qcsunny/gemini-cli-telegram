@@ -77,12 +77,12 @@ export interface TelegramBotOptions {
 
 // ── Sequentialize key ──
 
-function getSequentialKey(ctx: any): string | undefined {
-  if (ctx.callbackQuery) {
-    return undefined;
-  }
+function getSequentialKey(ctx: Context): string | undefined {
   const chatId = ctx.chat?.id;
   if (!chatId) return undefined;
+  if (ctx.callbackQuery) {
+    return `callback:${chatId}`;
+  }
   const text = ctx.message?.text ?? '';
   if (text.startsWith('/cancel')) {
     return `control:${chatId}`;

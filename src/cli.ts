@@ -53,26 +53,39 @@ program
       process.exit(1);
     }
 
+    const pidPath = getPidPath(config);
+
+    // Unified singleton check for both live and background modes
+    if (fs.existsSync(pidPath)) {
+      try {
+        const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+        process.kill(existingPid, 0); // Check if process is alive
+        console.error(`Daemon is already running (pid ${existingPid}). Use 'gemini-cli-telegram stop' first.`);
+        process.exit(1);
+      } catch {
+        // Stale pid file, remove it and continue
+        try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
+      }
+    }
+
     const isLive =
       options.live ||
       process.env['_GEMINI_CLI_TELEGRAM_DAEMON'] === '1';
 
+    try {
+      fs.writeFileSync('/tmp/cli_debug.log', JSON.stringify({ options, argv: process.argv, isLive, env: process.env['_GEMINI_CLI_TELEGRAM_DAEMON'] }, null, 2));
+    } catch {}
+
     if (isLive) {
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(getPidPath(config), process.pid.toString());
+      fs.writeFileSync(pidPath, process.pid.toString());
 
-      // Redirect stdout/stderr to the canonical log file (append mode) so that
-      // logs are always written to LOG_PATH regardless of how the process is
-      // launched (systemd, nohup, or a terminal). This avoids the situation where
-      // a stdio redirection (e.g. systemd StandardOutput=append:) holds a file
-      // descriptor to a different inode than the on-disk log file after the log is
-      // rotated/recreated, causing logs to silently disappear.
       const logStream = fs.createWriteStream(getLogPath(config), { flags: 'a' });
       process.stdout.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stdout.write;
       process.stderr.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stderr.write;
 
       const cleanup = () => {
-        try { fs.unlinkSync(getPidPath(config)); } catch { /* ignore */ }
+        try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
       };
       process.once('SIGTERM', () => { cleanup(); process.exit(0); });
       process.once('SIGINT', () => { cleanup(); process.exit(0); });
@@ -86,18 +99,6 @@ program
       });
     } else {
       // --- Background mode (default): spawn detached child ---
-
-      if (fs.existsSync(getPidPath(config))) {
-        const existingPid = parseInt(fs.readFileSync(getPidPath(config), 'utf-8').trim(), 10);
-        try {
-          process.kill(existingPid, 0);
-          console.log(`Daemon is already running (pid ${existingPid}). Use 'gemini-cli-telegram stop' first.`);
-          process.exit(1);
-        } catch {
-          // Stale pid file, continue
-        }
-      }
-
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
       const logPath = getLogPath(config);
       const logFd = fs.openSync(logPath, 'a');
@@ -127,7 +128,6 @@ program
       console.log(`Errors: ${logPath}.err`);
       console.log(`Stop:  gemini-cli-telegram stop`);
 
-      // Show the bot's Telegram link
       try {
         const res = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/getMe`);
         const data = (await res.json()) as { ok: boolean; result?: { username?: string } };

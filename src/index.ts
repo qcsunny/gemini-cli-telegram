@@ -74,6 +74,9 @@ export async function startTelegramDaemon(
     clearModelOrderCache();
   });
 
+  // Start the Telegram bot (runner-based polling via @grammyjs/runner)
+  await bot.start();
+
   // Restore web2api/deepseek conversation histories from SQLite (survive restarts)
   restoreHistoriesFromDb();
 }

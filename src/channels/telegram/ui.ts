@@ -87,7 +87,7 @@ export function buildMainKeyboard(): InlineKeyboard {
     .text(`${ICONS.help} Help`, '/help');
 }
 
-export const MODELS_PER_PAGE = 8;
+export const MODELS_PER_PAGE = 11;
 
 export function buildModelKeyboard(
   models: Array<{ id: string; display: string; active?: boolean }>,
