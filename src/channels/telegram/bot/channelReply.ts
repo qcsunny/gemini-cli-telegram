@@ -42,6 +42,20 @@ function buildRichMessageMarkdownPayload(markdown: string): InputRichMessage<nev
   return { markdown };
 }
 
+function getCacheMarkdown(text: string | StructuredMessage): string {
+  return typeof text === 'string'
+    ? text
+    : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
+}
+
+function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
+  let html = getHtmlPayload(text, isStreaming);
+  if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
+    html = '正在思考...<br><br>' + html;
+  }
+  return html;
+}
+
 const draftThrottleTimestamps = new Map<number, number>();
 const DRAFT_THROTTLE_MS = 250;
 
@@ -258,9 +272,7 @@ export function buildChannelReply(
   };
   const safeEdit = async (messageId: number, text: string | StructuredMessage, html = true) => {
     try {
-      const cacheMarkdown = typeof text === 'string'
-        ? text
-        : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
+      const cacheMarkdown = getCacheMarkdown(text);
 
       if (html) {
         const finalHtml = typeof text === 'string' && text.startsWith('___RAW_HTML___') 
@@ -277,9 +289,7 @@ export function buildChannelReply(
       }
       messageCache.set(messageId, cacheMarkdown);
     } catch (e: any) {
-      const cacheMarkdown = typeof text === 'string'
-        ? text
-        : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
+      const cacheMarkdown = getCacheMarkdown(text);
       if (e?.description?.includes('message is not modified')) {
         messageCache.set(messageId, cacheMarkdown);
         return;
@@ -310,9 +320,7 @@ export function buildChannelReply(
       logger.debug(`[DEBUG] sendRich called: originalTextLen=${textLen}`);
       logger.info(`[SENDRICH] sending real message via sendRichMessage (len=${textLen})`);
 
-      const safeMarkdown = typeof originalText === 'string'
-        ? originalText
-        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
+      const safeMarkdown = getCacheMarkdown(originalText);
 
       try {
         // Option A (AGENTS.md Mandate): Native InputRichBlock via sendRichMessage.
@@ -390,10 +398,7 @@ export function buildChannelReply(
 
         // Option B: Rich HTML via sendRichMessage (native server-side HTML→blocks parsing)
         try {
-          let html = getHtmlPayload(originalText);
-          if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
-            html = '正在思考...<br><br>' + html;
-          }
+          const html = getHtmlPayloadWithDetails(originalText);
           logger.debug(`[SENDRICH] Option B: sending HTML (html.length=${html.length})`);
           const richMessage = buildRichMessageHtmlPayload(html);
           const res = await ctx.api.sendRichMessage(chatId, richMessage, {
@@ -421,10 +426,7 @@ export function buildChannelReply(
 
         // Option D: HTML Fallback via standard ctx.reply
         try {
-          let htmlText = getHtmlPayload(originalText);
-          if (htmlText.includes('<details') && !htmlText.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
-            htmlText = '正在思考...<br><br>' + htmlText;
-          }
+          const htmlText = getHtmlPayloadWithDetails(originalText);
           const msg = await ctx.reply(htmlText, {
             parse_mode: 'HTML',
             message_thread_id: messageThreadId,
@@ -459,9 +461,7 @@ export function buildChannelReply(
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
       logger.info(`[TRACE-EVIDENCE] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
-      const cacheMarkdown = typeof originalText === 'string'
-        ? originalText
-        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
+      const cacheMarkdown = getCacheMarkdown(originalText);
 
       // Throttle to avoid 429 on rapid stream updates
       await throttleDraft(chatId);
@@ -491,10 +491,7 @@ export function buildChannelReply(
 
       // Option B: Native Rich HTML with native thinking animation
       try {
-        let html = getHtmlPayload(originalText, true);
-        if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
-          html = '正在思考...<br><br>' + html;
-        }
+        const html = getHtmlPayloadWithDetails(originalText, true);
 
         const contentText = typeof originalText === 'string'
           ? originalText.replace(/<thought[^>]*>[\s\S]*?<\/thought[^>]*>/gi, '').replace(/<thought-gemini[^>]*>[\s\S]*?<\/thought-gemini[^>]*>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think[^>]*>/gi, '').trim()
@@ -535,9 +532,7 @@ export function buildChannelReply(
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
       logger.info(`[TRACE-EVIDENCE] editRichDraft called: draftId=${draftId}, isStreaming=${isStreaming}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
-      const cacheMarkdown = typeof originalText === 'string'
-        ? originalText
-        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
+      const cacheMarkdown = getCacheMarkdown(originalText);
 
       // Throttle to avoid 429 on rapid stream updates
       await throttleDraft(chatId);
@@ -568,10 +563,7 @@ export function buildChannelReply(
 
       // Option B: Rich HTML
       try {
-        let html = getHtmlPayload(originalText, isStreaming);
-        if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
-          html = '正在思考...<br><br>' + html;
-        }
+        const html = getHtmlPayloadWithDetails(originalText, isStreaming);
 
         const hasThought = typeof originalText === 'string'
           ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
@@ -662,9 +654,7 @@ export function buildChannelReply(
         : (originalText.content.length + (originalText.thought?.length || 0));
       logger.debug(`[DEBUG] editRich called: messageId=${messageId}, originalTextLen=${textLen}`);
 
-      const cacheMarkdown = typeof originalText === 'string'
-        ? originalText
-        : `${originalText.content}${originalText.thought ? `\n\n<thought>\n${originalText.thought}\n</thought>` : ''}`;
+      const cacheMarkdown = getCacheMarkdown(originalText);
 
       // If we have an active draft, the messageId is actually a draftId.
       // Per Telegram Bot API, a streamed draft is an EPHEMERAL preview that is
@@ -706,10 +696,7 @@ export function buildChannelReply(
 
       // Option B: Native Rich HTML
       try {
-        let html = getHtmlPayload(originalText);
-        if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
-          html = '正在思考...<br><br>' + html;
-        }
+        const html = getHtmlPayloadWithDetails(originalText);
         logger.debug(`[TELEGRAM PAYLOAD] editRich originalText.length=${textLen} html.length=${html.length} containsDetails=${html.includes('<details')} containsThoughtSummary=${html.includes('🧠 思考过程') || html.includes('Thinking Process')} containsBodyTitle=${html.includes('证明') || html.includes('Proof')}`);
 
         logger.debug(`[DEBUG] editMessageText (Option B) called: messageId=${messageId}`);
