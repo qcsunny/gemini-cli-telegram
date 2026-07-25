@@ -8,8 +8,6 @@
  * detached processes vs running in foreground (--live).
  */
 
-// Suppress Node.js deprecation warnings from upstream dependencies
-process.noDeprecation = true;
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -28,6 +26,21 @@ import { startTelegramDaemon } from './index.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function acquirePidLock(pidPath: string): boolean {
+  try {
+    const fd = fs.openSync(pidPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o644);
+    fs.writeSync(fd, process.pid.toString());
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const program = new Command();
 
@@ -55,40 +68,48 @@ program
 
     const pidPath = getPidPath(config);
 
-    // Unified singleton check for both live and background modes
-    if (fs.existsSync(pidPath)) {
-      try {
-        const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
-        process.kill(existingPid, 0); // Check if process is alive
-        console.error(`Daemon is already running (pid ${existingPid}). Use 'gemini-cli-telegram stop' first.`);
-        process.exit(1);
-      } catch {
-        // Stale pid file, remove it and continue
-        try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
-      }
-    }
-
     const isLive =
       options.live ||
       process.env['_GEMINI_CLI_TELEGRAM_DAEMON'] === '1';
 
-    try {
-      fs.writeFileSync('/tmp/cli_debug.log', JSON.stringify({ options, argv: process.argv, isLive, env: process.env['_GEMINI_CLI_TELEGRAM_DAEMON'] }, null, 2));
-    } catch {}
-
+    // Atomic PID lock: only one process can ever hold it
     if (isLive) {
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      fs.writeFileSync(pidPath, process.pid.toString());
+      if (!acquirePidLock(pidPath)) {
+        try {
+          const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+          process.kill(existingPid, 0);
+          console.error(`Daemon already running (pid ${existingPid}). Waiting for graceful handover...`);
+          while (true) {
+            if (acquirePidLock(pidPath)) break;
+            try {
+              const content = fs.readFileSync(pidPath, 'utf-8').trim();
+              const pid = parseInt(content, 10);
+              process.kill(pid, 0);
+              await sleep(2000);
+            } catch {
+              await sleep(3000);
+              try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
+              if (acquirePidLock(pidPath)) break;
+            }
+          }
+          console.log('PID lock acquired. Starting daemon...');
+        } catch {
+          try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
+          if (!acquirePidLock(pidPath)) {
+            console.error('Failed to acquire PID lock.');
+            process.exit(1);
+          }
+        }
+      }
 
       const logStream = fs.createWriteStream(getLogPath(config), { flags: 'a' });
       process.stdout.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stdout.write;
       process.stderr.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stderr.write;
 
-      const cleanup = () => {
-        try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
-      };
-      process.once('SIGTERM', () => { cleanup(); process.exit(0); });
-      process.once('SIGINT', () => { cleanup(); process.exit(0); });
+      // SIGTERM/SIGINT: delete PID, let index.ts drain bot and exit
+      process.once('SIGTERM', () => { try { fs.unlinkSync(pidPath); } catch { /* ignore */ } });
+      process.once('SIGINT', () => { try { fs.unlinkSync(pidPath); } catch { /* ignore */ } });
 
       await startTelegramDaemon({
         token: config.telegramBotToken,
