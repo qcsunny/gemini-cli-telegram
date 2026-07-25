@@ -25,7 +25,6 @@ import { runWeb2Api } from './backends/web2api.js';
 import { runDeepSeek } from './backends/deepseek.js';
 import { runGeminiDirect } from './backends/geminiDirect.js';
 import { runOpenCode } from './backends/opencode.js';
-import { extractThoughtAndContent } from './thoughtParser.js';
 import { readUsageFromDatabase, getConversationsDir } from './protobuf.js';
 import type { AgyRunOptions, AgyRunResult } from './types.js';
 
