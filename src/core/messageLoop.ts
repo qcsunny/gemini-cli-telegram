@@ -437,12 +437,6 @@ export async function processMessage(
         logger.info(`[messageLoop] Skipping transcript thought recovery since thoughtBuffer already contains real-time thought: length=${thoughtBuffer.length}`);
       }
 
-      // 3b. Fallback: recover reasoning from OpenCode DB (via result.reasoning)
-      if (thoughtBuffer.length === 0 && finalResult.reasoning) {
-        thoughtBuffer = finalResult.reasoning;
-        logger.info(`[messageLoop] Recovered thought from OpenCode DB: length=${thoughtBuffer.length}`);
-      }
-
       // 5. Finalize: send the complete content as a real persisted message.
       // The HTML path (via sendRich) handles thought→details, blockquote
       // stripping, heading hoisting, and footer formatting internally.
