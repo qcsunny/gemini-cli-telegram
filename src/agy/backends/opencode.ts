@@ -71,6 +71,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
     let stepFinished = false;
     let usageTokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } | undefined;
 
+    let openCodeSessionId = '';
     let leftover = '';
     child.stdout.on('data', (chunk: Buffer) => {
       const text = stdoutDecoder.write(chunk);
@@ -82,6 +83,9 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
         if (!line.trim()) continue;
         try {
           const event = JSON.parse(line);
+          if (event.type === 'step_start' && event.sessionID) {
+            openCodeSessionId = event.sessionID;
+          }
           const part = event.part || {};
           if (part.type === 'reasoning' && part.text) {
             logger.debug(`[TRACE opencode] reasoning event: text.length=${part.text.length} preview="${part.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
@@ -140,22 +144,24 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       saveMessage(convId, 'assistant', trimmedOutput, 'opencode');
 
       let reasoningText = '';
-      try {
-        const opencodeDb = getOpenCodeDbPath();
-        if (fs.existsSync(opencodeDb)) {
-          const db = new Database(opencodeDb, { readonly: true });
-          const rows = db.prepare('SELECT data FROM part WHERE session_id=? AND json_extract(data, \'$.type\') = ? ORDER BY rowid').all(convId, 'reasoning') as { data: string }[];
-          for (const row of rows) {
-            const d = JSON.parse(row.data);
-            if (d.text) reasoningText += d.text + '\n';
+      if (openCodeSessionId) {
+        try {
+          const opencodeDb = getOpenCodeDbPath();
+          if (fs.existsSync(opencodeDb)) {
+            const db = new Database(opencodeDb, { readonly: true });
+            const rows = db.prepare('SELECT data FROM part WHERE session_id=? AND json_extract(data, \'$.type\') = ? ORDER BY rowid').all(openCodeSessionId, 'reasoning') as { data: string }[];
+            for (const row of rows) {
+              const d = JSON.parse(row.data);
+              if (d.text) reasoningText += d.text + '\n';
+            }
+            db.close();
+            if (reasoningText) {
+              logger.info(`[opencode] Recovered ${reasoningText.length} chars of reasoning from DB for session ${openCodeSessionId}`);
+            }
           }
-          db.close();
-          if (reasoningText) {
-            logger.info(`[opencode] Recovered ${reasoningText.length} chars of reasoning from DB for session ${convId}`);
-          }
+        } catch (e: any) {
+          logger.warn(`[opencode] Failed to read reasoning from DB: ${e.message}`);
         }
-      } catch (e: any) {
-        logger.warn(`[opencode] Failed to read reasoning from DB: ${e.message}`);
       }
 
       resolve({
