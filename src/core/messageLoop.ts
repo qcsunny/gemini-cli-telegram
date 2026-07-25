@@ -89,8 +89,15 @@ export async function processMessage(
   // Render the whole authoritative content to the wire (draft while streaming,
   // real message once finalized).
   const flushBlocks = async () => {
+    const stripped = answerBuffer.trim()
+      .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
+      .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
+      .replace(/<\/?thought[^>]*>/gi, '')
+      .replace(/<\/?thinking[^>]*>/gi, '')
+      .replace(/<\/?think[^>]*>/gi, '')
+      .trim();
     const content: { content: string; thought?: string } = {
-      content: answerBuffer.trim(),
+      content: stripped,
     };
     if (thoughtBuffer.trim()) content.thought = thoughtBuffer.trim();
 
@@ -411,16 +418,14 @@ export async function processMessage(
         }
       }
 
-      // Aggressive stray thought-tag cleanup: if any unpaired <thought> / <thought-gemini>
+      // Aggressive stray thought-tag cleanup: if any unpaired <thought>
       // tags survived the extractThoughtAndContent step (e.g. an upstream interrupt
       // mid-tag while body text was already streaming), strip them here so they never
       // leak as literal text into the user-facing final message.
       answerBuffer = answerBuffer
         .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
-        .replace(/<thought-gemini[^>]*>[\s\S]*?<\/thought-gemini>/gi, '')
         .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
         .replace(/<\/?thought[^>]*>/gi, '')
-        .replace(/<\/?thought-gemini[^>]*>/gi, '')
         .replace(/<\/?thinking[^>]*>/gi, '')
         .replace(/<\/?think[^>]*>/gi, '')
         .trim();

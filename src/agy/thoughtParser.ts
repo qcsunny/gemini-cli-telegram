@@ -1,11 +1,11 @@
 /**
  * @file thoughtParser.ts
  * @description Thought/reasoning tag normalization and extraction utilities.
- * Handles multiple tag variants: <thought-gemini>, <thought>, <thinking>, [thought:...], and canonical <think>.
+ * Handles multiple tag variants: <thought>, <thinking>, [thought:...], and canonical <think>.
  */
 
 export interface ParsedBlock {
-  type: 'thought' | 'thought-gemini' | 'thinking' | 'think' | 'bracket';
+  type: 'thought' | 'thinking' | 'think' | 'bracket';
   startTagIndex: number;
   contentStartIndex: number;
   contentEndIndex: number;
@@ -31,7 +31,6 @@ function cleanInnerText(rawText: string): string {
 
 function getEndTagLength(type: ParsedBlock['type']): number {
   switch (type) {
-    case 'thought-gemini': return 17; // '</thought-gemini>'
     case 'thought': return 10;        // '</thought>'
     case 'thinking': return 11;       // '</thinking>'
     case 'think': return 8;           // '</think>'
@@ -61,9 +60,8 @@ function matchTag(str: string, index: number, prefix: string): boolean {
  * Normalize all thinking-tag variants to the canonical `<think>` / `</think>`.
  *
  * Conversion map:
- *   `<thought-gemini ...>` / `<thought ...>` / `<thinking ...>` / `[thought:`
- *   → `<think ...>`
- *   `</thought-gemini>` / `</thought>` / `</thinking>` → `</think>`
+ *   `<thought ...>` / `<thinking ...>` / `[thought:` → `<think ...>`
+ *   `</thought>` / `</thinking>` → `</think>`
  *   `[thought:content]` → `<think>content</think>`
  *
  * Content inside ``` code fences and inline `` code is skipped.
@@ -111,13 +109,12 @@ export function normalizeThinkingTags(text: string): string {
     }
 
     // Closing tags
-    if (peek('</thought-gemini>')) { out.push('</think>'); i += 17; continue; }
     if (peek('</thought>')) { out.push('</think>'); i += 10; continue; }
     if (peek('</thinking>')) { out.push('</think>'); i += 11; continue; }
 
     // Opening tags — extract attributes before converting
-    // <thought-gemini time="..." tokens="...">
-    if (peek('<thought-gemini')) {
+    // <thought time="...">
+    if (peek('<thought') && !peek('<thought-') && isTagBreak(i + 8)) {
       const gtIdx = text.indexOf('>', i);
       if (gtIdx !== -1) {
         const tagContent = text.slice(i, gtIdx + 1);
@@ -126,19 +123,6 @@ export function normalizeThinkingTags(text: string): string {
         const attrs = [];
         if (timeMatch) attrs.push(`time="${timeMatch[1]}"`);
         if (tokensMatch) attrs.push(`tokens="${tokensMatch[1]}"`);
-        out.push(`<think${attrs.length ? ' ' + attrs.join(' ') : ''}>`);
-        i = gtIdx + 1;
-        continue;
-      }
-    }
-    // <thought time="...">
-    if (peek('<thought') && !peek('<thought-') && isTagBreak(i + 8)) {
-      const gtIdx = text.indexOf('>', i);
-      if (gtIdx !== -1) {
-        const tagContent = text.slice(i, gtIdx + 1);
-        const timeMatch = tagContent.match(/time=(?:"|')([^"']*?)(?:"|')/i);
-        const attrs = [];
-        if (timeMatch) attrs.push(`time="${timeMatch[1]}"`);
         out.push(`<think${attrs.length ? ' ' + attrs.join(' ') : ''}>`);
         i = gtIdx + 1;
         continue;
@@ -230,10 +214,6 @@ export function extractThoughtBlocksAndSegments(text: string): {
       matchedType = 'think';
       matchedPrefix = '<think';
       endTagStr = '</think>';
-    } else if (matchTag(normalized, i, '<thought-gemini')) {
-      matchedType = 'thought-gemini';
-      matchedPrefix = '<thought-gemini';
-      endTagStr = '</thought-gemini>';
     } else if (matchTag(normalized, i, '<thought')) {
       matchedType = 'thought';
       matchedPrefix = '<thought';
@@ -264,7 +244,7 @@ export function extractThoughtBlocksAndSegments(text: string): {
           contentStart = startTagEnd;
 
           // Also handle 'think' for metadata extraction
-          if (matchedType === 'thought-gemini' || matchedType === 'thought' || matchedType === 'thinking' || matchedType === 'think') {
+          if (matchedType === 'thought' || matchedType === 'thinking' || matchedType === 'think') {
             const startTagContent = normalized.slice(i + matchedPrefix.length, gtIdx);
             const timeMatch = startTagContent.match(/time=(?:"|')([^"']*?)(?:"|')/i);
             const tokensMatch = startTagContent.match(/tokens=(?:"|')([^"']*?)(?:"|')/i);
@@ -381,7 +361,7 @@ export function extractThoughtAndContent(text: string): {
   let geminiTime: string | undefined;
   let geminiTokens: string | undefined;
   for (const seg of res.segments) {
-    if (seg.type === 'thought' && (seg.block?.type === 'thought-gemini' || seg.block?.type === 'think')) {
+    if (seg.type === 'thought' && seg.block?.type === 'think') {
       if (seg.block.time && !geminiTime) geminiTime = seg.block.time;
       if (seg.block.tokens && !geminiTokens) geminiTokens = seg.block.tokens;
     }
