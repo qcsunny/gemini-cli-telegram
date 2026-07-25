@@ -172,7 +172,7 @@ describe('processMessage', () => {
   });
 
   it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
-    // Chain from Web2API: Gemini Flash Lite is 3 models long under monotonic downgrade tier system (Tier 3 models from index 7 to end).
+    // Chain from Web2API: Gemini Flash Lite is 4 models long under monotonic downgrade tier system (Tier 3 models from index 7 to end).
     // Each model is retried 3x, then downgraded. When the LAST model in the chain
     // (OpenCode: North Mini Code Free) also fails its 3 retries, the session must
     // terminate — it must NOT wrap back to higher tiers.
@@ -188,15 +188,15 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // chain.length (3) * RETRIES_PER_MODEL (3) = 9 total attempts.
-    expect(runAgyPrint).toHaveBeenCalledTimes(9);
+    // chain.length (4) * RETRIES_PER_MODEL (3) = 12 total attempts.
+    expect(runAgyPrint).toHaveBeenCalledTimes(12);
     // First 3 attempts: original model.
     expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
     expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
     // Last 3 attempts: downgraded last model (OpenCode: North Mini Code Free).
-    expect(runAgyPrint).toHaveBeenNthCalledWith(7, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
-    expect(runAgyPrint).toHaveBeenNthCalledWith(9, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
-    // NO 10th call.
+    expect(runAgyPrint).toHaveBeenNthCalledWith(10, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(12, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
+    // NO 13th call.
     // Session model is unchanged (it never succeeded).
     expect(mockSession.model).toBe('Web2API: Gemini Flash Lite');
     // An error/termination message must have been surfaced to the channel.

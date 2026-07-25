@@ -94,6 +94,8 @@ export async function processMessage(
     };
     if (thoughtBuffer.trim()) content.thought = thoughtBuffer.trim();
 
+    logger.info(`[TRACE flushBlocks] phase=${phase} msgId=${currentMessageId} content.len=${content.content.length} thought.len=${(content.thought || '').length}`);
+
     if (currentMessageId === null || currentMessageId === 0) {
       const resId = await reply.sendRichDraft!(content);
       if (typeof resId === 'number' && resId > 0) currentMessageId = resId;
@@ -263,6 +265,7 @@ export async function processMessage(
 
               if (event.type === 'thought') {
                 thoughtBuffer += event.content || '';
+                logger.info(`[TRACE] thought event → thoughtBuffer.len=${thoughtBuffer.length} preview="${(event.content || '').slice(0, 80).replace(/\n/g, '\\n')}"`);
               } else if (event.type === 'text') {
                 rawStreamBuffer += event.content || '';
                 const parsed = extractThoughtAndContent(rawStreamBuffer);
@@ -463,6 +466,8 @@ export async function processMessage(
             };
             if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
             if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
+
+            logger.info(`[TRACE finalize] content.len=${finalContent.content.length} thought.len=${(finalContent.thought || '').length} thought.preview="${(finalContent.thought || '').slice(0, 80).replace(/\n/g, '\\n')}" hasSendRich=${!!reply.sendRich}`);
 
             // Use sendRich to finalize the message
             if (reply.sendRich) {

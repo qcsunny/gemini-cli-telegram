@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import * as fs from 'node:fs';
 import { logger } from '../../utils/logger.js';
+import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { opencodeHistories, makeOpenCodeConvId } from '../conversationManager.js';
 import { saveMessage } from '../messageStore.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
@@ -27,13 +28,13 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   logger.info(`[opencode] Running: ${opencode} run with model=${model}, cwd=${cwd}`);
 
+  const cfg = loadModelsConfig();
+  const modelId = (model && cfg?.routing[model]) || '';
+
   const args = ['run', '--format', 'json', '--dir', cwd, prompt];
 
-  if (model) {
-    const cleanModel = model.replace(/^OpenCode:\s*/, '').trim();
-    if (cleanModel) {
-      args.push('--model', cleanModel);
-    }
+  if (modelId) {
+    args.push('--model', modelId);
   }
 
   return new Promise((resolve, reject) => {
@@ -60,17 +61,22 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
     let thoughtBuf = '';
     let contentBuf = '';
     let stepFinished = false;
+    let usageTokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } | undefined;
 
+    let leftover = '';
     child.stdout.on('data', (chunk: Buffer) => {
       const text = stdoutDecoder.write(chunk);
       stdoutBuf += text;
-      const lines = text.split('\n');
+      const fullText = leftover + text;
+      const lines = fullText.split('\n');
+      leftover = lines.pop() || ''; // keep incomplete last line for next chunk
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const event = JSON.parse(line);
           const part = event.part || {};
           if (part.type === 'reasoning' && part.text) {
+            logger.debug(`[TRACE opencode] reasoning event: text.length=${part.text.length} preview="${part.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
             thoughtBuf += part.text + '\n';
             opts.onEvent?.({ type: 'thought', content: part.text });
           } else if (part.type === 'text' && part.text) {
@@ -83,6 +89,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
             opts.onEvent?.({ type: 'text', content: note + '\n' });
           } else if (event.type === 'step_finish') {
             stepFinished = part.reason === 'stop';
+            if (part.tokens) usageTokens = part.tokens;
             if (stepFinished) {
               opts.onEvent?.({ type: 'done' });
             }
@@ -129,6 +136,12 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
         output: trimmedOutput,
         exitCode: code ?? 1,
         stderr: errBuf,
+        usage: usageTokens ? {
+          input: usageTokens.input ?? 0,
+          output: usageTokens.output ?? 0,
+          cached: (usageTokens.cache?.read ?? 0) + (usageTokens.cache?.write ?? 0),
+          thinking: usageTokens.reasoning ?? 0,
+        } : undefined,
       });
     });
   });

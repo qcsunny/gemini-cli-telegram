@@ -318,7 +318,7 @@ export function buildChannelReply(
         ? originalText.length
         : (originalText.content.length + (originalText.thought?.length || 0));
       logger.debug(`[DEBUG] sendRich called: originalTextLen=${textLen}`);
-      logger.info(`[SENDRICH] sending real message via sendRichMessage (len=${textLen})`);
+      logger.info(`[SENDRICH] sending real message via sendRichMessage (len=${textLen}, thought.len=${(typeof originalText !== 'string' ? originalText.thought?.length || 0 : 0)})`);
 
       const safeMarkdown = getCacheMarkdown(originalText);
 
@@ -459,7 +459,8 @@ export function buildChannelReply(
 
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
-      logger.info(`[TRACE-EVIDENCE] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      const thoughtPreview = typeof originalText !== 'string' ? (originalText.thought?.slice(0, 60).replace(/\n/g, '\\n') || '') : '';
+      logger.info(`[TRACE-EVIDENCE] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, thought.len=${typeof originalText !== 'string' ? (originalText.thought?.length || 0) : 0}, thought.preview="${thoughtPreview}", first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = getCacheMarkdown(originalText);
 
