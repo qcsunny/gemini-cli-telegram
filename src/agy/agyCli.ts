@@ -26,7 +26,7 @@ import { runDeepSeek } from './backends/deepseek.js';
 import { runGeminiDirect } from './backends/geminiDirect.js';
 import { runOpenCode } from './backends/opencode.js';
 import { extractThoughtAndContent } from './thoughtParser.js';
-import { readUsageFromDatabase, getConversationsDir } from './protobuf.js';
+import { readUsageFromDatabase, readConversationHistory, getConversationsDir } from './protobuf.js';
 import type { AgyRunOptions, AgyRunResult } from './types.js';
 
 // Re-export all types and functions for backward compatibility
@@ -351,6 +351,21 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         try {
           const dbPath = path.join(getConversationsDir(), `${resolvedConvId}.db`);
           usage = readUsageFromDatabase(dbPath);
+
+          // Recover thinking text from DB (step_type=14 → thinking)
+          if (!thought) {
+            const turns = readConversationHistory(dbPath);
+            if (turns) {
+              const thinkingTexts = turns
+                .filter(t => t.role === 'thinking')
+                .map(t => t.content)
+                .join('\n\n');
+              if (thinkingTexts) {
+                logger.info(`[agyCli] Recovered ${thinkingTexts.length} chars of thinking from DB`);
+                opts.onEvent?.({ type: 'thought', content: thinkingTexts });
+              }
+            }
+          }
         } catch (e) {
           logger.warn(`[agyCli] SQLite usage extraction failed: ${e}`);
         }
