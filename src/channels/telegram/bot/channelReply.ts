@@ -152,7 +152,7 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
 
 /**
  * Build the Bot API 10.2 `InputRichMessage.blocks` payload from a message.
- * - For string input, the structured thought markers (`<thought>` / `<thought-gemini>`)
+ * - For string input, the structured thought markers (`<thought>`)
  *   are extracted by markdownToHtml's segment parser; here we keep it simple and
  *   treat the whole string as body (thinking already folded into HTML elsewhere).
  * - For StructuredMessage, body + thought are rendered as native blocks, with the
@@ -495,7 +495,7 @@ export function buildChannelReply(
         const html = getHtmlPayloadWithDetails(originalText, true);
 
         const contentText = typeof originalText === 'string'
-          ? originalText.replace(/<thought[^>]*>[\s\S]*?<\/thought[^>]*>/gi, '').replace(/<thought-gemini[^>]*>[\s\S]*?<\/thought-gemini[^>]*>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think[^>]*>/gi, '').trim()
+          ? originalText.replace(/<thought[^>]*>[\s\S]*?<\/thought[^>]*>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think[^>]*>/gi, '').trim()
           : (originalText.content || '').trim();
 
         const suffix = contentText
@@ -567,7 +567,7 @@ export function buildChannelReply(
         const html = getHtmlPayloadWithDetails(originalText, isStreaming);
 
         const hasThought = typeof originalText === 'string'
-          ? (originalText.includes('<thought-gemini') || originalText.includes('<thought') || originalText.includes('<thinking'))
+          ? (originalText.includes('<thought') || originalText.includes('<thinking'))
           : (!!originalText.thought && originalText.thought.trim().length > 0);
 
         const suffix = (isStreaming && !hasThought)

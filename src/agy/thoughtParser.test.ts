@@ -10,22 +10,12 @@ describe('normalizeThinkingTags', () => {
     expect(normalizeThinkingTags('<thought>hello</thought>')).toBe('<think>hello</think>');
   });
 
-  it('should convert <thought-gemini> to <think>', () => {
-    const result = normalizeThinkingTags('<thought-gemini>hello</thought-gemini>');
-    expect(result).toBe('<think>hello</think>');
-  });
-
   it('should preserve <think> tags unchanged', () => {
     expect(normalizeThinkingTags('<think>hello</think>')).toBe('<think>hello</think>');
   });
 
   it('should convert [thought:content] syntax', () => {
     expect(normalizeThinkingTags('[thought:hello]')).toBe('<think>hello</think>');
-  });
-
-  it('should preserve attributes from <thought-gemini>', () => {
-    const result = normalizeThinkingTags('<thought-gemini time="1.5s" tokens="100">text</thought-gemini>');
-    expect(result).toBe('<think time="1.5s" tokens="100">text</think>');
   });
 
   it('should preserve time attribute from <thought>', () => {
@@ -72,8 +62,8 @@ describe('extractThoughtAndContent', () => {
     expect(result.content).toBe('Just content');
   });
 
-  it('should handle <though> variants', () => {
-    const input = 'pre<thought-gemini>gemini thought</thought-gemini>post';
+  it('should handle <thought> variants', () => {
+    const input = 'pre<thought>gemini thought</thought>post';
     const result = extractThoughtAndContent(input);
     expect(result.thought).toBe('gemini thought');
     expect(result.content).toBe('prepost');
@@ -86,20 +76,20 @@ describe('extractThoughtAndContent', () => {
     expect(result.content).toBe('middleend');
   });
 
-  it('should extract geminiTime from <thought-gemini>', () => {
-    const input = '<thought-gemini time="3.2s">thought</thought-gemini>content';
+  it('should extract geminiTime from <thought>', () => {
+    const input = '<thought time="3.2s">thought</thought>content';
     const result = extractThoughtAndContent(input);
     expect(result.geminiTime).toBe('3.2s');
   });
 
-  it('should extract geminiTokens from <thought-gemini>', () => {
-    const input = '<thought-gemini tokens="150">thought</thought-gemini>content';
+  it('should extract geminiTokens from <thought>', () => {
+    const input = '<thought tokens="150">thought</thought>content';
     const result = extractThoughtAndContent(input);
     expect(result.geminiTokens).toBe('150');
   });
 
   it('should extract both time and tokens', () => {
-    const input = '<thought-gemini time="1.0s" tokens="50">thought</thought-gemini>content';
+    const input = '<thought time="1.0s" tokens="50">thought</thought>content';
     const result = extractThoughtAndContent(input);
     expect(result.geminiTime).toBe('1.0s');
     expect(result.geminiTokens).toBe('50');

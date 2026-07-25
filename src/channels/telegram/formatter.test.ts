@@ -323,8 +323,8 @@ Thanks for reading! 🚀
   });
 
 
-  it('should format completed thought-gemini blocks with metadata correctly', () => {
-    const input = 'Pre-text\n<thought-gemini time="3.4" tokens="1250">\nThinking content\n</thought-gemini>\nPost-text';
+  it('should format completed thought blocks with metadata correctly', () => {
+    const input = 'Pre-text\n<thought time="3.4" tokens="1250">\nThinking content\n</thought>\nPost-text';
     const html = markdownToHtml(input);
     expect(html).toContain('<details><summary>🧠 Gemini Thinking · 3.4s · 1.3K</summary>');
     expect(html).toContain('Thinking Time: 3.4 s');
@@ -332,8 +332,8 @@ Thanks for reading! 🚀
     expect(html).toContain('Thinking content');
   });
 
-  it('should format streaming thought-gemini blocks with metadata correctly', () => {
-    const input = '<thought-gemini time="2.1" tokens="800">\nThinking on the go';
+  it('should format streaming thought blocks with metadata correctly', () => {
+    const input = '<thought time="2.1" tokens="800">\nThinking on the go';
     const html = markdownToHtml(input);
     expect(html).toContain('<details open><summary>🧠 Gemini Thinking · 2.1s · 800</summary>');
     expect(html).toContain('Thinking Time: 2.1 s');
@@ -341,17 +341,17 @@ Thanks for reading! 🚀
     expect(html).toContain('Thinking on the go');
   });
 
-  it('should dynamically truncate long thought-gemini blocks', () => {
+  it('should dynamically truncate long thought blocks', () => {
     const longThought = 'A'.repeat(4000);
-    const input = `Pre-text\n<thought-gemini time="1.5" tokens="500">\n${longThought}\n</thought-gemini>\nPost-text`;
+    const input = `Pre-text\n<thought time="1.5" tokens="500">\n${longThought}\n</thought>\nPost-text`;
     const html = markdownToHtml(input, true);
     expect(html).toContain('……（已省略后续内容，超长思考摘要已被截断）');
     expect(html.length).toBeLessThan(4096);
   });
 
   describe('markdownToHtml with isStreaming=true', () => {
-    it('should format completed thought-gemini blocks with <details open> when isStreaming=true', () => {
-      const input = 'Pre-text\n<thought-gemini time="3.4" tokens="1250">\nThinking content\n</thought-gemini>\nPost-text';
+    it('should format completed thought blocks with <details open> when isStreaming=true', () => {
+      const input = 'Pre-text\n<thought time="3.4" tokens="1250">\nThinking content\n</thought>\nPost-text';
       const html = markdownToHtml(input, true);
       expect(html).toContain('<details open><summary>🧠 Gemini Thinking · 3.4s · 1.3K</summary>');
     });
@@ -365,21 +365,21 @@ Thanks for reading! 🚀
 
   describe('Details Block Spacing Normalization', () => {
     it('should ensure there are blank lines (converted to double <br>) before and after details block', () => {
-      const input = 'Pre-text\n<thought-gemini time="1.0" tokens="100">\nThinking...\n</thought-gemini>\nPost-text';
+      const input = 'Pre-text\n<thought time="1.0" tokens="100">\nThinking...\n</thought>\nPost-text';
       const html = markdownToHtml(input);
       expect(html).toContain('Pre-text<br><br><details><summary>');
       expect(html).toContain('</details><br><br>Post-text');
     });
 
     it('should normalize multiple spaces/newlines around details blocks', () => {
-      const input = 'Pre-text\n\n\n  <thought-gemini time="1.0" tokens="100">\nThinking...\n</thought-gemini>  \n\n\nPost-text';
+      const input = 'Pre-text\n\n\n  <thought time="1.0" tokens="100">\nThinking...\n</thought>  \n\n\nPost-text';
       const html = markdownToHtml(input);
       expect(html).toContain('Pre-text<br><br><details><summary>');
       expect(html).toContain('</details><br><br>Post-text');
     });
 
     it('should not add double <br> at the start or end of the document', () => {
-      const input = '<thought-gemini time="1.0" tokens="100">\nThinking...\n</thought-gemini>';
+      const input = '<thought time="1.0" tokens="100">\nThinking...\n</thought>';
       const html = markdownToHtml(input);
       expect(html).not.toContain('<br><br><details>');
       expect(html).not.toContain('</details><br><br>');

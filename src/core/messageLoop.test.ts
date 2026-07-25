@@ -313,8 +313,8 @@ describe('processMessage', () => {
       expect(normalizeThinkingTags('<thought>content</thought>')).toBe('<think>content</think>');
     });
 
-    it('should normalize <thought-gemini> with attributes', () => {
-      expect(normalizeThinkingTags('<thought-gemini time="2.5" tokens="150">content</thought-gemini>'))
+    it('should preserve attributes from <thought>', () => {
+      expect(normalizeThinkingTags('<thought time="2.5" tokens="150">content</thought>'))
         .toBe('<think time="2.5" tokens="150">content</think>');
     });
 
