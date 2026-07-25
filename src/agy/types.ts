@@ -55,8 +55,6 @@ export interface AgyRunResult {
     cached: number;
     thinking: number;
   };
-  /** Reasoning text recovered from OpenCode DB (backend-specific) */
-  reasoning?: string;
   /** Gemini model thinking time in seconds (backend-specific) */
   thinkingTime?: string;
   /** Gemini model thinking token count (backend-specific) */
