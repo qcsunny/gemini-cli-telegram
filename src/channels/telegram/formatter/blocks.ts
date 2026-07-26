@@ -921,7 +921,92 @@ export function buildFinalBlocks(
     blocks.push({ type: 'footer', text: opts.footerText });
   }
 
+  // Self-check: validate all footnote reference pairs are complete.
+  // Every reference_link[ref:"b-N"] in footnotes must have a matching
+  // reference[name:"b-N"] in body, and vice versa for forward links.
+  validateFootnotePairs(blocks);
+
   return blocks;
+}
+
+/**
+ * Validate that all footnote reference pairs are complete.
+ * Checks both directions:
+ *   - Every backward link (b-N) in footnote block → body anchor (b-N)
+ *   - Every forward link (N) in body → footnote reference (N)
+ * Throws on mismatch to prevent sending broken links.
+ */
+function validateFootnotePairs(blocks: RichBlock[]): void {
+  // Collect all reference[name:*] targets and reference_link[ref:*] links
+  const bodyRefs = new Set<string>();          // reference[name:...] anchors in body
+  const bodyForwardLinks = new Set<string>();  // reference_link[ref:...] in body (forward)
+  const fnBackwardLinks = new Set<string>();   // reference_link[ref:b-*] in footnotes (backward)
+  const fnRefs = new Set<string>();            // reference[name:*] in footnotes (forward targets)
+
+  let inFootnote = false;
+  for (const block of blocks) {
+    // Identify footnote definition block: paragraph that contains reference[name:"N"]
+    // (sequential number, not b-N prefix). Track state across blocks.
+    const texts = collectRichText(block);
+    for (const item of texts) {
+      if (typeof item !== 'object') continue;
+      if (item.type === 'reference' && item.name) {
+        if (item.name.startsWith('b-')) {
+          if (!inFootnote) bodyRefs.add(item.name);
+        } else if (/^\d+$/.test(item.name)) {
+          inFootnote = true;
+          fnRefs.add(item.name);
+        }
+      }
+      if (item.type === 'reference_link' && item.reference_name) {
+        if (item.reference_name.startsWith('b-')) {
+          fnBackwardLinks.add(item.reference_name);
+        } else if (/^\d+$/.test(item.reference_name)) {
+          if (!inFootnote) bodyForwardLinks.add(item.reference_name);
+        }
+      }
+    }
+  }
+
+  const errors: string[] = [];
+
+  // Check backward: every footnote reference_link[ref:"b-N"] must have body reference[name:"b-N"]
+  for (const link of fnBackwardLinks) {
+    if (!bodyRefs.has(link)) {
+      errors.push(`Footnote backward link reference_name="${link}" has no matching body reference[name="${link}"]`);
+    }
+  }
+
+  // Check forward: every body reference_link[ref:"N"] must have footnote reference[name:"N"]
+  for (const link of bodyForwardLinks) {
+    if (!fnRefs.has(link)) {
+      errors.push(`Body forward link reference_name="${link}" has no matching footnote reference[name="${link}"]`);
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Footnote reference validation failed (${errors.length} issues):\n` + errors.join('\n')
+    );
+  }
+}
+
+/** Recursively collect all RichText items from a block's text field. */
+function collectRichText(block: unknown): any[] {
+  const items: any[] = [];
+  function walk(value: unknown): void {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      for (const v of value) walk(v);
+    } else {
+      const obj = value as Record<string, unknown>;
+      items.push(obj);
+      if (obj['text'] !== undefined) walk(obj['text']);
+    }
+  }
+  const b = block as Record<string, unknown>;
+  walk(b['text']);
+  return items;
 }
 
 /**
