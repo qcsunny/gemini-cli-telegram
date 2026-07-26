@@ -42,8 +42,8 @@ type RichTextEntity =
   | { type: 'email_address'; text: string; email_address: string }
   | { type: 'phone_number'; text: string; phone_number: string }
   | { type: 'text_mention'; text: string; user: { id: number } }
-  | { type: 'reference'; text: string; name: string }
-  | { type: 'reference_link'; text: string; reference_name: string };
+  | { type: 'reference'; text: RichText; name: string }
+  | { type: 'reference_link'; text: RichText; reference_name: string };
 
 /**
  * Convert markdown-it inline tokens into a native 10.2 `RichText` value
@@ -174,8 +174,8 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
       case 'email_address': node = { type: 'email_address', text: String(inner), email_address: top.href ?? '' }; break;
       case 'phone_number': node = { type: 'phone_number', text: String(inner), phone_number: top.href ?? '' }; break;
       case 'text_mention': node = { type: 'text_mention', text: String(inner), user: { id: Number(top.href) } }; break;
-      case 'reference': node = { type: 'reference', text: String(inner), name: top.href ?? '' }; break;
-      case 'reference_link': node = { type: 'reference_link', text: String(inner), reference_name: top.href ?? '' }; break;
+      case 'reference': node = { type: 'reference', text: inner, name: top.href ?? '' }; break;
+      case 'reference_link': node = { type: 'reference_link', text: inner, reference_name: top.href ?? '' }; break;
       case 'custom_emoji': node = { type: 'custom_emoji', text: String(inner), custom_emoji_id: top.href ?? '', alternative_text: String(inner) }; break;
       case 'datetime': {
         const [unix, fmt] = (top.href ?? '0:wDT').split(':');
@@ -856,23 +856,23 @@ export function buildFinalBlocks(
   }
   blocks.push(...body);
 
-  // 4. Footnote definition blocks (if model used [^id]: syntax)
-  if (footnoteDefs.length > 0) {
+  // 4. Footer block LAST: footnote references + token counts & pricing
+  // Both use the same footer block style for consistent font/color.
+  if (footnoteDefs.length > 0 || opts?.footerText) {
+    const footerText: RichText[] = [];
     for (const def of footnoteDefs) {
-      blocks.push({
-        type: 'paragraph',
-        text: [
-          { type: 'reference_link', text: `[${def.id}]`, reference_name: def.id },
-          { type: 'superscript', text: ' ' },
-          { type: 'reference', text: def.text, name: def.id },
-        ],
-      });
+      if (footerText.length > 0) footerText.push('\n');
+      footerText.push(
+        { type: 'reference_link', text: `[${def.id}]`, reference_name: def.id },
+        ' ',
+        { type: 'reference', text: def.text, name: def.id },
+      );
     }
-  }
-
-  // 5. Footer block LAST (token counts & pricing)
-  if (opts?.footerText) {
-    blocks.push({ type: 'footer', text: opts.footerText });
+    if (opts?.footerText) {
+      if (footerText.length > 0) footerText.push('\n');
+      footerText.push(opts.footerText);
+    }
+    blocks.push({ type: 'footer', text: footerText.length === 1 ? footerText[0] : footerText });
   }
 
   return blocks;
