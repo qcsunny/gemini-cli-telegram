@@ -817,13 +817,21 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
     if (text) defs.push({ id: idToNum.get(id)!, text });
   }
 
-  // Replace [^id] in body with sequential numbers,
-  // wrapped in reference (anchor target) + reference_link (clickable link).
+  // Replace [^id] in body with sequential numbers.
+  // First occurrence → reference (anchor target) + reference_link (clickable link)
+  // Subsequent occurrences → reference_link only (avoids duplicate anchors for one-to-many)
   let body = bodyText;
   for (const [origId, num] of idToNum) {
+    let first = true;
     body = body.replace(
       new RegExp(`\\[\\^${origId}\\]`, 'g'),
-      `<tg-reference name="${num}"><a href="#${num}"><sup>[${num}]</sup></a></tg-reference>`,
+      () => {
+        const tag = first
+          ? `<tg-reference name="${num}"><a href="#${num}"><sup>[${num}]</sup></a></tg-reference>`
+          : `<a href="#${num}"><sup>[${num}]</sup></a>`;
+        first = false;
+        return tag;
+      },
     );
   }
 
