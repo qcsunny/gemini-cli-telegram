@@ -16,6 +16,7 @@ describe('Pricing and Token Estimation', () => {
 
     it('should include thinking cost when usage has thinking tokens', () => {
       // Claude Sonnet 4.6: input=$3/MTok, output=$15/MTok, thinking billed at output rate
+      // output already includes thinking tokens → subtract before pricing
       const marker = formatFooterMarker(
         'Claude Sonnet 4.6 (Thinking)',
         'test prompt',
@@ -23,26 +24,27 @@ describe('Pricing and Token Estimation', () => {
         { input: 1000, output: 1000, cached: 0, thinking: 500 }
       );
       // inputCost = (1000/1M)*3 = 0.003
-      // outputCost = (1000/1M)*15 = 0.015
+      // outputCost = ((1000-500)/1M)*15 = 0.0075  (thinking subtracted)
       // thinkingCost = (500/1M)*15 = 0.0075
-      // total = 0.0255
-      expect(marker).toContain('$0.025500');
+      // total = 0.003 + 0.0075 + 0.0075 = 0.018
+      expect(marker).toContain('$0.018000');
       expect(marker).toContain('| 1000 | 1000 |');
       expect(marker).toContain('| 0 | 500]');
     });
 
     it('should apply correct cache discount per provider', () => {
       // Claude: cacheMultiplier=0.1 (10% of input rate)
+      // input already includes cached tokens → subtract before pricing
       const claudeMarker = formatFooterMarker(
         'Claude Sonnet 4.6 (Thinking)',
         'test',
         'response',
         { input: 1000, output: 1000, cached: 1000, thinking: 0 }
       );
-      // inputCost = (1000/1M)*3 + (1000/1M)*(3*0.1) = 0.003 + 0.0003 = 0.0033
+      // inputCost = ((1000-1000)/1M)*3 + (1000/1M)*(3*0.1) = 0 + 0.0003 = 0.0003
       // outputCost = (1000/1M)*15 = 0.015
-      // total = 0.0183
-      expect(claudeMarker).toContain('$0.018300');
+      // total = 0.0153
+      expect(claudeMarker).toContain('$0.015300');
 
       // Gemini: cacheMultiplier=0.10 (10% of input rate)
       const geminiMarker = formatFooterMarker(
@@ -51,10 +53,10 @@ describe('Pricing and Token Estimation', () => {
         'response',
         { input: 1000, output: 1000, cached: 1000, thinking: 0 }
       );
-      // inputCost = (1000/1M)*1.5 + (1000/1M)*(1.5*0.10) = 0.0015 + 0.00015 = 0.00165
+      // inputCost = ((1000-1000)/1M)*1.5 + (1000/1M)*(1.5*0.10) = 0 + 0.00015 = 0.00015
       // outputCost = (1000/1M)*7.5 = 0.0075
-      // total = 0.00915
-      expect(geminiMarker).toContain('$0.009150');
+      // total = 0.00765
+      expect(geminiMarker).toContain('$0.007650');
     });
 
     it('should estimate CJK tokens with updated ratio', () => {
