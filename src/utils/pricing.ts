@@ -183,11 +183,15 @@ function calculateCost(
   // Cache rate uses the effective input rate (long-context cache reads are priced higher)
   const cachedRate = effectiveInputRate * cacheMult;
 
-  // Input cost: uncached input at full rate + cache hits at discounted rate
-  let inputCost = (inputTokens / 1_000_000) * effectiveInputRate + (cachedTokens / 1_000_000) * cachedRate;
+  // Input cost: uncached input at full rate + cache hits at discounted rate.
+  // inputTokens from agy already includes cachedTokens, so subtract to avoid double-charge.
+  const uncachedInput = Math.max(0, inputTokens - cachedTokens);
+  let inputCost = (uncachedInput / 1_000_000) * effectiveInputRate + (cachedTokens / 1_000_000) * cachedRate;
   
-  // Output cost — switches with tier
-  let outputCost = (outputTokens / 1_000_000) * effectiveOutputRate;
+  // Output cost — switches with tier.
+  // outputTokens from agy already includes thinkingTokens, so subtract to avoid double-charge.
+  const nonThinkingOutput = Math.max(0, outputTokens - thinkingTokens);
+  let outputCost = (nonThinkingOutput / 1_000_000) * effectiveOutputRate;
   
   // Thinking/reasoning cost — billed per provider policy
   let thinkingCost = 0;
