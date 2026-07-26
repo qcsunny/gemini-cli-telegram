@@ -818,14 +818,14 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
   }
 
   // Replace [^id] in body with sequential numbers.
-  // Body only gets reference_link (clickable → footnote definition).
-  // No reference wrapper here — the ONLY reference[name:"N"] lives in the
-  // footnote definition block, so forward nav has an unambiguous target.
+  // Body wraps the citation in reference[name:"body-N"] as a backward anchor.
+  // The link targets reference[name:"fn-N"] in the footnote definition.
+  // Separate names ensure forward and backward each have a single target.
   let body = bodyText;
   for (const [origId, num] of idToNum) {
     body = body.replace(
       new RegExp(`\\[\\^${origId}\\]`, 'g'),
-      `<a href="#${num}"><sup>[${num}]</sup></a>`,
+      `<tg-reference name="body-${num}"><a href="#fn-${num}"><sup>[${num}]</sup></a></tg-reference>`,
     );
   }
 
@@ -886,13 +886,15 @@ export function buildFinalBlocks(
 
   // 4. Footnotes block: separate paragraph with weakened styling (italic + subscript)
   // before the tokens cost footer, so reading order is: body → references → cost.
+  // Each footnote has a forward anchor (fn-N) and a back-link (↩) to the body anchor (body-N).
   if (footnoteDefs.length > 0) {
     const fnTexts: RichText[] = [];
     for (const def of footnoteDefs) {
       if (fnTexts.length > 0) fnTexts.push('\n');
       fnTexts.push(
-        `[${def.id}] `,
-        { type: 'reference', name: def.id, text: { type: 'subscript', text: { type: 'italic', text: def.text } } },
+        { type: 'reference', name: `fn-${def.id}`, text: { type: 'subscript', text: { type: 'italic', text: `[${def.id}] ${def.text}` } } },
+        ' ',
+        { type: 'reference_link', text: '↩', reference_name: `body-${def.id}` },
       );
     }
     blocks.push({ type: 'paragraph', text: fnTexts.length === 1 ? fnTexts[0] : fnTexts });
