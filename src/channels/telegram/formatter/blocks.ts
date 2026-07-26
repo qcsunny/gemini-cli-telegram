@@ -818,10 +818,12 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
   }
 
   // Replace [^id] in body with sequential numbers.
-  // Use distinct name prefixes for forward (f- / body→footer) vs backward (b- / footer→body)
-  // so the two directions never conflict when the same id appears in both blocks.
-  // First occurrence → reference (anchor target for backward nav) + reference_link (forward nav)
+  // reference (anchor) and reference_link (clickable link) are SIBLINGS, never nested.
+  // Nesting would cause the Telegram client to auto-follow the inner reference_link
+  // when navigating to the outer reference (chained jump back to footer).
+  // First occurrence → reference anchor + reference_link
   // Subsequent occurrences → reference_link only (avoids duplicate anchors for one-to-many)
+  const ZWS = '\u200B';
   let body = bodyText;
   for (const [origId, num] of idToNum) {
     let first = true;
@@ -829,7 +831,8 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
       new RegExp(`\\[\\^${origId}\\]`, 'g'),
       () => {
         const tag = first
-          ? `<tg-reference name="b-${num}"><a href="#f-${num}"><sup>[${num}]</sup></a></tg-reference>`
+          // reference anchor (invisible ZWS) before the visible link, siblings not nested:
+          ? `<tg-reference name="b-${num}">${ZWS}</tg-reference><a href="#f-${num}"><sup>[${num}]</sup></a>`
           : `<a href="#f-${num}"><sup>[${num}]</sup></a>`;
         first = false;
         return tag;
