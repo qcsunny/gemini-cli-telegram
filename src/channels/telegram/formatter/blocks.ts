@@ -817,13 +817,15 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
     if (text) defs.push({ id: idToNum.get(id)!, text });
   }
 
-  // Replace [^id] in body with sequential numbers,
-  // wrapped in reference (anchor target) + reference_link (clickable link).
+  // Replace [^id] in body with sequential numbers.
+  // Body only gets reference_link (clickable → footnote definition).
+  // No reference wrapper here — the ONLY reference[name:"N"] lives in the
+  // footnote definition block, so forward nav has an unambiguous target.
   let body = bodyText;
   for (const [origId, num] of idToNum) {
     body = body.replace(
       new RegExp(`\\[\\^${origId}\\]`, 'g'),
-      `<tg-reference name="${num}"><a href="#${num}"><sup>[${num}]</sup></a></tg-reference>`,
+      `<a href="#${num}"><sup>[${num}]</sup></a>`,
     );
   }
 
@@ -882,23 +884,23 @@ export function buildFinalBlocks(
   }
   blocks.push(...body);
 
-  // 4. Footer block LAST: footnote references + token counts & pricing
-  // Both use the same footer block style for consistent font/color.
-  if (footnoteDefs.length > 0 || opts?.footerText) {
-    const footerText: RichText[] = [];
+  // 4. Footnotes block: separate paragraph with weakened styling (italic + subscript)
+  // before the tokens cost footer, so reading order is: body → references → cost.
+  if (footnoteDefs.length > 0) {
+    const fnTexts: RichText[] = [];
     for (const def of footnoteDefs) {
-      if (footerText.length > 0) footerText.push('\n');
-      footerText.push(
-        { type: 'reference_link', text: `[${def.id}]`, reference_name: def.id },
-        ' ',
-        { type: 'reference', text: def.text, name: def.id },
+      if (fnTexts.length > 0) fnTexts.push('\n');
+      fnTexts.push(
+        `[${def.id}] `,
+        { type: 'reference', name: def.id, text: { type: 'subscript', text: { type: 'italic', text: def.text } } },
       );
     }
-    if (opts?.footerText) {
-      if (footerText.length > 0) footerText.push('\n');
-      footerText.push(opts.footerText);
-    }
-    blocks.push({ type: 'footer', text: footerText.length === 1 ? footerText[0] : footerText });
+    blocks.push({ type: 'paragraph', text: fnTexts.length === 1 ? fnTexts[0] : fnTexts });
+  }
+
+  // 5. Footer block LAST: token counts & pricing only
+  if (opts?.footerText) {
+    blocks.push({ type: 'footer', text: opts.footerText });
   }
 
   return blocks;
