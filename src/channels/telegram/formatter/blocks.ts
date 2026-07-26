@@ -817,23 +817,13 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
     if (text) defs.push({ id: idToNum.get(id)!, text });
   }
 
-  // Replace [^id] in body with sequential numbers.
-  // Body gets a reference_link for forward navigation (clickable → footnote def).
-  // First occurrence also gets a reference anchor (ZWS) for backward navigation.
-  // Both entities are SIBLINGS in the text array (never nested).
-  const ZWS = '\u200B';
+  // Replace [^id] in body with sequential numbers,
+  // wrapped in reference (anchor target) + reference_link (clickable link).
   let body = bodyText;
   for (const [origId, num] of idToNum) {
-    let first = true;
     body = body.replace(
       new RegExp(`\\[\\^${origId}\\]`, 'g'),
-      () => {
-        const tag = first
-          ? `<tg-reference name="b-${num}">${ZWS}</tg-reference><a href="#${num}"><sup>[${num}]</sup></a>`
-          : `<a href="#${num}"><sup>[${num}]</sup></a>`;
-        first = false;
-        return tag;
-      },
+      `<tg-reference name="${num}"><a href="#${num}"><sup>[${num}]</sup></a></tg-reference>`,
     );
   }
 
@@ -892,121 +882,26 @@ export function buildFinalBlocks(
   }
   blocks.push(...body);
 
-  // 4. Footnote definition block(s) — before tokens cost footer.
-  //    Each definition is styled with <sub><i>...</i></sub> for a visually
-  //    "weakened" appearance (smaller + italic), similar to footer text.
-  //    The citation label uses reference_link for backward navigation back to body.
-  if (footnoteDefs.length > 0) {
-    const fnText: RichText[] = [];
+  // 4. Footer block LAST: footnote references + token counts & pricing
+  // Both use the same footer block style for consistent font/color.
+  if (footnoteDefs.length > 0 || opts?.footerText) {
+    const footerText: RichText[] = [];
     for (const def of footnoteDefs) {
-      if (fnText.length > 0) fnText.push('\n');
-      fnText.push(
-        { type: 'reference_link', text: `[${def.id}]`, reference_name: `b-${def.id}` },
+      if (footerText.length > 0) footerText.push('\n');
+      footerText.push(
+        { type: 'reference_link', text: `[${def.id}]`, reference_name: def.id },
         ' ',
-        {
-          type: 'reference',
-          name: def.id,
-          text: {
-            type: 'subscript',
-            text: { type: 'italic', text: def.text },
-          },
-        },
+        { type: 'reference', text: def.text, name: def.id },
       );
     }
-    blocks.push({ type: 'paragraph', text: fnText.length === 1 ? fnText[0] : fnText });
+    if (opts?.footerText) {
+      if (footerText.length > 0) footerText.push('\n');
+      footerText.push(opts.footerText);
+    }
+    blocks.push({ type: 'footer', text: footerText.length === 1 ? footerText[0] : footerText });
   }
-
-  // 5. Footer block — token counts & pricing only (no footnotes).
-  if (opts?.footerText) {
-    blocks.push({ type: 'footer', text: opts.footerText });
-  }
-
-  // Self-check: validate all footnote reference pairs are complete.
-  // Every reference_link[ref:"b-N"] in footnotes must have a matching
-  // reference[name:"b-N"] in body, and vice versa for forward links.
-  validateFootnotePairs(blocks);
 
   return blocks;
-}
-
-/**
- * Validate that all footnote reference pairs are complete.
- * Checks both directions:
- *   - Every backward link (b-N) in footnote block → body anchor (b-N)
- *   - Every forward link (N) in body → footnote reference (N)
- * Throws on mismatch to prevent sending broken links.
- */
-function validateFootnotePairs(blocks: RichBlock[]): void {
-  // Collect all reference[name:*] targets and reference_link[ref:*] links
-  const bodyRefs = new Set<string>();          // reference[name:...] anchors in body
-  const bodyForwardLinks = new Set<string>();  // reference_link[ref:...] in body (forward)
-  const fnBackwardLinks = new Set<string>();   // reference_link[ref:b-*] in footnotes (backward)
-  const fnRefs = new Set<string>();            // reference[name:*] in footnotes (forward targets)
-
-  let inFootnote = false;
-  for (const block of blocks) {
-    // Identify footnote definition block: paragraph that contains reference[name:"N"]
-    // (sequential number, not b-N prefix). Track state across blocks.
-    const texts = collectRichText(block);
-    for (const item of texts) {
-      if (typeof item !== 'object') continue;
-      if (item.type === 'reference' && item.name) {
-        if (item.name.startsWith('b-')) {
-          if (!inFootnote) bodyRefs.add(item.name);
-        } else if (/^\d+$/.test(item.name)) {
-          inFootnote = true;
-          fnRefs.add(item.name);
-        }
-      }
-      if (item.type === 'reference_link' && item.reference_name) {
-        if (item.reference_name.startsWith('b-')) {
-          fnBackwardLinks.add(item.reference_name);
-        } else if (/^\d+$/.test(item.reference_name)) {
-          if (!inFootnote) bodyForwardLinks.add(item.reference_name);
-        }
-      }
-    }
-  }
-
-  const errors: string[] = [];
-
-  // Check backward: every footnote reference_link[ref:"b-N"] must have body reference[name:"b-N"]
-  for (const link of fnBackwardLinks) {
-    if (!bodyRefs.has(link)) {
-      errors.push(`Footnote backward link reference_name="${link}" has no matching body reference[name="${link}"]`);
-    }
-  }
-
-  // Check forward: every body reference_link[ref:"N"] must have footnote reference[name:"N"]
-  for (const link of bodyForwardLinks) {
-    if (!fnRefs.has(link)) {
-      errors.push(`Body forward link reference_name="${link}" has no matching footnote reference[name="${link}"]`);
-    }
-  }
-
-  if (errors.length > 0) {
-    throw new Error(
-      `Footnote reference validation failed (${errors.length} issues):\n` + errors.join('\n')
-    );
-  }
-}
-
-/** Recursively collect all RichText items from a block's text field. */
-function collectRichText(block: unknown): any[] {
-  const items: any[] = [];
-  function walk(value: unknown): void {
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) {
-      for (const v of value) walk(v);
-    } else {
-      const obj = value as Record<string, unknown>;
-      items.push(obj);
-      if (obj['text'] !== undefined) walk(obj['text']);
-    }
-  }
-  const b = block as Record<string, unknown>;
-  walk(b['text']);
-  return items;
 }
 
 /**
