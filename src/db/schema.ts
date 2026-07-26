@@ -36,6 +36,8 @@ export const messages = sqliteTable('messages', {
   content: text('content').notNull(),
   backend: text('backend', { enum: ['web2api', 'deepseek', 'gemini-direct', 'opencode'] }).notNull(),
   createdAt: text('created_at').notNull(),
+  /** Token usage: input, output, cached, thinking */
+  usage: text('usage'),
 });
 
 

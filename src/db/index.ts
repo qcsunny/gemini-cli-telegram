@@ -80,9 +80,20 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL,
       backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode')),
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      usage TEXT
     );
   `);
+
+  // Dynamically add usage column to messages table if it doesn't exist in legacy databases
+  try {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN usage TEXT;`);
+    logger.info(`[db] Successfully added 'usage' column to 'messages' table.`);
+  } catch (e: any) {
+    if (!e.message?.includes('duplicate column name')) {
+      logger.warn(`[db] Notice on adding 'usage' column: ${e.message}`);
+    }
+  }
 
   const instance = drizzle(sqlite, { schema });
 

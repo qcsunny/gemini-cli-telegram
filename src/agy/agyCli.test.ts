@@ -88,9 +88,9 @@ describe('readUsageFromDatabase', () => {
     const dbPath = path.join(tmpDir, 'valid.db');
 
     const db = new Database(dbPath);
-    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, status INTEGER, metadata BLOB);`);
+    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL DEFAULT 0, status INTEGER, metadata BLOB);`);
     const blob = makeUsageBlob(42, 99, 10, 5);
-    db.prepare('INSERT INTO steps (idx, status, metadata) VALUES (0, 0, ?)').run(blob);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (0, 15, 0, ?)').run(blob);
     db.close();
 
     const result = readUsageFromDatabase(dbPath);
@@ -108,7 +108,7 @@ describe('readUsageFromDatabase', () => {
     const dbPath = path.join(tmpDir, 'empty.db');
 
     const db = new Database(dbPath);
-    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, status INTEGER, metadata BLOB);`);
+    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL DEFAULT 0, status INTEGER, metadata BLOB);`);
     db.close();
 
     const result = readUsageFromDatabase(dbPath);
@@ -120,30 +120,30 @@ describe('readUsageFromDatabase', () => {
     const dbPath = path.join(tmpDir, 'null-metadata.db');
 
     const db = new Database(dbPath);
-    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, status INTEGER, metadata BLOB);`);
-    db.prepare('INSERT INTO steps (idx, status, metadata) VALUES (0, 0, NULL)').run();
+    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL DEFAULT 0, status INTEGER, metadata BLOB);`);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (0, 15, 0, NULL)').run();
     db.close();
 
     const result = readUsageFromDatabase(dbPath);
     expect(result).toBeUndefined();
   });
 
-  it('should use the latest step (highest idx)', async () => {
+  it('should accumulate usage across all steps', async () => {
     const { readUsageFromDatabase } = await import('../agy/agyCli.js');
-    const dbPath = path.join(tmpDir, 'latest.db');
+    const dbPath = path.join(tmpDir, 'cumulative.db');
 
     const db = new Database(dbPath);
-    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, status INTEGER, metadata BLOB);`);
-    // Insert older step first (idx=0), then newer step (idx=1)
-    const oldBlob = makeUsageBlob(1, 2, 3, 4);
-    const newBlob = makeUsageBlob(10, 20, 30, 40);
-    db.prepare('INSERT INTO steps (idx, status, metadata) VALUES (0, 0, ?)').run(oldBlob);
-    db.prepare('INSERT INTO steps (idx, status, metadata) VALUES (1, 0, ?)').run(newBlob);
+    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL DEFAULT 0, status INTEGER, metadata BLOB);`);
+    // Two steps with usage — should accumulate both
+    const step1 = makeUsageBlob(1, 2, 3, 4);
+    const step2 = makeUsageBlob(10, 20, 30, 40);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (0, 15, 0, ?)').run(step1);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (1, 23, 0, ?)').run(step2);
     db.close();
 
     const result = readUsageFromDatabase(dbPath);
-    // Should return the latest step (idx=1)
-    expect(result).toEqual({ input: 10, output: 20, cached: 30, thinking: 40 });
+    // Should accumulate all steps
+    expect(result).toEqual({ input: 11, output: 22, cached: 33, thinking: 44 });
   });
 });
 

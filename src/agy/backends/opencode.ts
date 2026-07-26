@@ -124,24 +124,26 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
       const trimmedOutput = stdoutBuf.trim();
 
+      const usage = usageTokens ? {
+        input: usageTokens.input ?? 0,
+        output: usageTokens.output ?? 0,
+        cached: (usageTokens.cache?.read ?? 0) + (usageTokens.cache?.write ?? 0),
+        thinking: usageTokens.reasoning ?? 0,
+      } : undefined;
+
       opencodeHistories.set(convId, [
         { role: 'user', content: prompt },
         { role: 'assistant', content: trimmedOutput },
       ]);
       saveMessage(convId, 'user', prompt, 'opencode');
-      saveMessage(convId, 'assistant', trimmedOutput, 'opencode');
+      saveMessage(convId, 'assistant', trimmedOutput, 'opencode', usage);
 
       resolve({
         conversationId: convId,
         output: trimmedOutput,
         exitCode: code ?? 1,
         stderr: errBuf,
-        usage: usageTokens ? {
-          input: usageTokens.input ?? 0,
-          output: usageTokens.output ?? 0,
-          cached: (usageTokens.cache?.read ?? 0) + (usageTokens.cache?.write ?? 0),
-          thinking: usageTokens.reasoning ?? 0,
-        } : undefined,
+        usage,
       });
     });
   });
