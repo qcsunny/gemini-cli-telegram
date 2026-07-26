@@ -343,6 +343,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         try {
           const dbPath = path.join(getConversationsDir(), `${resolvedConvId}.db`);
           usage = readUsageFromDatabase(dbPath);
+          logger.info(`[agyCli] Read usage from agy database: ${JSON.stringify(usage)}`);
         } catch (e) {
           logger.warn(`[agyCli] SQLite usage extraction failed: ${e}`);
         }

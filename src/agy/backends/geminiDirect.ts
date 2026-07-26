@@ -6,6 +6,7 @@
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig } from '../../config/userConfig.js';
 import { geminiDirectHistories } from '../conversationManager.js';
+import { saveMessage } from '../messageStore.js';
 import { ProxyAgent } from 'undici';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
@@ -199,6 +200,10 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
         thinking: finalUsage.thinkingTokenCount ?? 0,
       };
     }
+
+    // Persist to database
+    saveMessage(convId, 'user', prompt, 'gemini-direct');
+    saveMessage(convId, 'assistant', outputBuf, 'gemini-direct', finalResult.usage);
 
     return finalResult;
 

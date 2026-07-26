@@ -446,6 +446,8 @@ export async function processMessage(
       // The HTML path (via sendRich) handles thought→details, blockquote
       // stripping, heading hoisting, and footer formatting internally.
 
+      // Local agy models already return cumulative usage from their database
+       logger.info(`[footer] Calculating footer - exitCode=${finalResult.exitCode}, usage=${JSON.stringify(finalResult.usage)}`);
       const footerText = formatFooterMarker(
         modelToUse || 'Gemini 3.5 Flash (Medium)',
         finalPrompt,
@@ -455,6 +457,8 @@ export async function processMessage(
 
       if (finalResult.exitCode === 0) {
         const footerParts = parseFooterMarker(footerText);
+
+        logger.info(`[footer] footerText="${footerText}" footerParts=${JSON.stringify(footerParts)}`);
 
         // Atomically send the real persisted message.
         const replyContext = {

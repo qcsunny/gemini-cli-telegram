@@ -321,17 +321,40 @@ export function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | u
       return undefined;
     }
     const db = new Database(dbPath, { readonly: true });
-    const rows = db.prepare('SELECT metadata FROM steps ORDER BY idx DESC').all() as { metadata: Uint8Array }[];
+    const rows = db.prepare('SELECT idx, step_type, metadata FROM steps ORDER BY idx ASC').all() as { idx: number; step_type: number; metadata: Uint8Array }[];
     db.close();
-    
+
+    const total: AgyRunResult['usage'] = { input: 0, output: 0, cached: 0, thinking: 0 };
+    const stepsInfo: Array<{ idx: number; step_type: number; usage: AgyRunResult['usage'] }> = [];
+
     for (const row of rows) {
       if (row.metadata instanceof Uint8Array) {
         const usage = extractUsageFromProto(row.metadata);
         if (usage) {
-          return usage;
+          total.input += (usage.input || 0);
+          total.output += (usage.output || 0);
+          total.cached += (usage.cached || 0);
+          total.thinking += (usage.thinking || 0);
+
+          stepsInfo.push({
+            idx: row.idx,
+            step_type: row.step_type,
+            usage,
+          });
         }
       }
     }
+
+    // Debug: print all steps' usage for the latest conversation
+    if (stepsInfo.length > 0) {
+      logger.info(`[agyCli] readUsageFromDatabase: ${stepsInfo.length} steps, total=${JSON.stringify(total)}, latest_step=${stepsInfo[stepsInfo.length - 1].idx} usage=${JSON.stringify(stepsInfo[stepsInfo.length - 1].usage)}`);
+    }
+
+    // 如果累加后全是 0，返回 undefined（表示没有有效的 usage 数据）
+    if (total.input === 0 && total.output === 0 && total.cached === 0 && total.thinking === 0) {
+      return undefined;
+    }
+    return total;
   } catch (e) {
     logger.warn(`[agyCli] readUsageFromDatabase failed: ${e}`);
   }

@@ -51,7 +51,13 @@ export function loadMessages(conversationId: string, backend: Backend): StoredMe
  * Save a single message turn to the database.
  * Called at stream end (not per chunk) to minimize write overhead.
  */
-export function saveMessage(conversationId: string, role: 'user' | 'assistant', content: string, backend: Backend): void {
+export function saveMessage(
+  conversationId: string,
+  role: 'user' | 'assistant',
+  content: string,
+  backend: Backend,
+  usage?: { input: number; output: number; cached: number; thinking: number }
+): void {
   try {
     const db = getDb();
     db.insert(schema.messages)
@@ -61,6 +67,7 @@ export function saveMessage(conversationId: string, role: 'user' | 'assistant', 
         content,
         backend,
         createdAt: new Date().toISOString(),
+        usage: usage ? JSON.stringify(usage) : null,
       })
       .run();
   } catch (e) {
@@ -68,6 +75,9 @@ export function saveMessage(conversationId: string, role: 'user' | 'assistant', 
   }
 }
 
+/**
+ * Calculate cumulative token usage for a conversation by summing all stored turn usages.
+ */
 /**
  * Delete all persisted messages for a conversation (called on /new or session reset).
  */
