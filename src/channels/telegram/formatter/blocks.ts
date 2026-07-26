@@ -776,6 +776,35 @@ function flattenDepth(blk: RichBlock, depth: number): RichBlock {
 
 
 /**
+ * Extract footnote definitions from model output and rewrite [^id] markers
+ * as Telegram native reference_link anchors.
+ *
+ * Handles standard markdown footnote syntax:
+ *   Text with a citation[^1] and more[^2].
+ *
+ *   [^1]: First source
+ *   [^2]: Second source with details
+ */
+function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id: string; text: string }> } {
+  const defs: Array<{ id: string; text: string }> = [];
+  const defRe = /^\[\^(\w+)\]:\s*(.+)$/gm;
+  const matches = [...markdown.matchAll(defRe)];
+  if (matches.length === 0) return { body: markdown, defs };
+
+  const firstDefIndex = matches[0].index!;
+  const bodyText = markdown.slice(0, firstDefIndex).trimEnd();
+
+  for (const m of matches) {
+    defs.push({ id: m[1], text: m[2].trim() });
+  }
+
+  // Replace [^id] with anchor links parsable as reference_link entities
+  const body = bodyText.replace(/\[\^(\w+)\]/g, '<a href="#$1"><sup>[$1]</sup></a>');
+
+  return { body, defs };
+}
+
+/**
  * Format a structured message with optional thought into Telegram RichBlocks.
  * The returned blocks array is suitable for `sendRichMessage` / `editMessageText`
  * (final, persisted messages). For streaming drafts use
@@ -788,7 +817,9 @@ export function buildFinalBlocks(
 ): RichBlock[] {
   const blocks: RichBlock[] = [];
 
-  const body = markdownToRichBlocks(content);
+  // Pre-process footnote references before markdown parsing
+  const { body: footnoteBody, defs: footnoteDefs } = preprocessFootnotes(content);
+  const body = markdownToRichBlocks(footnoteBody);
 
   // Extract first heading to hoist above thinking block ONLY if it is a genuine overall title
   let mainHeading: RichBlock | undefined;
@@ -825,7 +856,21 @@ export function buildFinalBlocks(
   }
   blocks.push(...body);
 
-  // 4. Footer block LAST
+  // 4. Footnote definition blocks (if model used [^id]: syntax)
+  if (footnoteDefs.length > 0) {
+    for (const def of footnoteDefs) {
+      blocks.push({
+        type: 'paragraph',
+        text: [
+          { type: 'reference_link', text: `[${def.id}]`, reference_name: def.id },
+          { type: 'superscript', text: ' ' },
+          { type: 'reference', text: def.text, name: def.id },
+        ],
+      });
+    }
+  }
+
+  // 5. Footer block LAST (token counts & pricing)
   if (opts?.footerText) {
     blocks.push({ type: 'footer', text: opts.footerText });
   }
