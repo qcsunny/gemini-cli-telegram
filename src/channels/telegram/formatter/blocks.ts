@@ -786,20 +786,46 @@ function flattenDepth(blk: RichBlock, depth: number): RichBlock {
  *   [^2]: Second source with details
  */
 function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id: string; text: string }> } {
-  const defs: Array<{ id: string; text: string }> = [];
   const defRe = /^\[\^(\w+)\]:\s*(.+)$/gm;
-  const matches = [...markdown.matchAll(defRe)];
-  if (matches.length === 0) return { body: markdown, defs };
+  const defMatches = [...markdown.matchAll(defRe)];
+  if (defMatches.length === 0) return { body: markdown, defs: [] };
 
-  const firstDefIndex = matches[0].index!;
+  const firstDefIndex = defMatches[0].index!;
   const bodyText = markdown.slice(0, firstDefIndex).trimEnd();
 
-  for (const m of matches) {
-    defs.push({ id: m[1], text: m[2].trim() });
+  // Collect unique footnote IDs in order of first appearance in the body.
+  const idOrder: string[] = [];
+  const bodyRefRe = /\[\^(\w+)\]/g;
+  let refMatch: RegExpExecArray | null;
+  while ((refMatch = bodyRefRe.exec(bodyText)) !== null) {
+    const id = refMatch[1];
+    if (!idOrder.includes(id)) idOrder.push(id);
   }
 
-  // Replace [^id] with anchor links parsable as reference_link entities
-  const body = bodyText.replace(/\[\^(\w+)\]/g, '<a href="#$1"><sup>[$1]</sup></a>');
+  // Assign sequential numbers based on appearance order.
+  const idToNum = new Map<string, string>();
+  idOrder.forEach((id, i) => idToNum.set(id, String(i + 1)));
+
+  // Only include definitions that are actually cited.
+  const defs: Array<{ id: string; text: string }> = [];
+  const defTextMap = new Map<string, string>();
+  for (const m of defMatches) {
+    defTextMap.set(m[1], m[2].trim());
+  }
+  for (const id of idOrder) {
+    const text = defTextMap.get(id);
+    if (text) defs.push({ id: idToNum.get(id)!, text });
+  }
+
+  // Replace [^id] in body with sequential numbers,
+  // wrapped in reference (anchor target) + reference_link (clickable link).
+  let body = bodyText;
+  for (const [origId, num] of idToNum) {
+    body = body.replace(
+      new RegExp(`\\[\\^${origId}\\]`, 'g'),
+      `<tg-reference name="${num}"><a href="#${num}"><sup>[${num}]</sup></a></tg-reference>`,
+    );
+  }
 
   return { body, defs };
 }
