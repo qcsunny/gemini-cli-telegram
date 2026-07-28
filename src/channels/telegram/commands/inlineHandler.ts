@@ -5,7 +5,7 @@
  */
 
 import type { Bot, Context } from 'grammy';
-import type { InlineQueryResult } from '@grammyjs/types';
+import type { InlineQueryResultArticle } from '@grammyjs/types';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
@@ -34,7 +34,7 @@ export function registerInlineHandler(
 
     // 1. Whitelist authorization check
     if (options.allowedUsers && options.allowedUsers.length > 0 && !options.allowedUsers.includes(fromId)) {
-      const unauthorizedResult: InlineQueryResult = {
+      const unauthorizedResult: InlineQueryResultArticle = {
         type: 'article',
         id: 'unauthorized',
         title: '⚠️ 未授权访问 / Unauthorized',
@@ -54,7 +54,7 @@ export function registerInlineHandler(
 
     // 2. Empty query help hint card
     if (!query) {
-      const helpResult: InlineQueryResult = {
+      const helpResult: InlineQueryResultArticle = {
         type: 'article',
         id: 'help',
         title: '💡 使用 Gemini/AI 模型解答任何问题',
@@ -74,7 +74,7 @@ export function registerInlineHandler(
     try {
       const activeSession = sessionManager.getSession(fromId);
       const modelToUse = activeSession?.config?.getModel() || defaultOptions.model;
-      const cwd = activeSession?.config?.storage?.getProjectDir() || defaultOptions.cwd || process.cwd();
+      const cwd = defaultOptions.cwd || process.cwd();
 
       logger.info(`[InlineQuery] Processing query from userId=${fromId}: "${query.slice(0, 50)}..." (model=${modelToUse})`);
 
@@ -85,11 +85,11 @@ export function registerInlineHandler(
         proxy: defaultOptions.proxy,
       });
 
-      const rawText = response.text || '无回答内容';
+      const rawText = response.output || '无回答内容';
       const htmlContent = markdownToHtml(rawText, false);
       const previewText = rawText.replace(/<[^>]+>/g, '').slice(0, 100);
 
-      const aiResult: InlineQueryResult = {
+      const aiResult: InlineQueryResultArticle = {
         type: 'article',
         id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         title: `🤖 AI: ${query.slice(0, 40)}${query.length > 40 ? '...' : ''}`,
@@ -105,7 +105,7 @@ export function registerInlineHandler(
       });
     } catch (e) {
       logger.error(`Failed to process inline query: ${e}`);
-      const errorResult: InlineQueryResult = {
+      const errorResult: InlineQueryResultArticle = {
         type: 'article',
         id: `err-${Date.now()}`,
         title: '❌ AI 生成解答失败',

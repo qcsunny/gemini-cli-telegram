@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Bot, Context } from 'grammy';
+import type { Bot } from 'grammy';
 import { registerInlineHandler } from './inlineHandler.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
@@ -13,7 +13,7 @@ import type { SessionOptions } from '../../../core/types.js';
 // Mock agyCli
 vi.mock('../../../agy/agyCli.js', () => ({
   runAgyPrint: vi.fn().mockResolvedValue({
-    text: '这是关于量子计算的测试回答。',
+    output: '这是关于量子计算的测试回答。',
   }),
 }));
 
