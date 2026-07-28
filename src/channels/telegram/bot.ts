@@ -490,7 +490,16 @@ export class TelegramBot {
     // This allows /cancel to run even while a message handler is busy.
     this.runner = run(this.bot, {
       runner: {
-        fetch: { timeout: 10 },
+        fetch: {
+          timeout: 10,
+          allowed_updates: [
+            'message',
+            'edited_message',
+            'callback_query',
+            'inline_query',
+            'chosen_inline_result',
+          ],
+        },
         silent: true,
       },
     });

@@ -210,11 +210,7 @@ export function registerInlineHandler(
         },
       ];
 
-      await ctx.answerInlineQuery(results, {
-        cache_time: 0,
-        is_personal: true,
-        button: { text: '打开私聊', start_parameter: 'inline' },
-      });
+      await ctx.answerInlineQuery(results, { cache_time: 0 });
     } catch (e) {
       logger.error(`Error answering inline query: ${e}`);
       pendingResults.delete(resultId);
