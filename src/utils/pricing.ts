@@ -15,7 +15,6 @@
 import { getCachedUsdToCnyRate } from './exchangeRate.js';
 
 // Re-export for callers that want to pre-warm the cache
-export { getUsdToCnyRate } from './exchangeRate.js';
 
 /**
  * Model pricing rates per 1,000,000 tokens in USD.

@@ -45,10 +45,10 @@ export function registerSessionHandlers(
       await sessionManager.reset(chatId, {
         ...defaultOptions,
         project: defaultProj,
-        model: 'Gemini 3.6 Flash (High)',
+        model: defaultOptions.model,
       });
       await ctx.reply(
-        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.6 Flash (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
+        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${defaultOptions.model}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
       );
     } catch (e) {

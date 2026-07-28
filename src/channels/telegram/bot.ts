@@ -363,7 +363,6 @@ export class TelegramBot {
       model: options.model,
       proxy: options.proxy,
     };
-
     this.setupMiddleware(options.allowedUsers);
     registerCommands(
       this.bot,

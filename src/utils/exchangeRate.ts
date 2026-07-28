@@ -19,7 +19,7 @@ interface RateCache {
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const FETCH_TIMEOUT_MS = 5000;
-const DEFAULT_RATE = 7.25; // fallback if nothing is available
+const DEFAULT_RATE = 7; // fallback if nothing is available
 
 let cachedRate: RateCache | null = null;
 
@@ -65,45 +65,51 @@ async function fetchFromApi(): Promise<number | null> {
   }
 }
 
-/**
- * Get the current USD → CNY exchange rate.
- * Priority: in-memory cache → Google Finance → disk cache → default.
- */
-export async function getUsdToCnyRate(): Promise<number> {
-  // 1. In-memory cache (valid for 24h)
-  if (cachedRate && Date.now() - cachedRate.fetchedAt < CACHE_TTL_MS) {
-    return cachedRate.rate;
-  }
-
-  // 2. Try exchangerate-api.com
+async function updateCache(): Promise<void> {
   const liveRate = await fetchFromApi();
   if (liveRate) {
     cachedRate = { rate: liveRate, fetchedAt: Date.now() };
     writeCache(liveRate);
-    logger.info(`[exchangeRate] Fetched live USD/CNY = ${liveRate}`);
-    return liveRate;
+    logger.info(`[exchangeRate] Updated live USD/CNY = ${liveRate}`);
   }
+}
 
-  // 3. Disk cache (even if stale, better than default)
-  const diskCache = readCache();
-  if (diskCache && diskCache.rate > 0) {
-    cachedRate = diskCache;
-    logger.info(`[exchangeRate] Using cached USD/CNY = ${diskCache.rate} (fetched ${new Date(diskCache.fetchedAt).toISOString()})`);
-    return diskCache.rate;
-  }
+let _fetching = false;
 
-  // 4. Hardcoded default
-  logger.warn(`[exchangeRate] Using default USD/CNY = ${DEFAULT_RATE}`);
-  return DEFAULT_RATE;
+/**
+ * Initialize exchange rate on startup: fetch live rate in background.
+ */
+export function initExchangeRate(): void {
+  if (_fetching) return;
+  _fetching = true;
+  updateCache().catch(() => {});
 }
 
 /**
  * Synchronous getter for the cached rate (for use in hot paths).
- * Returns the last known rate or the default if none fetched yet.
+ * Returns the last known rate or the default if none available.
+ * If cache is stale, triggers a background refresh for next call.
  */
 export function getCachedUsdToCnyRate(): number {
-  if (cachedRate) return cachedRate.rate;
+  if (cachedRate) {
+    if (Date.now() - cachedRate.fetchedAt > CACHE_TTL_MS && !_fetching) {
+      _fetching = true;
+      updateCache().catch(() => {});
+    }
+    return cachedRate.rate;
+  }
   const disk = readCache();
-  if (disk && disk.rate > 0) return disk.rate;
+  if (disk && disk.rate > 0) {
+    cachedRate = disk;
+    if (Date.now() - disk.fetchedAt > CACHE_TTL_MS && !_fetching) {
+      _fetching = true;
+      updateCache().catch(() => {});
+    }
+    return disk.rate;
+  }
+  if (!_fetching) {
+    _fetching = true;
+    updateCache().catch(() => {});
+  }
   return DEFAULT_RATE;
 }

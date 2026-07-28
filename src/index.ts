@@ -20,6 +20,7 @@ import { loadUserConfig, clearConfigCache } from './config/userConfig.js';
 import { clearDefaultModelsCache, restoreHistoriesFromDb } from './agy/agyCli.js';
 import { clearModelOrderCache } from './core/modelRegistry.js';
 import { startHealthServer, stopHealthServer } from './utils/healthServer.js';
+import { initExchangeRate } from './utils/exchangeRate.js';
 
 export type { ChannelReply, DaemonSession, SessionOptions, MessageFormatter } from './core/types.js';
 export { SessionManager } from './core/session.js';
@@ -79,5 +80,8 @@ export async function startTelegramDaemon(
 
   // Restore web2api/deepseek conversation histories from SQLite (survive restarts)
   restoreHistoriesFromDb();
+
+  // Initialize exchange rate (fetch in background, use cached value from disk)
+  initExchangeRate();
 }
 
