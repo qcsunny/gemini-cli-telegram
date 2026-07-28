@@ -116,7 +116,7 @@ describe('registerInlineHandler', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'help-main',
-          title: expect.stringContaining('当前模型'),
+          title: expect.stringContaining('Ask AI'),
         }),
       ]),
       expect.objectContaining({ cache_time: 2 }),

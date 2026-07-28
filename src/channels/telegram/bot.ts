@@ -653,9 +653,11 @@ export class TelegramBot {
         const userId = ctx.from?.id;
         if (!userId || !allowedSet.has(userId)) {
           logger.warn(`Unauthorized access attempt from user ${userId}`);
-          await ctx.reply(
-            `${ICONS.error} Unauthorized. Your user ID is not in the allowed list.`,
-          );
+          if (ctx.chat) {
+            await ctx.reply(
+              `${ICONS.error} Unauthorized. Your user ID is not in the allowed list.`,
+            );
+          }
           return;
         }
         await next();
