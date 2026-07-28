@@ -220,10 +220,18 @@ export function registerInlineHandler(
 
   bot.on('chosen_inline_result', async (ctx: Context) => {
     const chosen = ctx.chosenInlineResult;
-    if (!chosen?.inline_message_id) return;
+    logger.info(`🔥 [CHOSEN_INLINE_RESULT DETECTED] result_id=${chosen?.result_id} inline_message_id=${chosen?.inline_message_id} fromId=${chosen?.from?.id}`);
+
+    if (!chosen?.inline_message_id) {
+      logger.warn(`[ChosenInline] Missing inline_message_id for result_id=${chosen?.result_id}`);
+      return;
+    }
 
     const pending = pendingResults.get(chosen.result_id);
-    if (!pending) return;
+    if (!pending) {
+      logger.warn(`[ChosenInline] No pending result found for result_id=${chosen.result_id}`);
+      return;
+    }
 
     userControllers.get(chosen.from.id)?.abort();
     const ctrl = new AbortController();
