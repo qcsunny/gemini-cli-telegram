@@ -3,6 +3,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
+import { markdownToRichBlocks } from '../formatter/blocks.js';
 import { markdownToIR, renderIRToHtml } from '../formatter/core.js';
 import { logger } from '../../../utils/logger.js';
 import { ICONS } from '../ui.js';
@@ -248,6 +249,8 @@ export function registerInlineHandler(
       const result = await runModelWithTimeout(pending.prompt, pending.model, defaultOptions, ctrl.signal);
 
       if (result?.output) {
+        const markdown = `**💬 问题：** ${pending.prompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}`;
+        const blocks = markdownToRichBlocks(markdown);
         const htmlBody = renderIRToHtml(markdownToIR(result.output));
         const text = `<b>💬 问题：</b> ${escapeHtmlText(pending.prompt)}\n\n<b>🤖 回答 (${escapeHtmlText(pending.model)})：</b>\n\n${htmlBody}`;
 
@@ -255,9 +258,10 @@ export function registerInlineHandler(
           inline_message_id: chosen.inline_message_id,
           text: text.slice(0, 4096),
           parse_mode: 'HTML',
+          rich_message: { blocks },
         });
 
-        logger.info(`[InlineResult] Edited: userId=${chosen.from.id} model=${pending.model}`);
+        logger.info(`[InlineResult] Edited with native rich blocks: userId=${chosen.from.id} model=${pending.model}`);
       } else {
         const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(pending.prompt)}`;
         await ctx.api.raw.editMessageText({
