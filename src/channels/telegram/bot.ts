@@ -344,6 +344,7 @@ export class TelegramBot {
       clientConfig.fetch = async (url: any, init: any) => {
         const urlStr = (typeof url === 'string' ? url : url?.href ?? '');
         const cleanInit = init ? { ...init } : {};
+        delete cleanInit.signal;
         // answerInlineQuery uses a dedicated agent so it is never queued
         // behind the long-poll getUpdates connection.
         const isInlineAnswer = urlStr.includes('/answerInlineQuery');
