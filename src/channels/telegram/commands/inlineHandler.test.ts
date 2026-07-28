@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt } from './inlineHandler.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 
@@ -16,6 +16,22 @@ vi.mock('../../../agy/agyCli.js', () => ({
     output: '这是关于量子计算的测试回答。',
   }),
 }));
+
+describe('parseInlineModelAndPrompt', () => {
+  it('should parse model prefix correctly', () => {
+    const res = parseInlineModelAndPrompt('/flash 什么是量子计算', 'Gemini 3.5 Flash (Medium)');
+    expect(res.model).toBe('Gemini 3.6 Flash (High)');
+    expect(res.prompt).toBe('什么是量子计算');
+    expect(res.aliasUsed).toBe('/flash');
+  });
+
+  it('should fallback to default model when no prefix is given', () => {
+    const res = parseInlineModelAndPrompt('什么是量子计算', 'Gemini 3.5 Flash (Medium)');
+    expect(res.model).toBe('Gemini 3.5 Flash (Medium)');
+    expect(res.prompt).toBe('什么是量子计算');
+    expect(res.aliasUsed).toBeUndefined();
+  });
+});
 
 describe('registerInlineHandler', () => {
   let mockBot: any;
@@ -72,7 +88,7 @@ describe('registerInlineHandler', () => {
     );
   });
 
-  it('should return help card when query is empty', async () => {
+  it('should return help cards when query is empty', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
     const mockCtx = {
@@ -86,20 +102,20 @@ describe('registerInlineHandler', () => {
     expect(mockCtx.answerInlineQuery).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'help',
-          title: expect.stringContaining('Gemini/AI 模型'),
+          id: 'help-main',
+          title: expect.stringContaining('当前模型'),
         }),
       ]),
-      expect.objectContaining({ cache_time: 5 }),
+      expect.objectContaining({ cache_time: 2 }),
     );
   });
 
-  it('should generate AI answer card for valid query', async () => {
+  it('should generate AI & prompt cards for valid query with model alias', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
     const mockCtx = {
       from: { id: 12345 },
-      inlineQuery: { query: '什么是量子计算？' },
+      inlineQuery: { query: '/flash 什么是量子计算？' },
       answerInlineQuery: vi.fn().mockResolvedValue(true),
     };
 
