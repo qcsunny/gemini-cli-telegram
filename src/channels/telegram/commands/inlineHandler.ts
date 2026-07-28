@@ -17,6 +17,17 @@ export interface InlineHandlerOptions {
   allowedUsers?: number[];
 }
 
+const INLINE_TIMEOUT_MS = 2000;
+
+function cleanInlineHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<p[^>]*>/gi, '')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '')
+    .trim();
+}
+
 /**
  * Register Telegram Inline Query handler (`@bot_name query`).
  * Enables real-time AI responses directly from any chat.
@@ -58,7 +69,7 @@ export function registerInlineHandler(
         type: 'article',
         id: 'help',
         title: '💡 使用 Gemini/AI 模型解答任何问题',
-        description: '示例：@bot_name 简述量子计算 / 翻译成英文...',
+        description: '在任意聊天中输入 @bot_name 您的提问',
         input_message_content: {
           message_text: `${ICONS.bot} <b>Gemini CLI Inline Mode</b>\n\n在任意聊天框中输入 <code>@bot_name 您的提问</code> 即可随时调用 AI 助手。`,
           parse_mode: 'HTML',
@@ -70,37 +81,66 @@ export function registerInlineHandler(
       return;
     }
 
-    // 3. Process AI query
+    // 3. Process AI query with strict 2s timeout to prevent Telegram 400 timeout
     try {
       const activeSession = sessionManager.getSession(fromId);
       const modelToUse = activeSession?.config?.getModel() || defaultOptions.model;
       const cwd = defaultOptions.cwd || process.cwd();
 
-      logger.info(`[InlineQuery] Processing query from userId=${fromId}: "${query.slice(0, 50)}..." (model=${modelToUse})`);
+      logger.info(`[InlineQuery] Received query from userId=${fromId}: "${query.slice(0, 50)}..."`);
 
-      const response = await runAgyPrint({
-        prompt: query,
-        cwd,
-        model: modelToUse,
-        proxy: defaultOptions.proxy,
-      });
+      // Race between agy run and timeout
+      let aiResultText: string | null = null;
+      try {
+        const runPromise = runAgyPrint({
+          prompt: query,
+          cwd,
+          model: modelToUse,
+          proxy: defaultOptions.proxy,
+        });
 
-      const rawText = response.output || '无回答内容';
-      const htmlContent = markdownToHtml(rawText, false);
-      const previewText = rawText.replace(/<[^>]+>/g, '').slice(0, 100);
+        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), INLINE_TIMEOUT_MS));
+        const res = await Promise.race([runPromise, timeoutPromise]);
 
-      const aiResult: InlineQueryResultArticle = {
+        if (res && typeof res === 'object' && 'output' in res && res.output) {
+          aiResultText = res.output;
+        }
+      } catch (err) {
+        logger.warn(`[InlineQuery] Quick model execution error: ${err}`);
+      }
+
+      const results: InlineQueryResultArticle[] = [];
+
+      if (aiResultText) {
+        // Option A: Fast AI Answer card
+        const cleanedHtml = cleanInlineHtml(markdownToHtml(aiResultText, false));
+        const previewText = aiResultText.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 100);
+
+        results.push({
+          type: 'article',
+          id: `ai-${Date.now()}`,
+          title: `🤖 AI 解答: ${query.slice(0, 30)}${query.length > 30 ? '...' : ''}`,
+          description: previewText || '点击发送 AI 解答',
+          input_message_content: {
+            message_text: `<b>💬 问题：</b> ${escapeHtmlText(query)}\n\n<b>🤖 回答：</b>\n${cleanedHtml}`,
+            parse_mode: 'HTML',
+          },
+        });
+      }
+
+      // Option B: Always present quick-send card (guarantees instantaneous response)
+      results.push({
         type: 'article',
-        id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        title: `🤖 AI: ${query.slice(0, 40)}${query.length > 40 ? '...' : ''}`,
-        description: previewText || '点击发送完整回答',
+        id: `prompt-${Date.now()}`,
+        title: `💬 发送提问卡片到当前聊天`,
+        description: `问: "${query.slice(0, 50)}..."`,
         input_message_content: {
-          message_text: `<b>💬 问题：</b> ${escapeHtmlText(query)}\n\n<b>🤖 回答：</b>\n${htmlContent}`,
+          message_text: `<b>💬 AI 提问卡片</b>\n\n<b>问题：</b> ${escapeHtmlText(query)}\n\n<i>${ICONS.sparkles} 提问已发送至 AI 助手。</i>`,
           parse_mode: 'HTML',
         },
-      };
+      });
 
-      await ctx.answerInlineQuery([aiResult], { cache_time: 10 }).catch(e => {
+      await ctx.answerInlineQuery(results, { cache_time: 2 }).catch(e => {
         logger.error(`Error answering inline query result: ${e}`);
       });
     } catch (e) {
@@ -108,10 +148,10 @@ export function registerInlineHandler(
       const errorResult: InlineQueryResultArticle = {
         type: 'article',
         id: `err-${Date.now()}`,
-        title: '❌ AI 生成解答失败',
+        title: '❌ 无法处理请求',
         description: e instanceof Error ? e.message : String(e),
         input_message_content: {
-          message_text: `${ICONS.error} <b>Inline AI 处理失败：</b>\n<i>${escapeHtmlText(e instanceof Error ? e.message : String(e))}</i>`,
+          message_text: `${ICONS.error} <b>Inline 处理失败：</b>\n<i>${escapeHtmlText(e instanceof Error ? e.message : String(e))}</i>`,
           parse_mode: 'HTML',
         },
       };

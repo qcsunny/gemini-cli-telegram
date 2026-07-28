@@ -115,7 +115,7 @@ describe('registerInlineHandler', () => {
           }),
         }),
       ]),
-      expect.objectContaining({ cache_time: 10 }),
+      expect.objectContaining({ cache_time: 2 }),
     );
   });
 });
