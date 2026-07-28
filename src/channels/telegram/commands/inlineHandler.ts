@@ -8,8 +8,9 @@ import type { Bot, Context } from 'grammy';
 import type { InlineQueryResultArticle } from '@grammyjs/types';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
+import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { markdownToHtml } from '../formatter.js';
+import { markdownToRichBlocks } from '../formatter/blocks.js';
 import { logger } from '../../../utils/logger.js';
 import { ICONS } from '../ui.js';
 
@@ -17,7 +18,25 @@ export interface InlineHandlerOptions {
   allowedUsers?: number[];
 }
 
-const INLINE_TIMEOUT_MS = 1200;
+const MODEL_TIMEOUT_MS = 60_000;
+const RESULTS_TTL = 120_000;
+
+interface PendingResult {
+  prompt: string;
+  model: string;
+  promise: Promise<AgyRunResult | null>;
+  createdAt: number;
+}
+
+const pendingResults = new Map<string, PendingResult>();
+
+const cleanupTimer = setInterval(() => {
+  const cutoff = Date.now() - RESULTS_TTL;
+  for (const [key, val] of pendingResults) {
+    if (val.createdAt < cutoff) pendingResults.delete(key);
+  }
+}, 60_000);
+cleanupTimer.unref();
 
 /** Supported inline model prefix aliases for instant model switching */
 const MODEL_PREFIX_MAP: Record<string, string> = {
@@ -26,15 +45,6 @@ const MODEL_PREFIX_MAP: Record<string, string> = {
   '/deepseek': 'DeepSeek: Flash',
   '/opencode': 'OpenCode: DeepSeek V4 Flash Free',
 };
-
-function cleanInlineHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<p[^>]*>/gi, '')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '')
-    .trim();
-}
 
 /**
  * Resolve target model and clean prompt from inline query string.
@@ -56,6 +66,30 @@ export function parseInlineModelAndPrompt(
     }
   }
   return { model: defaultModel, prompt: rawQuery.trim() };
+}
+
+async function runModelWithTimeout(
+  prompt: string,
+  modelToUse: string,
+  defaultOptions: SessionOptions,
+): Promise<AgyRunResult | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS);
+  try {
+    const result = await runAgyPrint({
+      prompt,
+      cwd: defaultOptions.cwd || process.cwd(),
+      model: modelToUse,
+      proxy: defaultOptions.proxy,
+      signal: controller.signal,
+    });
+    return result;
+  } catch (err) {
+    logger.warn(`[InlineQuery] Model execution error: ${err}`);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**
@@ -132,77 +166,76 @@ export function registerInlineHandler(
       return;
     }
 
-    // 3. Process AI query with instantaneous guaranteed fallback + 1.2s model race
+    // 3. Start model execution immediately in background
+    logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} prompt="${prompt.slice(0, 40)}..."`);
+
+    const resultId = `ai-${Date.now()}-${fromId}`;
+    const modelPromise = runModelWithTimeout(prompt, modelToUse, defaultOptions);
+    pendingResults.set(resultId, { prompt, model: modelToUse, promise: modelPromise, createdAt: Date.now() });
+
+    // 4. Answer inline query instantly with placeholder cards
     try {
-      const cwd = defaultOptions.cwd || process.cwd();
-      logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} prompt="${prompt.slice(0, 40)}..."`);
-
-      let aiResultText: string | null = null;
-      try {
-        const runPromise = runAgyPrint({
-          prompt,
-          cwd,
-          model: modelToUse,
-          proxy: defaultOptions.proxy,
-        });
-
-        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), INLINE_TIMEOUT_MS));
-        const res = await Promise.race([runPromise, timeoutPromise]);
-
-        if (res && typeof res === 'object' && 'output' in res && res.output) {
-          aiResultText = res.output;
-        }
-      } catch (err) {
-        logger.warn(`[InlineQuery] Model execution error: ${err}`);
-      }
-
-      const results: InlineQueryResultArticle[] = [];
-
-      // A. Fast AI Answer (if finished within 1.2s)
-      if (aiResultText) {
-        const cleanedHtml = cleanInlineHtml(markdownToHtml(aiResultText, false));
-        const previewText = aiResultText.replace(/<[^>]+>/g, '').replace(/\n+/g, ' ').slice(0, 100);
-
-        results.push({
+      const results: InlineQueryResultArticle[] = [
+        {
           type: 'article',
-          id: `ai-${Date.now()}`,
-          title: `🤖 AI 解答 [${modelToUse}]: ${prompt.slice(0, 30)}`,
-          description: previewText || '点击发送完整回答',
+          id: resultId,
+          title: `🤔 思考中... [${modelToUse}]`,
+          description: `点击发送，${prompt.slice(0, 40)}... AI 回答将自动更新`,
           input_message_content: {
-            message_text: `<b>💬 问题：</b> ${escapeHtmlText(prompt)}\n\n<b>🤖 回答 (${modelToUse})：</b>\n${cleanedHtml}`,
+            message_text: `<b>🤔 AI 正在思考中...</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n回答完成后将自动更新。`,
             parse_mode: 'HTML',
           },
+        },
+        {
+          type: 'article',
+          id: `prompt-${Date.now()}`,
+          title: `💬 发送提问卡片 (${aliasUsed || '默认模型'})`,
+          description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
+          input_message_content: {
+            message_text: `<b>💬 AI 提问卡片</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n<i>${ICONS.sparkles} 提问卡片已发送。</i>`,
+            parse_mode: 'HTML',
+          },
+        },
+      ];
+
+      await ctx.answerInlineQuery(results, { cache_time: 0, switch_pm_text: '打开私聊', switch_pm_parameter: 'inline' });
+    } catch (e) {
+      logger.error(`Error answering inline query: ${e}`);
+      pendingResults.delete(resultId);
+    }
+  });
+
+  // 5. Chosen inline result — edit placeholder with AI answer via native rich blocks
+  bot.on('chosen_inline_result', async (ctx: Context) => {
+    const chosen = ctx.chosenInlineResult;
+    if (!chosen?.inline_message_id) return;
+
+    const pending = pendingResults.get(chosen.result_id);
+    if (!pending) return;
+
+    try {
+      const result = await pending.promise;
+
+      if (result?.output) {
+        const markdown = `**💬 问题：** ${pending.prompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}`;
+        const blocks = markdownToRichBlocks(markdown);
+
+        await ctx.api.raw.editMessageText({
+          inline_message_id: chosen.inline_message_id,
+          rich_message: { blocks },
+        });
+
+        logger.info(`[InlineResult] Edited: userId=${chosen.from.id} model=${pending.model}`);
+      } else {
+        await ctx.api.raw.editMessageText({
+          inline_message_id: chosen.inline_message_id,
+          rich_message: { blocks: [{ type: 'paragraph', text: `${ICONS.warning} 处理失败或超时\n\n模型：${pending.model}\n问题：${pending.prompt}` }] },
         });
       }
-
-      // B. Instant Prompt Card (Zero-latency fallback, 100% immune to Telegram timeouts)
-      results.push({
-        type: 'article',
-        id: `prompt-${Date.now()}`,
-        title: `💬 点击发送提问卡片 (${aliasUsed ? aliasUsed : '默认模型'})`,
-        description: `模型: ${modelToUse} | 提问: "${prompt.slice(0, 40)}..."`,
-        input_message_content: {
-          message_text: `<b>💬 AI 提问卡片</b>\n\n<b>模型：</b> <code>${modelToUse}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n<i>${ICONS.sparkles} 提问卡片已发送。</i>`,
-          parse_mode: 'HTML',
-        },
-      });
-
-      await ctx.answerInlineQuery(results, { cache_time: 2 }).catch(e => {
-        logger.error(`Error answering inline query result: ${e}`);
-      });
     } catch (e) {
-      logger.error(`Failed to process inline query: ${e}`);
-      const errorResult: InlineQueryResultArticle = {
-        type: 'article',
-        id: `err-${Date.now()}`,
-        title: '❌ 无法处理请求',
-        description: e instanceof Error ? e.message : String(e),
-        input_message_content: {
-          message_text: `${ICONS.error} <b>Inline 处理失败：</b>\n<i>${escapeHtmlText(e instanceof Error ? e.message : String(e))}</i>`,
-          parse_mode: 'HTML',
-        },
-      };
-      await ctx.answerInlineQuery([errorResult], { cache_time: 0 }).catch(() => {});
+      logger.warn(`[InlineResult] Failed to edit message: ${e}`);
+    } finally {
+      pendingResults.delete(chosen.result_id);
     }
   });
 }
