@@ -198,6 +198,11 @@ export function registerInlineHandler(
             message_text: `<b>🤔 点击发送后开始思考</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n点击发送后 AI 将开始计算，回答完成后自动更新。`,
             parse_mode: 'HTML' as const,
           },
+          reply_markup: {
+            inline_keyboard: [[
+              { text: `${ICONS.bot} AI 正在思考中...`, callback_data: 'noop' }
+            ]],
+          },
         },
         {
           type: 'article' as const,
