@@ -17,6 +17,13 @@ vi.mock('../../../agy/agyCli.js', () => ({
   }),
 }));
 
+// Mock blocks formatter
+vi.mock('../formatter/blocks.js', () => ({
+  markdownToRichBlocks: vi.fn().mockImplementation((markdown: string) => ([
+    { type: 'paragraph', text: markdown },
+  ])),
+}));
+
 describe('parseInlineModelAndPrompt', () => {
   it('should parse model prefix correctly', () => {
     const res = parseInlineModelAndPrompt('/flash 什么是量子计算', 'Gemini 3.5 Flash (Medium)');
@@ -37,14 +44,19 @@ describe('registerInlineHandler', () => {
   let mockBot: any;
   let mockSessionManager: any;
   let defaultOptions: SessionOptions;
-  let registeredHandler: ((ctx: any) => Promise<void>) | null = null;
+  let inlineQueryHandler: ((ctx: any) => Promise<void>) | null = null;
+  let chosenInlineResultHandler: ((ctx: any) => Promise<void>) | null = null;
 
   beforeEach(() => {
-    registeredHandler = null;
+    inlineQueryHandler = null;
+    chosenInlineResultHandler = null;
     mockBot = {
       on: vi.fn((event: string, handler: any) => {
         if (event === 'inline_query') {
-          registeredHandler = handler;
+          inlineQueryHandler = handler;
+        }
+        if (event === 'chosen_inline_result') {
+          chosenInlineResultHandler = handler;
         }
       }),
     };
@@ -59,9 +71,10 @@ describe('registerInlineHandler', () => {
     };
   });
 
-  it('should register inline_query event listener on bot', () => {
+  it('should register inline_query and chosen_inline_result event listeners on bot', () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
     expect(mockBot.on).toHaveBeenCalledWith('inline_query', expect.any(Function));
+    expect(mockBot.on).toHaveBeenCalledWith('chosen_inline_result', expect.any(Function));
   });
 
   it('should deny unauthorized user if allowedUsers is configured', async () => {
@@ -75,7 +88,7 @@ describe('registerInlineHandler', () => {
       answerInlineQuery: vi.fn().mockResolvedValue(true),
     };
 
-    await registeredHandler!(mockCtx);
+    await inlineQueryHandler!(mockCtx);
 
     expect(mockCtx.answerInlineQuery).toHaveBeenCalledWith(
       expect.arrayContaining([
@@ -97,7 +110,7 @@ describe('registerInlineHandler', () => {
       answerInlineQuery: vi.fn().mockResolvedValue(true),
     };
 
-    await registeredHandler!(mockCtx);
+    await inlineQueryHandler!(mockCtx);
 
     expect(mockCtx.answerInlineQuery).toHaveBeenCalledWith(
       expect.arrayContaining([
@@ -110,7 +123,7 @@ describe('registerInlineHandler', () => {
     );
   });
 
-  it('should generate AI & prompt cards for valid query with model alias', async () => {
+  it('should return placeholder cards for valid query', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
     const mockCtx = {
@@ -119,19 +132,96 @@ describe('registerInlineHandler', () => {
       answerInlineQuery: vi.fn().mockResolvedValue(true),
     };
 
-    await registeredHandler!(mockCtx);
+    await inlineQueryHandler!(mockCtx);
 
     expect(mockCtx.answerInlineQuery).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({
           id: expect.stringMatching(/^ai-/),
-          title: expect.stringContaining('什么是量子计算'),
+          title: expect.stringContaining('思考中'),
           input_message_content: expect.objectContaining({
-            message_text: expect.stringContaining('这是关于量子计算的测试回答。'),
+            message_text: expect.stringContaining('正在思考中'),
           }),
         }),
+        expect.objectContaining({
+          id: expect.stringMatching(/^prompt-/),
+          title: expect.stringContaining('提问卡片'),
+        }),
       ]),
-      expect.objectContaining({ cache_time: 2 }),
+      expect.objectContaining({ cache_time: 0 }),
     );
+  });
+
+  it('should edit placeholder with AI answer when inline result is chosen', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    // Trigger inline query first to populate pendingResults
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '什么是量子计算？' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResultId = callArg.find((r: any) => r.id.startsWith('ai-')).id;
+
+    const mockChosenCtx = {
+      chosenInlineResult: {
+        result_id: aiResultId,
+        from: { id: 12345 },
+        query: '什么是量子计算？',
+        inline_message_id: 'test_inline_msg_id_123',
+      },
+      api: {
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+
+    // Wait for model promise to resolve
+    await new Promise(process.nextTick);
+
+    await chosenInlineResultHandler!(mockChosenCtx);
+
+    expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inline_message_id: 'test_inline_msg_id_123',
+        rich_message: expect.objectContaining({
+          blocks: expect.arrayContaining([
+            expect.objectContaining({ type: 'paragraph' }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('should not edit when inline_message_id is missing', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: 'test' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const mockChosenCtx = {
+      chosenInlineResult: {
+        result_id: 'some-id',
+        from: { id: 12345 },
+        query: 'test',
+        // no inline_message_id
+      },
+      api: {
+        raw: {
+          editMessageText: vi.fn(),
+        },
+      },
+    };
+
+    await chosenInlineResultHandler!(mockChosenCtx);
+    expect(mockChosenCtx.api.raw.editMessageText).not.toHaveBeenCalled();
   });
 });
