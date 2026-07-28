@@ -111,6 +111,7 @@ export function registerInlineHandler(
   bot.on('inline_query', async (ctx: Context) => {
     const fromId = ctx.from?.id;
     const inlineQuery = ctx.inlineQuery;
+    logger.info(`🔥 [INLINE_QUERY TRIGGERED] fromId=${fromId} rawQuery="${inlineQuery?.query}"`);
     if (!inlineQuery || !fromId) return;
 
     if (options.allowedUsers && options.allowedUsers.length > 0 && !options.allowedUsers.includes(fromId)) {

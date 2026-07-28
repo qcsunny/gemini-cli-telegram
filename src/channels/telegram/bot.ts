@@ -642,7 +642,8 @@ export class TelegramBot {
       const msgDate = message?.date ? message.date * 1000 : null;
       const dateDiff = msgDate ? (start - msgDate) / 1000 : null;
       
-      logger.info(`[Update ${updateId}] Received update. Message date: ${msgDate ? new Date(msgDate).toISOString() : 'N/A'}. Delay from sending: ${dateDiff !== null ? dateDiff.toFixed(2) + 's' : 'N/A'}`);
+      const updateType = ctx.inlineQuery ? 'inline_query' : ctx.chosenInlineResult ? 'chosen_inline_result' : ctx.message ? 'message' : 'other';
+      logger.info(`[Update ${updateId}] Received update (${updateType}). fromId=${ctx.from?.id} Message date: ${msgDate ? new Date(msgDate).toISOString() : 'N/A'}`);
       
       try {
         await next();
