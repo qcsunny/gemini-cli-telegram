@@ -374,6 +374,7 @@ export class TelegramBot {
         const parseMode = session.settings?.telegram?.parseMode || 'RichText';
         await this.handleAutopilot(session, buildChannelReply(ctx, chatId, parseMode, session), ctx);
       },
+      options.allowedUsers,
     );
     this.setupMessageHandler();
     this.setupScheduler();
