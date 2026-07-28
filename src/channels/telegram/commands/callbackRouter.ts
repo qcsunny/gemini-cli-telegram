@@ -44,16 +44,16 @@ export function registerCallbackRouter(
 
     if (data === '/new') {
       ctx.answerCallbackQuery('Resetting session...').catch(e => logger.error(`Failed callback: ${e}`));
+      logger.info(`[DEBUG /new] defaultOptions = ${JSON.stringify(defaultOptions)}`);
       try {
         const projectManager = sessionManager.getProjectManager();
         const defaultProj = projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
         await sessionManager.reset(chatId, {
           ...defaultOptions,
           project: defaultProj,
-          model: 'Gemini 3.6 Flash (High)',
         });
         await ctx.editMessageText(
-          `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>Gemini 3.6 Flash (High)</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
+          `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${defaultOptions.model}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
           { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
         );
       } catch (e) {
@@ -477,10 +477,14 @@ export function registerCallbackRouter(
 
       ctx.answerCallbackQuery(`Workspace: ${project.name}`).catch(e => logger.error(`Failed callback: ${e}`));
 
+      const currentSession = sessionManager.getSession(chatId);
+      const currentModel = currentSession?.model;
+
       try {
         await sessionManager.reset(chatId, {
           ...defaultOptions,
           project,
+          model: currentModel || defaultOptions.model,
         });
 
         await ctx.editMessageText(

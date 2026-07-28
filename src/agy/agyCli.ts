@@ -21,9 +21,10 @@ import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
 import { loadUserConfig } from '../config/userConfig.js';
 import { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel } from './modelDetection.js';
+import { runGeminiDirect } from './backends/geminiDirect.js';
 import { runWeb2Api } from './backends/web2api.js';
 import { runDeepSeek } from './backends/deepseek.js';
-import { runGeminiDirect } from './backends/geminiDirect.js';
+
 import { runOpenCode } from './backends/opencode.js';
 import { readUsageFromDatabase, getConversationsDir } from './protobuf.js';
 import type { AgyRunOptions, AgyRunResult } from './types.js';

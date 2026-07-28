@@ -22,7 +22,7 @@ import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
 import { getTuningConfig } from '../config/userConfig.js';
 import { getEffectiveModelOrder, getChannelModel, buildTierAwareChain } from './modelRegistry.js';
-import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError } from './backendHealth.js'; // isRateLimitOrUnavailableError is now handled by parseErrorMessage
+import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError } from './backendHealth.js';
 
 import { withTimeout } from './messageLoop/threading.js';
 import { stripWholeMessageCodeFence, normalizeCodeFences, stripSearchResultPayloads } from './messageLoop/textUtils.js';

@@ -22,14 +22,6 @@ import { messageCache } from '../../../utils/messageCache.js';
 import { draftBackoffUntil } from './rateLimiter.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
 
-export function getRichMessageApi(ctx: Context) {
-  const cfg = ctx.api.config as { useExtend?: (name: string) => unknown } | undefined;
-  return cfg?.useExtend?.('richMessage') ?? ctx.api;
-}
-
-// Thin wrappers around InputRichMessage construction.
-// These keep the rest of the codebase decoupled from the raw grammY type shape
-// and make it easy to swap payload formats without touching call sites.
 function buildRichMessagePayload(blocks: RichBlock[]): InputRichMessage<never> {
   return { blocks };
 }

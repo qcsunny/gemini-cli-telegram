@@ -818,14 +818,14 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
   }
 
   // Replace [^id] in body with sequential numbers.
-  // Body wraps the citation in reference[name:"body-N"] as a backward anchor.
-  // The link targets reference[name:"fn-N"] in the footnote definition.
-  // Separate names ensure forward and backward each have a single target.
+  // A separate empty reference[name:"body-N"] marks the citation position
+  // for backward navigation, without wrapping the forward link.
+  // This avoids client confusion when reference wraps reference_link.
   let body = bodyText;
   for (const [origId, num] of idToNum) {
     body = body.replace(
       new RegExp(`\\[\\^${origId}\\]`, 'g'),
-      `<tg-reference name="body-${num}"><a href="#fn-${num}"><sup>[${num}]</sup></a></tg-reference>`,
+      `<tg-reference name="body-${num}"></tg-reference><a href="#fn-${num}"><sup>[${num}]</sup></a>`,
     );
   }
 

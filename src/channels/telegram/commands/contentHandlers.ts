@@ -178,9 +178,9 @@ export function registerContentHandlers(
       if (isActive) {
         await sessionManager.reset(chatId, {
           ...defaultOptions,
-          model: 'Gemini 3.6 Flash (High)',
+          model: defaultOptions.model,
         });
-        activeResetMsg = ` This was the active session, so your session has been reset and set to <code>Gemini 3.6 Flash (High)</code>.`;
+        activeResetMsg = ` This was the active session, so your session has been reset and set to <code>${defaultOptions.model}</code>.`;
       }
 
       await ctx.reply(`${ICONS.success} <b>Session Deleted</b>\n\nDeleted session ${idx}: "${target.title}".${activeResetMsg}`, {

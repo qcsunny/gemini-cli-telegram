@@ -16,7 +16,6 @@ import {
   markBackendHealthy,
   clearBackendHealth,
   isConnectionError,
-  isRateLimitOrUnavailableError,
 } from './backendHealth.js';
 
 describe('backendHealth', () => {
@@ -161,57 +160,6 @@ describe('backendHealth', () => {
 
     it('should return false for unrelated message', () => {
       expect(isConnectionError({ message: 'something went wrong' })).toBe(false);
-    });
-  });
-
-  describe('isRateLimitOrUnavailableError', () => {
-    it('should return true for 429 in stderr', () => {
-      expect(isRateLimitOrUnavailableError('Error 429', '')).toBe(true);
-    });
-
-    it('should return true for quota in output', () => {
-      expect(isRateLimitOrUnavailableError('', 'quota exceeded')).toBe(true);
-    });
-
-    it('should return true for exhausted', () => {
-      expect(isRateLimitOrUnavailableError('Resource exhausted', '')).toBe(true);
-    });
-
-    it('should return true for rate_limit', () => {
-      expect(isRateLimitOrUnavailableError('rate_limit error', '')).toBe(true);
-    });
-
-    it('should return true for rate limit', () => {
-      expect(isRateLimitOrUnavailableError('rate limit exceeded', '')).toBe(true);
-    });
-
-    it('should return true for limit exceeded', () => {
-      expect(isRateLimitOrUnavailableError('limit exceeded', '')).toBe(true);
-    });
-
-    it('should return true for resource_exhausted', () => {
-      expect(isRateLimitOrUnavailableError('resource_exhausted', '')).toBe(true);
-    });
-
-    it('should return true for unavailable', () => {
-      expect(isRateLimitOrUnavailableError('service unavailable', '')).toBe(true);
-    });
-
-    it('should return true for overloaded', () => {
-      expect(isRateLimitOrUnavailableError('overloaded', '')).toBe(true);
-    });
-
-    it('should return true for capacity', () => {
-      expect(isRateLimitOrUnavailableError('capacity reached', '')).toBe(true);
-    });
-
-    it('should return false for unrelated errors', () => {
-      expect(isRateLimitOrUnavailableError('authentication failed', 'invalid token')).toBe(false);
-    });
-
-    it('should be case insensitive', () => {
-      expect(isRateLimitOrUnavailableError('RATE_LIMIT', '')).toBe(true);
-      expect(isRateLimitOrUnavailableError('Quota', '')).toBe(true);
     });
   });
 });

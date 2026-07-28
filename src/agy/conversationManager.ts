@@ -6,8 +6,6 @@
 
 import { restoreAllHistories } from './messageStore.js';
 
-const MAX_HISTORY_ENTRIES = 100;
-
 export interface Web2ApiMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -22,15 +20,6 @@ export const opencodeHistories = new Map<string, Web2ApiMessage[]>();
 
 export function clearOpenCodeHistory(conversationId: string): void {
   opencodeHistories.delete(conversationId);
-}
-
-export function trimHistoryMaps(): void {
-  for (const map of [web2apiHistories, deepseekHistories, geminiDirectHistories, opencodeHistories]) {
-    if (map.size <= MAX_HISTORY_ENTRIES) continue;
-    const keys = [...map.keys()];
-    const toDelete = keys.slice(0, map.size - MAX_HISTORY_ENTRIES);
-    for (const k of toDelete) map.delete(k);
-  }
 }
 
 export function makeWeb2ApiConvId(): string {

@@ -236,10 +236,6 @@ export function getLogPath(config?: UserConfig | null): string {
   return resolvePath(config?.paths?.log, 'daemon.log');
 }
 
-export function getErrorLogPath(config?: UserConfig | null): string {
-  return resolvePath(config?.paths?.errorLog, 'error.log');
-}
-
 export function getPidPath(config?: UserConfig | null): string {
   return resolvePath(config?.paths?.pid, 'daemon.pid');
 }

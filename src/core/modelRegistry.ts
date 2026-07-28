@@ -170,57 +170,9 @@ export function getChannelModel(model: string): string | null {
   return 'agy';
 }
 
-// ── Circular Fallback Chain ──────────────────────────────────────────────────
+// ── Tier-Aware Fallback Chain ────────────────────────────────────────────────
 
 /**
- * Builds a circular fallback chain starting at `startModel`.
- *
- * Algorithm:
- *   1. Locate startModel in the effective model list.
- *   2. Push all models from startModel to the end (weaker models).
- *   3. Wrap around and push all models from the beginning up to startModel
- *      (stronger models) — handles the case where even the weakest model fails.
- *
- * If startModel is not found, prepend it and return the full list.
- */
-export function buildChannelAwareChain(startModel: string): string[] {
-  const models = getEffectiveModelOrder();
-  const idx = models.indexOf(startModel);
-  if (idx === -1) {
-    return [startModel, ...models];
-  }
-  const chain: string[] = [];
-  for (let i = idx; i < models.length; i++) {
-    chain.push(models[i]);
-  }
-  for (let i = 0; i < idx; i++) {
-    chain.push(models[i]);
-  }
-  return chain;
-}
-
-/**
- * Returns channel order derived from tier priority.
- * Channels appear in the same order as their corresponding tiers.
- */
-export function getChannelOrder(): string[] {
-  const tiers = getEffectiveTiers();
-  if (!tiers) return ['agy', 'web2api', 'deepseek', 'opencode'];
-  const seen = new Set<string>();
-  const order: string[] = [];
-  for (const t of tiers) {
-    const ch = t.channel || 'agy';
-    if (!seen.has(ch)) {
-      seen.add(ch);
-      order.push(ch);
-    }
-  }
-  return order.length > 0 ? order : ['agy', 'web2api', 'deepseek', 'opencode'];
-}
-
-/**
- * Builds a capability-tier-aware fallback chain from configured tiers.
- *
  * Algorithm:
  *   1. Reads configured tiers (sorted by priority).
  *   2. Finds which tier `startModel` belongs to (T_k).

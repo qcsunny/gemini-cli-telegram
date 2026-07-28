@@ -72,24 +72,3 @@ export function isConnectionError(err: unknown): boolean {
   const msg = (e.message || '').toLowerCase();
   return msg.includes('socket hang up') || msg.includes('connection refused') || msg.includes('econnrefused');
 }
-
-/** Returns true if the error indicates rate limiting or upstream unavailability. */
-export function isRateLimitOrUnavailableError(stderr: string, output: string): boolean {
-  const lowerStderr = stderr.toLowerCase();
-  const lowerOutput = output.toLowerCase();
-
-  const keywords = [
-    '429',
-    'quota',
-    'exhausted',
-    'rate_limit',
-    'rate limit',
-    'limit exceeded',
-    'resource_exhausted',
-    'unavailable',
-    'overloaded',
-    'capacity',
-  ];
-
-  return keywords.some(keyword => lowerStderr.includes(keyword) || lowerOutput.includes(keyword));
-}
