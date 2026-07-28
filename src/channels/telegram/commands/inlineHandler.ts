@@ -124,7 +124,7 @@ export function registerInlineHandler(
           parse_mode: 'HTML' as const,
         },
       };
-      await ctx.answerInlineQuery([unauthorizedResult], { cache_time: 10 }).catch(() => {});
+      await ctx.answerInlineQuery([unauthorizedResult], { cache_time: 10, is_personal: true }).catch(() => {});
       return;
     }
 
@@ -139,30 +139,40 @@ export function registerInlineHandler(
         {
           type: 'article' as const,
           id: 'help-main',
-          title: `💡 当前模型: ${modelToUse}`,
-          description: '直接输入问题提问，或使用前缀切换模型 (/flash, /pro...)',
+          title: `🤖 Ask AI — Gemini / DeepSeek / OpenCode`,
+          description: `Type a question to ask AI (model: ${modelToUse})`,
           input_message_content: {
-            message_text: `${ICONS.bot} <b>Gemini CLI Inline Mode</b>\n\n当前模型：<code>${modelToUse}</code>\n\n直接输入问题即可调用，或输入前缀切换：\n• <code>/flash 提问</code> - 极速 Flash 模型\n• <code>/pro 提问</code> - 深度推理模型\n• <code>/deepseek 提问</code> - DeepSeek 模型`,
+            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Quick model switches:</b>\n• <code>/flash 提问</code> — Gemini 3.6 Flash (fast)\n• <code>/pro 提问</code> — Gemini 3.1 Pro (deep reasoning)\n• <code>/deepseek 提问</code> — DeepSeek Flash`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-flash',
-          title: '⚡ 快速使用 /flash 极速模型',
-          description: '输入 @bot_name /flash 您的提问',
+          title: '⚡ @static32bot /flash 提问',
+          description: 'Gemini 3.6 Flash — fastest responses',
           input_message_content: {
-            message_text: `💡 提示：输入 <code>@bot_name /flash 提问内容</code> 可强制使用 <code>Gemini 3.6 Flash</code> 极速响应。`,
+            message_text: `⚡ <b>Fast mode</b>\n\nUse <code>/flash</code> prefix for quick answers:\n<code>@static32bot /flash 什么是量子计算？</code>\n\nForces Gemini 3.6 Flash model for fast response.`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-pro',
-          title: '🧠 快速使用 /pro 深度模型',
-          description: '输入 @bot_name /pro 您的提问',
+          title: '🧠 @static32bot /pro 提问',
+          description: 'Gemini 3.1 Pro — deep reasoning',
           input_message_content: {
-            message_text: `💡 提示：输入 <code>@bot_name /pro 提问内容</code> 可使用 <code>Gemini 3.1 Pro</code> 深度分析。`,
+            message_text: `🧠 <b>Pro / Deep Reasoning</b>\n\nUse <code>/pro</code> prefix for complex analysis:\n<code>@static32bot /pro 请详细解释...</code>\n\nForces Gemini 3.1 Pro model for deep reasoning.`,
+            parse_mode: 'HTML' as const,
+          },
+        },
+        {
+          type: 'article' as const,
+          id: 'help-deepseek',
+          title: '🔍 @static32bot /deepseek 提问',
+          description: 'DeepSeek Flash model',
+          input_message_content: {
+            message_text: `🔍 <b>DeepSeek Model</b>\n\nUse <code>/deepseek</code> prefix:\n<code>@static32bot /deepseek 你的问题</code>\n\nForces DeepSeek Flash model.`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -200,7 +210,11 @@ export function registerInlineHandler(
         },
       ];
 
-      await ctx.answerInlineQuery(results, { cache_time: 0 });
+      await ctx.answerInlineQuery(results, {
+        cache_time: 0,
+        is_personal: true,
+        button: { text: '打开私聊', start_parameter: 'inline' },
+      });
     } catch (e) {
       logger.error(`Error answering inline query: ${e}`);
       pendingResults.delete(resultId);
