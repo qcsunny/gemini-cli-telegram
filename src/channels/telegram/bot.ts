@@ -329,23 +329,46 @@ export class TelegramBot {
   constructor(token: string, options: TelegramBotOptions = {}) {
     const clientConfig: any = {};
     if (options.proxy) {
-      this.proxyAgent = new ProxyAgent(options.proxy);
+      this.proxyAgent = new ProxyAgent({
+        uri: options.proxy,
+        connections: 10,
+      });
+      const inlineAgent = new ProxyAgent({
+        uri: options.proxy,
+        connections: 2,
+      });
       clientConfig.baseFetchConfig = {
         dispatcher: this.proxyAgent,
         compress: true,
       };
       clientConfig.fetch = async (url: any, init: any) => {
+        const urlStr = (typeof url === 'string' ? url : url?.href ?? '');
         const cleanInit = init ? { ...init } : {};
-        delete cleanInit.signal;
-        // Retry transient proxy/network failures so a dropped long-poll
-        // connection recovers instead of stalling update delivery.
+        // answerInlineQuery uses a dedicated agent so it is never queued
+        // behind the long-poll getUpdates connection.
+        const isInlineAnswer = urlStr.includes('/answerInlineQuery');
+        if (isInlineAnswer) {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 1500);
+            try {
+              const res = await undiciFetch(url, {
+                ...cleanInit,
+                dispatcher: inlineAgent,
+                signal: ctrl.signal,
+              });
+              clearTimeout(timer);
+              return res;
+            } catch (e: any) {
+              clearTimeout(timer);
+              if (attempt === 1) throw e;
+            }
+          }
+        }
         let lastErr: any;
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
-            return await undiciFetch(url, {
-              ...cleanInit,
-              dispatcher: this.proxyAgent,
-            });
+            return await undiciFetch(url, { ...cleanInit, dispatcher: this.proxyAgent });
           } catch (e: any) {
             lastErr = e;
             await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
@@ -640,8 +663,6 @@ export class TelegramBot {
       const updateId = ctx.update.update_id;
       const message = ctx.message || ctx.editedMessage || ctx.callbackQuery?.message;
       const msgDate = message?.date ? message.date * 1000 : null;
-      const dateDiff = msgDate ? (start - msgDate) / 1000 : null;
-      
       const updateType = ctx.inlineQuery ? 'inline_query' : ctx.chosenInlineResult ? 'chosen_inline_result' : ctx.message ? 'message' : 'other';
       logger.info(`[Update ${updateId}] Received update (${updateType}). fromId=${ctx.from?.id} Message date: ${msgDate ? new Date(msgDate).toISOString() : 'N/A'}`);
       
