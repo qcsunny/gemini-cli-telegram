@@ -1,9 +1,3 @@
-/**
- * @license
- * Copyright 2026 Google LLC
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import type { Bot, Context } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
@@ -23,7 +17,6 @@ const RESULTS_TTL = 120_000;
 interface PendingResult {
   prompt: string;
   model: string;
-  promise: Promise<AgyRunResult | null>;
   createdAt: number;
 }
 
@@ -35,7 +28,6 @@ const cleanupTimer = setInterval(() => {
   for (const [key, val] of pendingResults) {
     if (val.createdAt < cutoff) pendingResults.delete(key);
   }
-  // Also clean stale user controllers (no pending results for that user)
   const activeUsers = new Set<string>();
   for (const key of pendingResults.keys()) {
     const parts = key.split('-');
@@ -50,7 +42,6 @@ const cleanupTimer = setInterval(() => {
 }, 60_000);
 cleanupTimer.unref();
 
-/** Supported inline model prefix aliases for instant model switching */
 const MODEL_PREFIX_MAP: Record<string, string> = {
   '/flash': 'Gemini 3.6 Flash (High)',
   '/pro': 'Web2API: Gemini 3.1 Pro',
@@ -58,10 +49,6 @@ const MODEL_PREFIX_MAP: Record<string, string> = {
   '/opencode': 'OpenCode: DeepSeek V4 Flash Free',
 };
 
-/**
- * Resolve target model and clean prompt from inline query string.
- * E.g. "@bot_name /flash 提问" -> { model: 'Gemini 3.6 Flash (High)', prompt: '提问' }
- */
 export function parseInlineModelAndPrompt(
   rawQuery: string,
   defaultModel: string,
@@ -115,10 +102,6 @@ function anySignal(...signals: AbortSignal[]): AbortSignal {
   return ctrl.signal;
 }
 
-/**
- * Register Telegram Inline Query handler (`@bot_name query`).
- * Enables real-time AI responses and inline model switching directly from any chat.
- */
 export function registerInlineHandler(
   bot: Bot,
   sessionManager: SessionManager,
@@ -130,7 +113,6 @@ export function registerInlineHandler(
     const inlineQuery = ctx.inlineQuery;
     if (!inlineQuery || !fromId) return;
 
-    // 1. Whitelist authorization check
     if (options.allowedUsers && options.allowedUsers.length > 0 && !options.allowedUsers.includes(fromId)) {
       const unauthorizedResult = {
         type: 'article' as const,
@@ -152,7 +134,6 @@ export function registerInlineHandler(
     const activeModel = sessionModel || defaultOptions.model || '';
     const { model: modelToUse, prompt, aliasUsed } = parseInlineModelAndPrompt(rawQuery, activeModel);
 
-    // 2. Empty query help hint & model selection cards
     if (!prompt) {
       const results = [
         {
@@ -190,27 +171,20 @@ export function registerInlineHandler(
       return;
     }
 
-    // 3. Cancel previous model execution for this user, start new one
+    // Store prompt info (no model startup — zero latency)
     logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} prompt="${prompt.slice(0, 40)}..."`);
-
-    userControllers.get(fromId)?.abort();
-    const ctrl = new AbortController();
-    userControllers.set(fromId, ctrl);
-
     const resultId = `ai-${Date.now()}-${fromId}`;
-    const modelPromise = runModelWithTimeout(prompt, modelToUse, defaultOptions, ctrl.signal);
-    pendingResults.set(resultId, { prompt, model: modelToUse, promise: modelPromise, createdAt: Date.now() });
+    pendingResults.set(resultId, { prompt, model: modelToUse, createdAt: Date.now() });
 
-    // 4. Answer inline query instantly with placeholder cards
     try {
       const results = [
         {
           type: 'article' as const,
           id: resultId,
-          title: `🤔 思考中... [${modelToUse}]`,
+          title: `🤔 点击发送并开始思考 [${modelToUse}]`,
           description: `点击发送，${prompt.slice(0, 40)}... AI 回答将自动更新`,
           input_message_content: {
-            message_text: `<b>🤔 AI 正在思考中...</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n回答完成后将自动更新。`,
+            message_text: `<b>🤔 点击发送后开始思考</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n点击发送后 AI 将开始计算，回答完成后自动更新。`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -226,14 +200,13 @@ export function registerInlineHandler(
         },
       ];
 
-      await ctx.answerInlineQuery(results, { cache_time: 0, button: { text: '打开私聊', start_parameter: 'inline' } });
+      await ctx.answerInlineQuery(results, { cache_time: 0 });
     } catch (e) {
       logger.error(`Error answering inline query: ${e}`);
       pendingResults.delete(resultId);
     }
   });
 
-  // 5. Chosen inline result — edit placeholder with AI answer via native rich blocks
   bot.on('chosen_inline_result', async (ctx: Context) => {
     const chosen = ctx.chosenInlineResult;
     if (!chosen?.inline_message_id) return;
@@ -241,8 +214,14 @@ export function registerInlineHandler(
     const pending = pendingResults.get(chosen.result_id);
     if (!pending) return;
 
+    userControllers.get(chosen.from.id)?.abort();
+    const ctrl = new AbortController();
+    userControllers.set(chosen.from.id, ctrl);
+
+    logger.info(`[ChosenInline] userId=${chosen.from.id} model=${pending.model} — starting model`);
+
     try {
-      const result = await pending.promise;
+      const result = await runModelWithTimeout(pending.prompt, pending.model, defaultOptions, ctrl.signal);
 
       if (result?.output) {
         const markdown = `**💬 问题：** ${pending.prompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}`;
@@ -257,13 +236,19 @@ export function registerInlineHandler(
       } else {
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
-          rich_message: { blocks: [{ type: 'paragraph', text: `${ICONS.warning} 处理失败或超时\n\n模型：${pending.model}\n问题：${pending.prompt}` }] },
+          rich_message: {
+            blocks: [{
+              type: 'paragraph',
+              text: `${ICONS.warning} 处理失败或超时\n\n模型：${pending.model}\n问题：${pending.prompt}`,
+            }],
+          },
         });
       }
     } catch (e) {
       logger.warn(`[InlineResult] Failed to edit message: ${e}`);
     } finally {
       pendingResults.delete(chosen.result_id);
+      userControllers.delete(chosen.from.id);
     }
   });
 }
