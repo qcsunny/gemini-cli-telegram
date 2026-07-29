@@ -103,24 +103,29 @@ async function runModelWithTimeout(
   signal?: AbortSignal,
   customCwd?: string,
 ): Promise<AgyRunResult | null> {
-  const timeoutCtrl = new AbortController();
-  const timeout = setTimeout(() => timeoutCtrl.abort(), MODEL_TIMEOUT_MS);
-  try {
-    const result = await runAgyPrint({
-      prompt,
-      cwd: customCwd || defaultOptions.cwd || process.cwd(),
-      model: modelToUse,
-      proxy: defaultOptions.proxy,
-      signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
-    });
-    return result;
-  } catch (err) {
-    if ((err as Error)?.name === 'AbortError') return null;
-    logger.warn(`[InlineQuery] Model execution error: ${err}`);
-    return null;
-  } finally {
-    clearTimeout(timeout);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const timeoutCtrl = new AbortController();
+    const timeout = setTimeout(() => timeoutCtrl.abort(), MODEL_TIMEOUT_MS);
+    try {
+      logger.info(`[InlineQuery] Model attempt ${attempt}/2 running for model="${modelToUse}"`);
+      const result = await runAgyPrint({
+        prompt,
+        cwd: customCwd || defaultOptions.cwd || process.cwd(),
+        model: modelToUse,
+        proxy: defaultOptions.proxy,
+        signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
+      });
+      clearTimeout(timeout);
+      if (result?.output) return result;
+    } catch (err) {
+      clearTimeout(timeout);
+      if ((err as Error)?.name === 'AbortError') {
+        if (attempt === 2) return null;
+      }
+      logger.warn(`[InlineQuery] Model attempt ${attempt}/2 error: ${err}`);
+    }
   }
+  return null;
 }
 
 function anySignal(...signals: AbortSignal[]): AbortSignal {
