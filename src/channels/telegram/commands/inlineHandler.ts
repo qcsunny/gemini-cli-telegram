@@ -75,7 +75,7 @@ export function parseInlineModelAndPrompt(
     }
   }
 
-  const pMatch = text.match(/@p:(\d+|[^\s]+)/i);
+  const pMatch = text.match(/@p:?(\d+|[^\s]+)/i);
   if (pMatch) {
     const target = pMatch[1];
     text = text.replace(pMatch[0], '').replace(/\s+/g, ' ').trim();
@@ -170,7 +170,7 @@ export function registerInlineHandler(
     const targetProjectPath = projectUsed?.path || activeSession?.cwd || defaultOptions.cwd;
 
     if (!prompt) {
-      const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>@p:${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
+      const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>@p${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
       const results = [
         {
           type: 'article' as const,
@@ -178,7 +178,7 @@ export function registerInlineHandler(
           title: `🤖 Ask AI — Gemini / DeepSeek / OpenCode`,
           description: `Type a question to ask AI (model: ${modelToUse})`,
           input_message_content: {
-            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Quick model switches:</b>\n• <code>/flash 提问</code> — Gemini 3.6 Flash\n• <code>/pro 提问</code> — Gemini 3.1 Pro\n• <code>/deepseek 提问</code> — DeepSeek Flash\n\n<b>Project switches (@p:序号):</b>\n${projectHelpList || '• 自动继承 Bot 当前绑定的项目'}`,
+            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Quick model switches:</b>\n• <code>/flash 提问</code> — Gemini 3.6 Flash\n• <code>/pro 提问</code> — Gemini 3.1 Pro\n• <code>/deepseek 提问</code> — DeepSeek Flash\n\n<b>Project switches (@pN):</b>\n${projectHelpList || '• 自动继承 Bot 当前绑定的项目'}`,
             parse_mode: 'HTML' as const,
           },
         },
