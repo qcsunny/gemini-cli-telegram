@@ -223,6 +223,7 @@ export function registerInlineHandler(
     pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, createdAt: Date.now() });
 
     try {
+      const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
       const results = [
         {
           type: 'article' as const,
@@ -230,7 +231,7 @@ export function registerInlineHandler(
           title: `🤔 点击发送并开始思考 [${modelToUse}]`,
           description: `点击发送，${prompt.slice(0, 40)}... AI 回答将自动更新`,
           input_message_content: {
-            message_text: `<b>🤔 点击发送后开始思考</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n点击发送后 AI 将开始计算，回答完成后自动更新。`,
+            message_text: `<b>🤔 点击发送后开始思考</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}\n\n点击发送后 AI 将开始计算，回答完成后自动更新。`,
             parse_mode: 'HTML' as const,
           },
           reply_markup: {
@@ -245,7 +246,7 @@ export function registerInlineHandler(
           title: `💬 发送提问卡片 (${aliasUsed || '默认模型'})`,
           description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
           input_message_content: {
-            message_text: `<b>💬 AI 提问卡片</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(prompt)}\n\n<i>${ICONS.sparkles} 提问卡片已发送。</i>`,
+            message_text: `<b>💬 AI 提问卡片</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<i>${ICONS.sparkles} 提问卡片已发送。</i>`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -283,10 +284,11 @@ export function registerInlineHandler(
       const result = await runModelWithTimeout(pending.prompt, pending.model, defaultOptions, ctrl.signal, pending.projectPath);
 
       if (result?.output) {
-        const markdown = `**💬 问题：** ${pending.prompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}`;
+        const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
+        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}`;
         const blocks = markdownToRichBlocks(markdown);
         const htmlBody = renderIRToHtml(markdownToIR(result.output));
-        const text = `<b>💬 问题：</b> ${escapeHtmlText(pending.prompt)}\n\n<b>🤖 回答 (${escapeHtmlText(pending.model)})：</b>\n\n${htmlBody}`;
+        const text = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(pending.model)})：</b>\n\n${htmlBody}`;
 
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
@@ -297,7 +299,8 @@ export function registerInlineHandler(
 
         logger.info(`[InlineResult] Edited with native rich blocks: userId=${chosen.from.id} model=${pending.model}`);
       } else {
-        const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(pending.prompt)}`;
+        const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
+        const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
           text: failText,
