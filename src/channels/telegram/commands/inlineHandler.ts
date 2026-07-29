@@ -163,6 +163,15 @@ export function registerInlineHandler(
   defaultOptions: SessionOptions = {},
   options: InlineHandlerOptions = {},
 ): void {
+  bot.on('callback_query:data', async (ctx: Context) => {
+    if (ctx.callbackQuery?.data === 'inline_thinking') {
+      await ctx.answerCallbackQuery({
+        text: '🧠 AI 推理引擎正在全量计算中，回答完成后将自动原地更新，请稍候...',
+        show_alert: true,
+      }).catch(() => {});
+    }
+  });
+
   bot.on('inline_query', async (ctx: Context) => {
     const fromId = ctx.from?.id;
     const inlineQuery = ctx.inlineQuery;
@@ -256,12 +265,12 @@ export function registerInlineHandler(
           title: `🤔 点击发送并开始思考 [${modelToUse}]`,
           description: `点击发送，${prompt.slice(0, 40)}... AI 回答将自动更新`,
           input_message_content: {
-            message_text: `<b>🤔 点击发送后开始思考</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}\n\n点击发送后 AI 将开始计算，回答完成后自动更新。`,
+            message_text: `✨ <b>AI 推理引擎已启动</b>\n\n<b>🧠 目标模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>💬 提问内容：</b>\n<blockquote>${escapeHtmlText(displayPrompt)}</blockquote>\n\n<i>🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。</i>`,
             parse_mode: 'HTML' as const,
           },
           reply_markup: {
             inline_keyboard: [[
-              { text: `${ICONS.bot} AI 正在思考中...`, callback_data: 'noop' }
+              { text: `${ICONS.bot} ⏳ AI 正在深度思考中...`, callback_data: 'inline_thinking' }
             ]],
           },
         },
