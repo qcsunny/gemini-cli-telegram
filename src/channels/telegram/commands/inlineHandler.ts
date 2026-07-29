@@ -4,7 +4,7 @@ import type { SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
-import { markdownToIR, renderIRToHtml } from '../formatter/core.js';
+import { markdownToIR, renderIRToHtml, formatTokenCount } from '../formatter/core.js';
 import { logger } from '../../../utils/logger.js';
 import { ICONS } from '../ui.js';
 
@@ -285,10 +285,23 @@ export function registerInlineHandler(
 
       if (result?.output) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
-        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}`;
+        
+        let footerParts: string[] = [];
+        if (result.durationMs) {
+          footerParts.push(`⏱️ ${(result.durationMs / 1000).toFixed(1)}s`);
+        }
+        if (result.usage) {
+          const totalTokens = (result.usage.input || 0) + (result.usage.output || 0);
+          if (totalTokens > 0) {
+            footerParts.push(`🪙 ${formatTokenCount(totalTokens)} tokens`);
+          }
+        }
+        const footerStr = footerParts.length > 0 ? `\n\n<i>${footerParts.join(' · ')}</i>` : '';
+
+        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}${footerStr}`;
         const blocks = markdownToRichBlocks(markdown);
         const htmlBody = renderIRToHtml(markdownToIR(result.output));
-        const text = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(pending.model)})：</b>\n\n${htmlBody}`;
+        const text = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(pending.model)})：</b>\n\n${htmlBody}${footerStr}`;
 
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
