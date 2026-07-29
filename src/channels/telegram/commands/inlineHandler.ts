@@ -350,22 +350,20 @@ export function registerInlineHandler(
           }
         }
         const footerText = footerParts.join(' · ');
-        const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${escapeHtmlText(pending.model)} 暂时不可用，已自动降级` : '';
-        const footerStr = footerText ? `\n\n<tg-small><i>${footerText}</i></tg-small>` : '';
+        const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
 
-        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
-        const blocks = markdownToRichBlocks(markdown, { footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined });
-        const htmlBody = renderIRToHtml(markdownToIR(result.output));
-        const text = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(modelUsed)}${fallbackNote})：</b>\n\n${htmlBody}${footerStr}`;
-
-        await ctx.api.raw.editMessageText({
-          inline_message_id: chosen.inline_message_id,
-          text: text.slice(0, 4096),
-          parse_mode: 'HTML',
-          rich_message: { blocks },
+        // Pure 10.1 native RichBlocks without 4096 character truncation limit
+        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
+        const blocks = markdownToRichBlocks(fullMarkdown, {
+          footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined,
         });
 
-        logger.info(`[InlineResult] Edited with native rich blocks: userId=${chosen.from.id} model=${pending.model}`);
+        await ctx.api.editMessageTextInline(
+          chosen.inline_message_id,
+          { blocks } as any,
+        );
+
+        logger.info(`[InlineResult] Edited with pure 10.1 native rich blocks: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
         const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;

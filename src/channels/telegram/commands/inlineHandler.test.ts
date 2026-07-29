@@ -181,6 +181,7 @@ describe('registerInlineHandler', () => {
         inline_message_id: 'test_inline_msg_id_123',
       },
       api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
         raw: {
           editMessageText: vi.fn().mockResolvedValue(true),
         },
@@ -192,14 +193,10 @@ describe('registerInlineHandler', () => {
 
     await chosenInlineResultHandler!(mockChosenCtx);
 
-    expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+    expect(mockChosenCtx.api.editMessageTextInline).toHaveBeenCalledWith(
+      'test_inline_msg_id_123',
       expect.objectContaining({
-        inline_message_id: 'test_inline_msg_id_123',
-        text: expect.stringContaining('这是关于量子计算的测试回答'),
-        parse_mode: 'HTML',
-        rich_message: expect.objectContaining({
-          blocks: expect.any(Array),
-        }),
+        blocks: expect.any(Array),
       }),
     );
   });
