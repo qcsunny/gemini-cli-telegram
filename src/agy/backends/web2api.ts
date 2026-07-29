@@ -32,6 +32,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
   const body = JSON.stringify({
     model: modelId,
     stream: true,
+    max_tokens: 16384,
     messages: history,
   });
 
