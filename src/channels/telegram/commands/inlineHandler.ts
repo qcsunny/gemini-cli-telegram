@@ -3,7 +3,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { markdownToRichBlocks } from '../formatter/blocks.js';
+import { markdownToRichBlocks, buildFooterBlocksFromHtml } from '../formatter/blocks.js';
 import { markdownToIR, renderIRToHtml, formatTokenCount } from '../formatter/core.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -351,19 +351,28 @@ export function registerInlineHandler(
         }
         const footerText = footerParts.join(' · ');
         const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
+        const footerAnchor = footerText ? `\n\n<a href="tg://btn_info_footer">${escapeHtmlText(footerText)}${isFallback ? ' (已自动降级)' : ''}</a>` : '';
 
-        // Pure 10.1 native RichBlocks without 4096 character truncation limit
-        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
-        const blocks = markdownToRichBlocks(fullMarkdown, {
-          footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined,
-        });
+        const htmlBody = renderIRToHtml(markdownToIR(result.output));
+        const fullHtml = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(modelUsed)}${fallbackNote})：</b>\n\n${htmlBody}${footerAnchor}`;
+        const blocks = buildFooterBlocksFromHtml(fullHtml);
 
-        await ctx.api.editMessageTextInline(
-          chosen.inline_message_id,
-          { blocks } as any,
-        );
+        try {
+          await ctx.api.editMessageTextInline(
+            chosen.inline_message_id,
+            fullHtml,
+            { parse_mode: 'HTML' },
+          );
+        } catch {
+          await ctx.api.raw.editMessageText({
+            inline_message_id: chosen.inline_message_id,
+            text: fullHtml.slice(0, 4096),
+            parse_mode: 'HTML',
+            rich_message: blocks.length > 0 ? { blocks } : undefined,
+          });
+        }
 
-        logger.info(`[InlineResult] Edited with pure 10.1 native rich blocks: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
+        logger.info(`[InlineResult] Edited with tg://btn_info_footer anchor: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
         const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;
