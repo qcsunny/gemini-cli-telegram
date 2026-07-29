@@ -155,7 +155,7 @@ export interface TokenUsage {
  * - Cache hits are discounted per provider (Claude 10%, Gemini 25%)
  * - Thinking/reasoning tokens billed per provider setting (Claude at output rate)
  */
-function calculateCost(
+export function calculateCost(
   modelName: string,
   inputTokens: number,
   outputTokens: number,

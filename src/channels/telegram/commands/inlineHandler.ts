@@ -7,6 +7,7 @@ import { markdownToRichBlocks } from '../formatter/blocks.js';
 import { markdownToIR, renderIRToHtml, formatTokenCount } from '../formatter/core.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
+import { calculateCost } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
 
 export interface InlineHandlerOptions {
@@ -321,11 +322,22 @@ export function registerInlineHandler(
           footerParts.push(`⏱️ ${(result.durationMs / 1000).toFixed(1)}s`);
         }
         if (result.usage) {
-          if (result.usage.input) footerParts.push(`📥 In: ${formatTokenCount(result.usage.input)}`);
-          if (result.usage.output) footerParts.push(`📤 Out: ${formatTokenCount(result.usage.output)}`);
-          const totalTokens = (result.usage.input || 0) + (result.usage.output || 0);
+          const inCount = result.usage.input || 0;
+          const outCount = result.usage.output || 0;
+          const cachedCount = result.usage.cached || 0;
+          const thinkingCount = result.usage.thinking || 0;
+          if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}`);
+          if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}`);
+          const totalTokens = inCount + outCount;
           if (totalTokens > 0) {
-            footerParts.push(`🪙 ${formatTokenCount(totalTokens)} tokens`);
+            let tokenStr = `🪙 ${formatTokenCount(totalTokens)} tokens`;
+            const { totalCost, currency } = calculateCost(modelUsed, inCount, outCount, cachedCount, thinkingCount);
+            if (totalCost > 0) {
+              const sym = currency === 'CNY' ? '¥' : '$';
+              const costStr = totalCost < 0.0001 ? '<0.0001' : totalCost.toFixed(5);
+              tokenStr += ` (${sym}${costStr})`;
+            }
+            footerParts.push(tokenStr);
           }
         }
         const footerText = footerParts.join(' · ');
