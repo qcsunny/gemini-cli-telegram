@@ -32,12 +32,17 @@ describe('parseInlineModelAndPrompt', () => {
     expect(res.aliasUsed).toBe('/flash');
   });
 
-  it('should parse @p:N project index and strip flag from prompt', () => {
+  it('should parse @p:N and @pN project index and strip flag from prompt', () => {
     const mockProjects: any = [{ name: 'Project A', path: '/path/a' }, { name: 'Project B', path: '/path/b' }];
-    const res = parseInlineModelAndPrompt('/pro @p:1 怎么重构代码', 'Gemini 3.5 Flash', mockProjects);
-    expect(res.model).toBe('Web2API: Gemini 3.1 Pro');
-    expect(res.prompt).toBe('怎么重构代码');
-    expect(res.projectUsed).toEqual(mockProjects[0]);
+    const res1 = parseInlineModelAndPrompt('/pro @p:1 怎么重构代码', 'Gemini 3.5 Flash', mockProjects);
+    expect(res1.model).toBe('Web2API: Gemini 3.1 Pro');
+    expect(res1.prompt).toBe('怎么重构代码');
+    expect(res1.projectUsed).toEqual(mockProjects[0]);
+
+    const res2 = parseInlineModelAndPrompt('/pro @p2 怎么写算法', 'Gemini 3.5 Flash', mockProjects);
+    expect(res2.model).toBe('Web2API: Gemini 3.1 Pro');
+    expect(res2.prompt).toBe('怎么写算法');
+    expect(res2.projectUsed).toEqual(mockProjects[1]);
   });
 });
 
