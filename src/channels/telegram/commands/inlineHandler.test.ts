@@ -32,11 +32,12 @@ describe('parseInlineModelAndPrompt', () => {
     expect(res.aliasUsed).toBe('/flash');
   });
 
-  it('should fallback to default model when no prefix is given', () => {
-    const res = parseInlineModelAndPrompt('什么是量子计算', 'Gemini 3.5 Flash (Medium)');
-    expect(res.model).toBe('Gemini 3.5 Flash (Medium)');
-    expect(res.prompt).toBe('什么是量子计算');
-    expect(res.aliasUsed).toBeUndefined();
+  it('should parse @p:N project index and strip flag from prompt', () => {
+    const mockProjects: any = [{ name: 'Project A', path: '/path/a' }, { name: 'Project B', path: '/path/b' }];
+    const res = parseInlineModelAndPrompt('/pro @p:1 怎么重构代码', 'Gemini 3.5 Flash', mockProjects);
+    expect(res.model).toBe('Web2API: Gemini 3.1 Pro');
+    expect(res.prompt).toBe('怎么重构代码');
+    expect(res.projectUsed).toEqual(mockProjects[0]);
   });
 });
 
@@ -63,6 +64,7 @@ describe('registerInlineHandler', () => {
 
     mockSessionManager = {
       getSession: vi.fn().mockReturnValue(null),
+      getProjects: vi.fn().mockReturnValue([]),
     };
 
     defaultOptions = {
@@ -119,7 +121,7 @@ describe('registerInlineHandler', () => {
           title: expect.stringContaining('Ask AI'),
         }),
       ]),
-      expect.objectContaining({ cache_time: 2 }),
+      expect.objectContaining({ cache_time: 0, is_personal: true }),
     );
   });
 
