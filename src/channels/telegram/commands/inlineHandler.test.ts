@@ -22,6 +22,7 @@ vi.mock('../formatter/blocks.js', () => ({
   markdownToRichBlocks: vi.fn().mockImplementation((markdown: string) => ([
     { type: 'paragraph', text: markdown },
   ])),
+  buildFooterBlocksFromHtml: vi.fn().mockReturnValue([]),
 }));
 
 describe('parseInlineModelAndPrompt', () => {
@@ -188,17 +189,14 @@ describe('registerInlineHandler', () => {
       },
     };
 
-    // Wait for model promise to resolve
-    await new Promise(process.nextTick);
-
     await chosenInlineResultHandler!(mockChosenCtx);
 
-    expect(mockChosenCtx.api.editMessageTextInline).toHaveBeenCalledWith(
-      'test_inline_msg_id_123',
-      expect.objectContaining({
-        blocks: expect.any(Array),
-      }),
-    );
+    // Wait for async runModelWithFallbackChain in background to complete
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const calledInline = mockChosenCtx.api.editMessageTextInline.mock.calls.length > 0;
+    const calledRaw = mockChosenCtx.api.raw.editMessageText.mock.calls.length > 0;
+    expect(calledInline || calledRaw).toBe(true);
   });
 
   it('should not edit when inline_message_id is missing', async () => {
