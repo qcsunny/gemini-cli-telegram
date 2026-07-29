@@ -321,16 +321,19 @@ export function registerInlineHandler(
           footerParts.push(`⏱️ ${(result.durationMs / 1000).toFixed(1)}s`);
         }
         if (result.usage) {
+          if (result.usage.input) footerParts.push(`📥 In: ${formatTokenCount(result.usage.input)}`);
+          if (result.usage.output) footerParts.push(`📤 Out: ${formatTokenCount(result.usage.output)}`);
           const totalTokens = (result.usage.input || 0) + (result.usage.output || 0);
           if (totalTokens > 0) {
             footerParts.push(`🪙 ${formatTokenCount(totalTokens)} tokens`);
           }
         }
+        const footerText = footerParts.join(' · ');
         const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${escapeHtmlText(pending.model)} 暂时不可用，已自动降级` : '';
-        const footerStr = footerParts.length > 0 ? `\n\n<i>${footerParts.join(' · ')}</i>` : '';
+        const footerStr = footerText ? `\n\n<tg-small><i>${footerText}</i></tg-small>` : '';
 
-        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}${footerStr}`;
-        const blocks = markdownToRichBlocks(markdown);
+        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
+        const blocks = markdownToRichBlocks(markdown, { footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined });
         const htmlBody = renderIRToHtml(markdownToIR(result.output));
         const text = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(modelUsed)}${fallbackNote})：</b>\n\n${htmlBody}${footerStr}`;
 
