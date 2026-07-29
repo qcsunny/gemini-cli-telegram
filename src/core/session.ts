@@ -345,6 +345,10 @@ export class SessionManager {
     return this.sessions.size;
   }
 
+  getProjects(): ProjectInfo[] {
+    return this.projectManager.getProjects();
+  }
+
   private async createSession(
     chatId: number,
     options: SessionOptions,

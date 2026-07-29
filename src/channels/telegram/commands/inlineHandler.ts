@@ -53,19 +53,47 @@ const MODEL_PREFIX_MAP: Record<string, string> = {
 export function parseInlineModelAndPrompt(
   rawQuery: string,
   defaultModel: string,
-): { model: string; prompt: string; aliasUsed?: string } {
-  const parts = rawQuery.trim().split(/\s+/);
+  availableProjects: ProjectInfo[] = [],
+): {
+  model: string;
+  prompt: string;
+  aliasUsed?: string;
+  projectUsed?: ProjectInfo;
+} {
+  let text = rawQuery.trim();
+  let selectedModel = defaultModel;
+  let aliasUsed: string | undefined;
+  let projectUsed: ProjectInfo | undefined;
+
+  const parts = text.split(/\s+/);
   if (parts.length > 0 && parts[0].startsWith('/')) {
     const alias = parts[0].toLowerCase();
     if (MODEL_PREFIX_MAP[alias]) {
-      return {
-        model: MODEL_PREFIX_MAP[alias],
-        prompt: parts.slice(1).join(' '),
-        aliasUsed: alias,
-      };
+      selectedModel = MODEL_PREFIX_MAP[alias];
+      aliasUsed = alias;
+      text = parts.slice(1).join(' ').trim();
     }
   }
-  return { model: defaultModel, prompt: rawQuery.trim() };
+
+  const pMatch = text.match(/@p:(\d+|[^\s]+)/i);
+  if (pMatch) {
+    const target = pMatch[1];
+    text = text.replace(pMatch[0], '').replace(/\s+/g, ' ').trim();
+
+    const num = parseInt(target, 10);
+    if (!isNaN(num) && num >= 1 && num <= availableProjects.length) {
+      projectUsed = availableProjects[num - 1];
+    } else {
+      projectUsed = availableProjects.find((p) => p.name.toLowerCase().includes(target.toLowerCase()));
+    }
+  }
+
+  return {
+    model: selectedModel,
+    prompt: text,
+    aliasUsed,
+    projectUsed,
+  };
 }
 
 async function runModelWithTimeout(
@@ -73,13 +101,14 @@ async function runModelWithTimeout(
   modelToUse: string,
   defaultOptions: SessionOptions,
   signal?: AbortSignal,
+  customCwd?: string,
 ): Promise<AgyRunResult | null> {
   const timeoutCtrl = new AbortController();
   const timeout = setTimeout(() => timeoutCtrl.abort(), MODEL_TIMEOUT_MS);
   try {
     const result = await runAgyPrint({
       prompt,
-      cwd: defaultOptions.cwd || process.cwd(),
+      cwd: customCwd || defaultOptions.cwd || process.cwd(),
       model: modelToUse,
       proxy: defaultOptions.proxy,
       signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
@@ -106,7 +135,7 @@ function anySignal(...signals: AbortSignal[]): AbortSignal {
 export function registerInlineHandler(
   bot: Bot,
   sessionManager: SessionManager,
-  defaultOptions: SessionOptions,
+  defaultOptions: SessionOptions = {},
   options: InlineHandlerOptions = {},
 ): void {
   bot.on('inline_query', async (ctx: Context) => {
@@ -134,9 +163,14 @@ export function registerInlineHandler(
     const activeSession = sessionManager.getSession(fromId);
     const sessionModel = activeSession?.config?.getModel();
     const activeModel = sessionModel || defaultOptions.model || '';
-    const { model: modelToUse, prompt, aliasUsed } = parseInlineModelAndPrompt(rawQuery, activeModel);
+    const allProjects = sessionManager.getProjects();
+    const { model: modelToUse, prompt, aliasUsed, projectUsed } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
+
+    // Default to active session project if no explicit @p:N flag was provided
+    const targetProjectPath = projectUsed?.path || activeSession?.cwd || defaultOptions.cwd;
 
     if (!prompt) {
+      const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>@p:${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
       const results = [
         {
           type: 'article' as const,
@@ -144,7 +178,7 @@ export function registerInlineHandler(
           title: `🤖 Ask AI — Gemini / DeepSeek / OpenCode`,
           description: `Type a question to ask AI (model: ${modelToUse})`,
           input_message_content: {
-            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Quick model switches:</b>\n• <code>/flash 提问</code> — Gemini 3.6 Flash (fast)\n• <code>/pro 提问</code> — Gemini 3.1 Pro (deep reasoning)\n• <code>/deepseek 提问</code> — DeepSeek Flash`,
+            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Quick model switches:</b>\n• <code>/flash 提问</code> — Gemini 3.6 Flash\n• <code>/pro 提问</code> — Gemini 3.1 Pro\n• <code>/deepseek 提问</code> — DeepSeek Flash\n\n<b>Project switches (@p:序号):</b>\n${projectHelpList || '• 自动继承 Bot 当前绑定的项目'}`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -179,14 +213,14 @@ export function registerInlineHandler(
           },
         },
       ];
-      await ctx.answerInlineQuery(results, { cache_time: 2 }).catch(() => {});
+      await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true }).catch(() => {});
       return;
     }
 
     // Store prompt info (no model startup — zero latency)
-    logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} prompt="${prompt.slice(0, 40)}..."`);
+    logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} project="${projectUsed?.name || 'default'}" prompt="${prompt.slice(0, 40)}..."`);
     const resultId = `ai-${Date.now()}-${fromId}`;
-    pendingResults.set(resultId, { prompt, model: modelToUse, createdAt: Date.now() });
+    pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, createdAt: Date.now() });
 
     try {
       const results = [
@@ -246,7 +280,7 @@ export function registerInlineHandler(
     logger.info(`[ChosenInline] userId=${chosen.from.id} model=${pending.model} — starting model`);
 
     try {
-      const result = await runModelWithTimeout(pending.prompt, pending.model, defaultOptions, ctrl.signal);
+      const result = await runModelWithTimeout(pending.prompt, pending.model, defaultOptions, ctrl.signal, pending.projectPath);
 
       if (result?.output) {
         const markdown = `**💬 问题：** ${pending.prompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}`;
