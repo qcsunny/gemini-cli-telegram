@@ -194,9 +194,12 @@ describe('registerInlineHandler', () => {
     // Wait for async runModelWithFallbackChain in background to complete
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    const calledInline = mockChosenCtx.api.editMessageTextInline.mock.calls.length > 0;
-    const calledRaw = mockChosenCtx.api.raw.editMessageText.mock.calls.length > 0;
-    expect(calledInline || calledRaw).toBe(true);
+    expect(mockChosenCtx.api.editMessageTextInline).toHaveBeenCalledWith(
+      'test_inline_msg_id_123',
+      expect.objectContaining({
+        blocks: expect.any(Array),
+      }),
+    );
   });
 
   it('should not edit when inline_message_id is missing', async () => {
