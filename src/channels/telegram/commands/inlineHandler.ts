@@ -5,6 +5,7 @@ import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import { markdownToIR, renderIRToHtml, formatTokenCount } from '../formatter/core.js';
+import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { ICONS } from '../ui.js';
 
@@ -96,36 +97,54 @@ export function parseInlineModelAndPrompt(
   };
 }
 
-async function runModelWithTimeout(
+export interface FallbackRunResult {
+  result: AgyRunResult | null;
+  modelUsed: string;
+  isFallback: boolean;
+}
+
+async function runModelWithFallbackChain(
   prompt: string,
-  modelToUse: string,
+  initialModel: string,
   defaultOptions: SessionOptions,
   signal?: AbortSignal,
   customCwd?: string,
-): Promise<AgyRunResult | null> {
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const timeoutCtrl = new AbortController();
-    const timeout = setTimeout(() => timeoutCtrl.abort(), MODEL_TIMEOUT_MS);
-    try {
-      logger.info(`[InlineQuery] Model attempt ${attempt}/2 running for model="${modelToUse}"`);
-      const result = await runAgyPrint({
-        prompt,
-        cwd: customCwd || defaultOptions.cwd || process.cwd(),
-        model: modelToUse,
-        proxy: defaultOptions.proxy,
-        signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
-      });
-      clearTimeout(timeout);
-      if (result?.output) return result;
-    } catch (err) {
-      clearTimeout(timeout);
-      if ((err as Error)?.name === 'AbortError') {
-        if (attempt === 2) return null;
+): Promise<FallbackRunResult> {
+  const skipModels = new Set<string>();
+  const chain = buildTierAwareChain(initialModel, skipModels);
+
+  for (const modelToUse of chain) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const timeoutCtrl = new AbortController();
+      const timeout = setTimeout(() => timeoutCtrl.abort(), MODEL_TIMEOUT_MS);
+      try {
+        logger.info(`[InlineQuery] Attempting model="${modelToUse}" (${attempt}/2) for initial="${initialModel}"`);
+        const result = await runAgyPrint({
+          prompt,
+          cwd: customCwd || defaultOptions.cwd || process.cwd(),
+          model: modelToUse,
+          proxy: defaultOptions.proxy,
+          signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
+        });
+        clearTimeout(timeout);
+        if (result?.output) {
+          return {
+            result,
+            modelUsed: modelToUse,
+            isFallback: modelToUse !== initialModel,
+          };
+        }
+      } catch (err) {
+        clearTimeout(timeout);
+        if ((err as Error)?.name === 'AbortError') {
+          if (attempt === 2 && modelToUse === chain[chain.length - 1]) return { result: null, modelUsed: initialModel, isFallback: false };
+        }
+        logger.warn(`[InlineQuery] Attempt ${attempt}/2 failed for model="${modelToUse}": ${err}`);
       }
-      logger.warn(`[InlineQuery] Model attempt ${attempt}/2 error: ${err}`);
     }
   }
-  return null;
+
+  return { result: null, modelUsed: initialModel, isFallback: false };
 }
 
 function anySignal(...signals: AbortSignal[]): AbortSignal {
@@ -286,7 +305,13 @@ export function registerInlineHandler(
     logger.info(`[ChosenInline] userId=${chosen.from.id} model=${pending.model} — starting model`);
 
     try {
-      const result = await runModelWithTimeout(pending.prompt, pending.model, defaultOptions, ctrl.signal, pending.projectPath);
+      const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
+        pending.prompt,
+        pending.model,
+        defaultOptions,
+        ctrl.signal,
+        pending.projectPath,
+      );
 
       if (result?.output) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
@@ -301,12 +326,13 @@ export function registerInlineHandler(
             footerParts.push(`🪙 ${formatTokenCount(totalTokens)} tokens`);
           }
         }
+        const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${escapeHtmlText(pending.model)} 暂时不可用，已自动降级` : '';
         const footerStr = footerParts.length > 0 ? `\n\n<i>${footerParts.join(' · ')}</i>` : '';
 
-        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${result.output}${footerStr}`;
+        const markdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}${footerStr}`;
         const blocks = markdownToRichBlocks(markdown);
         const htmlBody = renderIRToHtml(markdownToIR(result.output));
-        const text = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(pending.model)})：</b>\n\n${htmlBody}${footerStr}`;
+        const text = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(modelUsed)}${fallbackNote})：</b>\n\n${htmlBody}${footerStr}`;
 
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
