@@ -41,6 +41,7 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
   const body = JSON.stringify({
     contents: history,
     generationConfig: {
+      maxOutputTokens: 16384,
       thinkingConfig: {
         includeThoughts: true
       }
