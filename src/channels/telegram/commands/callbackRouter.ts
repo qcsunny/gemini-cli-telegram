@@ -139,12 +139,9 @@ export function registerCallbackRouter(
       let pageModels: string[] = [];
       if (targetTierObj && targetTierObj.models && targetTierObj.models.length > 0) {
         const normalize = (s: string) => s.toLowerCase().replace(/^(web2api|deepseek|opencode):\s*/i, '').trim();
-        const tierModelSet = targetTierObj.models.map(normalize);
+        const tierModelSet = new Set(targetTierObj.models.map(normalize));
 
-        pageModels = models.filter(m => {
-          const normM = normalize(m);
-          return tierModelSet.some(tm => normM.includes(tm) || tm.includes(normM));
-        });
+        pageModels = models.filter(m => tierModelSet.has(normalize(m)));
       }
 
       if (pageModels.length === 0) {
