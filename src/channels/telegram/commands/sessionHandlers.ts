@@ -41,7 +41,8 @@ export function registerSessionHandlers(
 
     try {
       const projectManager = sessionManager.getProjectManager();
-      const defaultProj = projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
+      const allProjects = projectManager.getProjects();
+      const defaultProj = allProjects.find(p => p.name === '通用知识专家_RichText') || allProjects[0];
       await sessionManager.reset(chatId, {
         ...defaultOptions,
         project: defaultProj,

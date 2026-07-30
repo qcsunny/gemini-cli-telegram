@@ -367,10 +367,11 @@ export class SessionManager {
     }
 
     if (!project && !savedCwd) {
-      const found = this.projectManager.getProjects().find(p => p.name === '通用知识专家_RichText');
+      const allProjects = this.projectManager.getProjects();
+      const found = allProjects.find(p => p.name === '通用知识专家_RichText') || allProjects[0];
       if (found) {
         project = found;
-        logger.info(`[SessionManager] Automatically set default project: 通用知识专家_RichText (${project.path})`);
+        logger.info(`[SessionManager] Automatically set default project: ${project.name} (${project.path})`);
       }
     }
 

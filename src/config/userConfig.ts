@@ -315,11 +315,14 @@ export function getBrowseRoot(): string {
   return cfg?.paths?.browseRoot || BROWSE_ROOT_DEFAULT;
 }
 
-const INBOX_DIR_DEFAULT = path.join(os.homedir(), 'Documents', 'Obsidian', 'Inbox');
+const OBSIDIAN_INBOX_DEFAULT = path.join(os.homedir(), 'Documents', 'Obsidian', 'Inbox');
+const GENERIC_INBOX_DEFAULT = path.join(os.homedir(), 'Documents', 'Inbox');
 
 export function getInboxDir(): string {
   const cfg = loadUserConfig();
-  return cfg?.paths?.inboxDir || cfg?.savePath || INBOX_DIR_DEFAULT;
+  if (cfg?.paths?.inboxDir || cfg?.savePath) return cfg.paths?.inboxDir || cfg.savePath!;
+  if (fs.existsSync(OBSIDIAN_INBOX_DEFAULT)) return OBSIDIAN_INBOX_DEFAULT;
+  return GENERIC_INBOX_DEFAULT;
 }
 
 /**
