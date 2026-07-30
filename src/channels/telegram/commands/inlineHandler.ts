@@ -112,6 +112,7 @@ async function runModelWithFallbackChain(
   defaultOptions: SessionOptions,
   signal?: AbortSignal,
   customCwd?: string,
+  onChunk?: (chunk: string) => void,
 ): Promise<FallbackRunResult> {
   const skipModels = new Set<string>();
   const chain = buildTierAwareChain(initialModel, skipModels);
@@ -127,6 +128,7 @@ async function runModelWithFallbackChain(
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
           model: modelToUse,
           proxy: defaultOptions.proxy,
+          onChunk,
           signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
         });
         clearTimeout(timeout);
@@ -321,6 +323,25 @@ export function registerInlineHandler(
     logger.info(`[ChosenInline] userId=${chosen.from.id} model=${pending.model} — starting model`);
 
     const startTime = Date.now();
+    let lastEditTime = 0;
+    let accumulatedText = '';
+
+    const onChunk = (chunk: string) => {
+      accumulatedText += chunk;
+      const now = Date.now();
+      if (now - lastEditTime >= 350 && accumulatedText.trim().length > 0) {
+        lastEditTime = now;
+        const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
+        const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
+        ctx.api.raw.editMessageText({
+          inline_message_id: chosen.inline_message_id,
+          rich_message: {
+            markdown: streamMarkdown,
+          },
+        } as any).catch(() => {});
+      }
+    };
+
     try {
       const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
         pending.prompt,
@@ -328,6 +349,7 @@ export function registerInlineHandler(
         defaultOptions,
         ctrl.signal,
         pending.projectPath,
+        onChunk,
       );
       const duration = result?.durationMs || (Date.now() - startTime);
 
