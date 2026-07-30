@@ -74,7 +74,10 @@ export async function processMessage(
   // 2. Local variables for streaming response
   let thoughtBuffer = '';
   let answerBuffer = '';
-  let currentMessageId: number | null = null;
+  let currentMessageId: number | null = (session as any)?._initialBubbleId ?? null;
+  if ((session as any)?._initialBubbleId) {
+    delete (session as any)._initialBubbleId;
+  }
   let lastEditTime = 0;
   let isFinished = false;
   let isDone = false;
