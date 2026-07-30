@@ -366,12 +366,22 @@ export class TelegramBot {
         const isGetUpdates = urlStr.includes('/getUpdates');
         const isInlineAnswer = urlStr.includes('/answerInlineQuery');
 
-        console.error(`[DBG] fetch: ${urlStr.slice(0,60)} isGetUpdates=${isGetUpdates}`);
-
         // Long-poll getUpdates: dedicated agent so it never blocks the main pool
         if (isGetUpdates) {
-          console.error('[DBG] getUpdates → pollAgent');
-          return await undiciFetch(url, { ...init, dispatcher: this.pollAgent });
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort('pollAgent timeout (60s)'), 60000);
+          const combined = init?.signal && !init.signal.aborted
+            ? combineSignals(ctrl.signal, init.signal)
+            : ctrl.signal;
+          try {
+            const r = await undiciFetch(url, { ...init, dispatcher: this.pollAgent, signal: combined });
+            clearTimeout(timer);
+            return r;
+          } catch (e: any) {
+            clearTimeout(timer);
+            logger.warn(`[pollAgent] getUpdates connection reset or timeout: ${e?.message || e}`);
+            throw e;
+          }
         }
 
         // answerInlineQuery: dedicated agent + fast retry with 1.5s timeout
