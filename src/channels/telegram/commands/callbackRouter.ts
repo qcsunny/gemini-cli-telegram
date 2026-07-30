@@ -4,14 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { Bot } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import * as fs from 'node:fs';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
-import { getBrowseRoot, getInboxDir } from '../../../config/userConfig.js';
+import { getBrowseRoot, getInboxDir, loadUserConfig } from '../../../config/userConfig.js';
+import { loadModelsConfig } from '../../../core/modelRegistry.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { loadMessages } from '../../../agy/messageStore.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
@@ -131,7 +132,8 @@ export function registerCallbackRouter(
       const models = await getAvailableModels();
 
       const cfg = loadUserConfig();
-      const tiers = cfg?.modelsConfig?.tiers || [];
+      const modelsConfig = loadModelsConfig();
+      const tiers = cfg?.modelsConfig?.tiers || modelsConfig?.tiers || [];
       const targetTierObj = tiers[tier];
 
       let pageModels: string[] = [];
@@ -505,11 +507,12 @@ export function registerCallbackRouter(
       try {
         const session = await sessionManager.getOrCreate(chatId, defaultOptions);
         session.config!.setModel(modelName, false);
+        const backKeyboard = new InlineKeyboard().text(`${ICONS.back} Main Menu`, '/start');
         await ctx.editMessageText(
-          `${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${modelName}</code>`,
+          `${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${escapeHtml(modelName)}</code>`,
           {
             parse_mode: 'HTML',
-            reply_markup: buildMainKeyboard(),
+            reply_markup: backKeyboard,
           },
         );
       } catch {
