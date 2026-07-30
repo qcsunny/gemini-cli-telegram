@@ -444,12 +444,7 @@ export function buildChannelReply(
     sendRichDraft: async (originalText: string | StructuredMessage): Promise<number> => {
       let draftId = draftIds.get(chatId);
       if (!draftId) {
-        if (session && (session as any)._initialBubbleId) {
-          draftId = (session as any)._initialBubbleId;
-          delete (session as any)._initialBubbleId;
-        } else {
-          draftId = Math.floor(Math.random() * 2147483647) + 1;
-        }
+        draftId = Math.floor(Math.random() * 2147483647) + 1;
         draftIds.set(chatId, draftId);
       }
       activeDraftIds.add(draftId);
