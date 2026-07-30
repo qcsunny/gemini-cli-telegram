@@ -136,12 +136,21 @@ export function registerCallbackRouter(
 
       let pageModels: string[] = [];
       if (targetTierObj && targetTierObj.models && targetTierObj.models.length > 0) {
-        pageModels = models.filter(m => targetTierObj.models.includes(m));
-        if (pageModels.length === 0) {
-          pageModels = models.slice(0, MODELS_PER_PAGE);
-        }
-      } else {
-        pageModels = models.slice(0, MODELS_PER_PAGE);
+        const normalize = (s: string) => s.toLowerCase().replace(/^(web2api|deepseek|opencode):\s*/i, '').trim();
+        const tierModelSet = targetTierObj.models.map(normalize);
+
+        pageModels = models.filter(m => {
+          const normM = normalize(m);
+          return tierModelSet.some(tm => normM.includes(tm) || tm.includes(normM));
+        });
+      }
+
+      if (pageModels.length === 0) {
+        // Fallback: chunk models into 4 distinct non-overlapping slices
+        const totalTiers = 4;
+        const chunkSize = Math.ceil(models.length / totalTiers);
+        const start = tier * chunkSize;
+        pageModels = models.slice(start, start + chunkSize);
       }
 
       const modelItems = pageModels.map((m) => {
