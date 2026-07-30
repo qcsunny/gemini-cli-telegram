@@ -229,7 +229,10 @@ export async function processMessage(
         thoughtBuffer = '';
         answerBuffer = '';
         isDone = false;
-        currentMessageId = null;
+        // Preserve initial bubble ID on the first attempt so it gets edited in-place
+        if (attempts > 1) {
+          currentMessageId = null;
+        }
         phase = 'thinking';
         thoughtEventCount = 0;
         textEventCount = 0;
