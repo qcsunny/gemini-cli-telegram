@@ -4,7 +4,7 @@ import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { buildFinalBlocks } from '../formatter/blocks.js';
-import { formatTokenCount } from '../formatter/core.js';
+import { formatTokenCount, markdownToIR, renderIRToHtml } from '../formatter/core.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { calculateCost } from '../../../utils/pricing.js';
@@ -262,6 +262,8 @@ export function registerInlineHandler(
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
       const initText = `✨ <b>AI 推理引擎已启动</b>\n\n<b>🧠 目标模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>💬 提问内容：</b>\n<blockquote>${escapeHtmlText(displayPrompt)}</blockquote>\n\n<i>🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。</i>`;
 
+      const initBlocks = buildFinalBlocks(`✨ **AI 推理引擎已启动**\n\n**🧠 目标模型：** \`${modelToUse}\`\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。*`);
+
       const results = [
         {
           type: 'article' as const,
@@ -271,7 +273,8 @@ export function registerInlineHandler(
           input_message_content: {
             message_text: initText,
             parse_mode: 'HTML' as const,
-          },
+            blocks: initBlocks,
+          } as any,
           reply_markup: {
             inline_keyboard: [[
               { text: `${ICONS.bot} ⏳ AI 正在深度思考中...`, callback_data: 'inline_thinking' }
@@ -356,20 +359,22 @@ export function registerInlineHandler(
         const footerText = footerParts.join(' · ');
         const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
 
-        // 100% Pure Telegram 10.1 Native InputRichMessageContent (Unlocks up to 32,768 chars capacity!)
         const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
         const blocks = buildFinalBlocks(fullMarkdown, undefined, {
           footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined,
         });
 
-        await ctx.api.editMessageTextInline(
-          chosen.inline_message_id,
-          {
-            blocks,
-          } as any,
-        );
+        const fallbackHtml = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(modelUsed)}${escapeHtmlText(fallbackNote)})：</b>\n\n${renderIRToHtml(markdownToIR(result.output))}`;
+        const finalHtml = footerText ? `${fallbackHtml}\n\n<i>${escapeHtmlText(footerText)}${isFallback ? ' (已自动降级)' : ''}</i>` : fallbackHtml;
 
-        logger.info(`[InlineResult] Edited with pure 10.1 native RichBlocks: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
+        await ctx.api.raw.editMessageText({
+          inline_message_id: chosen.inline_message_id,
+          text: finalHtml,
+          parse_mode: 'HTML',
+          blocks: blocks,
+        } as any);
+
+        logger.info(`[InlineResult] Edited with 10.2 Native Rich Message & HTML fallback: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
         const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;
