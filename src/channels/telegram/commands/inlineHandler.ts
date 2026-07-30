@@ -259,6 +259,8 @@ export function registerInlineHandler(
 
     try {
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
+      const initBlocks = buildFinalBlocks(`✨ **AI 推理引擎已启动**\n\n**🧠 目标模型：** \`${modelToUse}\`\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。*`);
+
       const results = [
         {
           type: 'article' as const,
@@ -266,9 +268,8 @@ export function registerInlineHandler(
           title: `🤔 点击发送并开始思考 [${modelToUse}]`,
           description: `点击发送，${prompt.slice(0, 40)}... AI 回答将自动更新`,
           input_message_content: {
-            message_text: `✨ <b>AI 推理引擎已启动</b>\n\n<b>🧠 目标模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>💬 提问内容：</b>\n<blockquote>${escapeHtmlText(displayPrompt)}</blockquote>\n\n<i>🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。</i>`,
-            parse_mode: 'HTML' as const,
-          },
+            blocks: initBlocks,
+          } as any,
           reply_markup: {
             inline_keyboard: [[
               { text: `${ICONS.bot} ⏳ AI 正在深度思考中...`, callback_data: 'inline_thinking' }
@@ -281,9 +282,8 @@ export function registerInlineHandler(
           title: `💬 发送提问卡片 (${aliasUsed || '默认模型'})`,
           description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
           input_message_content: {
-            message_text: `<b>💬 AI 提问卡片</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<i>${ICONS.sparkles} 提问卡片已发送。</i>`,
-            parse_mode: 'HTML' as const,
-          },
+            blocks: buildFinalBlocks(`**💬 AI 提问卡片**\n\n**模型：** \`${modelToUse}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`),
+          } as any,
         },
       ];
 
@@ -353,35 +353,16 @@ export function registerInlineHandler(
         const footerText = footerParts.join(' · ');
         const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
 
-        // Inline mode single card text limit is 4096 chars by Telegram Bot API specification.
-        let outputText = result.output;
-        let isTruncated = false;
-        if (outputText.length > 3500) {
-          isTruncated = true;
-          outputText = outputText.slice(0, 3450) + '\n\n✂️ *(由于 Telegram Inline 模式 4096 字符限制，已呈现精简版。点击下方按钮可直接在私聊中调出全量无裁切完整回答)*';
-          fullInlineOutputs.set(chosen.result_id, {
-            prompt: pending.prompt,
-            output: result.output,
-            model: modelUsed,
-            createdAt: Date.now(),
-          });
-        }
-
-        // 100% Pure Telegram 10.1 Native RichBlock (No HTML fallback fallback)
-        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${outputText}`;
+        // 100% Pure Telegram 10.1 Native InputRichMessageContent (Unlocks up to 32,768 chars capacity!)
+        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
         const blocks = buildFinalBlocks(fullMarkdown, undefined, {
-          footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}${isTruncated ? ' · ✂️ 内容已精简' : ''}` : undefined,
+          footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined,
         });
 
         await ctx.api.editMessageTextInline(
           chosen.inline_message_id,
           {
             blocks,
-            reply_markup: isTruncated ? {
-              inline_keyboard: [[
-                { text: '📖 在 Bot 私聊主窗口查看全量完整回答', url: `https://t.me/${ctx.me?.username || 'bot'}?start=full_${chosen.result_id}` }
-              ]],
-            } : undefined,
           } as any,
         );
 
