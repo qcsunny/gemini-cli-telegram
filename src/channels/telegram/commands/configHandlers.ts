@@ -32,10 +32,10 @@ export function registerConfigHandlers(
       }));
 
       await ctx.reply(
-        `${ICONS.model} <b>Model Selection</b> (Page ${page + 1}/${totalPages})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
+        `${ICONS.model} <b>Model Selection</b> (🚀 旗舰推理)\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
-          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page),
+          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page, 0),
         },
       );
       return;
