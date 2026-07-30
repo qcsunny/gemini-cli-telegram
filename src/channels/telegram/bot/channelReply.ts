@@ -444,7 +444,12 @@ export function buildChannelReply(
     sendRichDraft: async (originalText: string | StructuredMessage): Promise<number> => {
       let draftId = draftIds.get(chatId);
       if (!draftId) {
-        draftId = Math.floor(Math.random() * 2147483647) + 1;
+        if (session && (session as any)._initialBubbleId) {
+          draftId = (session as any)._initialBubbleId;
+          delete (session as any)._initialBubbleId;
+        } else {
+          draftId = Math.floor(Math.random() * 2147483647) + 1;
+        }
         draftIds.set(chatId, draftId);
       }
       activeDraftIds.add(draftId);
@@ -545,6 +550,9 @@ export function buildChannelReply(
           messageCache.set(draftId, cacheMarkdown);
           return;
         } catch (editErr: any) {
+          if (editErr?.description?.includes('message is not modified') || String(editErr).includes('message is not modified')) {
+            return;
+          }
           logger.debug(`[TRACE-EVIDENCE] Direct editMessageText for draftId=${draftId} failed, trying sendRichMessageDraft: ${editErr.message}`);
         }
 
