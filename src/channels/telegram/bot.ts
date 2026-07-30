@@ -515,7 +515,7 @@ export class TelegramBot {
     this.runner = run(this.bot, {
       runner: {
         fetch: {
-          timeout: 10,
+          timeout: 60,
           allowed_updates: [
             'message',
             'edited_message',
@@ -607,14 +607,14 @@ export class TelegramBot {
   private async performHealthCheck(): Promise<void> {
     try {
       if (!this.runner?.isRunning()) {
-        logger.warn('Runner appears to have stopped. Stopping old runner, waiting 10s, then restarting...');
+        logger.warn('Runner appears to have stopped. Stopping old runner, waiting 5s, then restarting socket without clearing session history...');
         // Stop old runner to release getUpdates connection
         try { this.runner?.stop(); } catch { /* ignore */ }
-        await new Promise((r) => setTimeout(r, 10000));
+        await new Promise((r) => setTimeout(r, 5000));
         try {
           this.runner = run(this.bot, {
             runner: {
-              fetch: { timeout: 30 },
+              fetch: { timeout: 60 },
               silent: true,
             },
           });
