@@ -181,8 +181,19 @@ async function withSession(
   }, TYPING_TTL_MS);
 
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
+  const reply = buildChannelReply(ctx, chatId, parseMode, session);
+
+  // 0ms 瞬间秒弹 Telegram 10.2 原生加载动效首帧草稿！
   try {
-    await handler(session, buildChannelReply(ctx, chatId, parseMode, session));
+    const modelName = session.model || 'Gemini 3.1 Pro';
+    const initThought = `✨ AI 推理引擎已连接 · 正在启动 ${modelName} 深度推演...`;
+    await reply.sendRichDraft({ content: '', thought: initThought });
+  } catch (e) {
+    logger.debug(`[withSession] Instant draft pre-flight failed: ${e}`);
+  }
+
+  try {
+    await handler(session, reply);
   } catch (e) {
     logger.error(`Error in handler for chat ${chatId}: ${e}`);
     try {
