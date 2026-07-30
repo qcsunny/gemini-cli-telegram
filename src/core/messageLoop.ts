@@ -368,8 +368,9 @@ export async function processMessage(
           lastErrorMessage = errMsg;
           const parsed = parseErrorMessage(errMsg);
           const isRateLimited = parsed.type === 'rate_limit';
-          const isPermanent = isConnectionError(e) || parsed.type === 'auth' || parsed.type === 'critical';
-          const reason = parsed.message;
+          const isEofError = errMsg.includes('EOF') || errMsg.includes('streamGenerateContent') || errMsg.includes('daily-cloudcode-pa');
+          const isPermanent = isConnectionError(e) || isEofError || parsed.type === 'auth' || parsed.type === 'critical';
+          const reason = isEofError ? 'Google 云端 API 连接断开 (EOF 网络波动)' : parsed.message;
 
           // Adaptive skip: permanently failed models are excluded from the rest of this session
           if (isPermanent) {
