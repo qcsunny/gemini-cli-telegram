@@ -10,6 +10,8 @@ import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { ICONS, buildMainKeyboard, buildResumeKeyboard, escapeHtml, formatWelcome } from '../ui.js';
+import { fullInlineOutputs } from './inlineHandler.js';
+import { buildFinalBlocks } from '../formatter/blocks.js';
 
 export function registerSessionHandlers(
   bot: Bot,
@@ -18,6 +20,20 @@ export function registerSessionHandlers(
 ): void {
   // ── Start Command ──
   bot.command('start', async (ctx: Context) => {
+    const match = typeof ctx.match === 'string' ? ctx.match.trim() : '';
+    if (match.startsWith('full_')) {
+      const resultId = match.replace('full_', '');
+      const fullData = fullInlineOutputs.get(resultId);
+      if (fullData) {
+        const chatId = ctx.chat?.id;
+        if (chatId) {
+          const reply = buildChannelReply(ctx, chatId, 'RichText');
+          await reply.sendRich({ content: fullMarkdown });
+          return;
+        }
+      }
+    }
+
     const userName = ctx.from?.first_name;
     const chatId = ctx.chat?.id;
     if (chatId) {
