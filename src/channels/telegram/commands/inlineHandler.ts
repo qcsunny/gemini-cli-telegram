@@ -25,6 +25,7 @@ interface PendingResult {
 
 const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<number, AbortController>();
+export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
 
 const cleanupTimer = setInterval(() => {
   const cutoff = Date.now() - RESULTS_TTL;
@@ -352,15 +353,36 @@ export function registerInlineHandler(
         const footerText = footerParts.join(' · ');
         const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
 
+        // Inline mode single card text limit is 4096 chars by Telegram Bot API specification.
+        let outputText = result.output;
+        let isTruncated = false;
+        if (outputText.length > 3500) {
+          isTruncated = true;
+          outputText = outputText.slice(0, 3450) + '\n\n✂️ *(由于 Telegram Inline 模式 4096 字符限制，已呈现精简版。点击下方按钮可直接在私聊中调出全量无裁切完整回答)*';
+          fullInlineOutputs.set(chosen.result_id, {
+            prompt: pending.prompt,
+            output: result.output,
+            model: modelUsed,
+            createdAt: Date.now(),
+          });
+        }
+
         // 100% Pure Telegram 10.1 Native RichBlock (No HTML fallback fallback)
-        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
+        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${outputText}`;
         const blocks = buildFinalBlocks(fullMarkdown, undefined, {
-          footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined,
+          footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}${isTruncated ? ' · ✂️ 内容已精简' : ''}` : undefined,
         });
 
         await ctx.api.editMessageTextInline(
           chosen.inline_message_id,
-          { blocks } as any,
+          {
+            blocks,
+            reply_markup: isTruncated ? {
+              inline_keyboard: [[
+                { text: '📖 在 Bot 私聊主窗口查看全量完整回答', url: `https://t.me/${ctx.me?.username || 'bot'}?start=full_${chosen.result_id}` }
+              ]],
+            } : undefined,
+          } as any,
         );
 
         logger.info(`[InlineResult] Edited with pure 10.1 native RichBlocks: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
