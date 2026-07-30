@@ -110,9 +110,9 @@ export async function processMessage(
       const resId = await reply.sendRichDraft!(content);
       if (typeof resId === 'number' && resId > 0) currentMessageId = resId;
     } else if (phase === 'footer') {
-      currentMessageId = await reply.sendRich!(content);
+      await reply.sendRich!(content);
     } else {
-      await reply.sendRichDraft!(content);
+      await reply.editRichDraft!(currentMessageId, content);
     }
   };
 
