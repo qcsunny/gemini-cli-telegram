@@ -260,7 +260,7 @@ export function registerInlineHandler(
 
     try {
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
-      const initBlocks = buildFinalBlocks(`✨ **AI 推理引擎已启动**\n\n**🧠 目标模型：** \`${modelToUse}\`\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。*`);
+      const initText = `✨ <b>AI 推理引擎已启动</b>\n\n<b>🧠 目标模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>💬 提问内容：</b>\n<blockquote>${escapeHtmlText(displayPrompt)}</blockquote>\n\n<i>🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。</i>`;
 
       const results = [
         {
@@ -269,8 +269,9 @@ export function registerInlineHandler(
           title: `🤔 点击发送并开始思考 [${modelToUse}]`,
           description: `点击发送，${prompt.slice(0, 40)}... AI 回答将自动更新`,
           input_message_content: {
-            blocks: initBlocks,
-          } as any,
+            message_text: initText,
+            parse_mode: 'HTML' as const,
+          },
           reply_markup: {
             inline_keyboard: [[
               { text: `${ICONS.bot} ⏳ AI 正在深度思考中...`, callback_data: 'inline_thinking' }
@@ -283,8 +284,9 @@ export function registerInlineHandler(
           title: `💬 发送提问卡片 (${aliasUsed || '默认模型'})`,
           description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
           input_message_content: {
-            blocks: buildFinalBlocks(`**💬 AI 提问卡片**\n\n**模型：** \`${modelToUse}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`),
-          } as any,
+            message_text: `<b>💬 AI 提问卡片</b>\n\n<b>模型：</b> <code>${escapeHtmlText(modelToUse)}</code>\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<i>${ICONS.sparkles} 提问卡片已发送。</i>`,
+            parse_mode: 'HTML' as const,
+          },
         },
       ];
 

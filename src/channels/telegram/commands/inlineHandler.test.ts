@@ -151,7 +151,7 @@ describe('registerInlineHandler', () => {
           id: expect.stringMatching(/^ai-/),
           title: expect.stringContaining('点击发送并开始思考'),
           input_message_content: expect.objectContaining({
-            blocks: expect.any(Array),
+            message_text: expect.any(String),
           }),
         }),
         expect.objectContaining({
