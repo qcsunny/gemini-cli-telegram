@@ -151,7 +151,9 @@ describe('registerInlineHandler', () => {
           id: expect.stringMatching(/^ai-/),
           title: expect.stringContaining('点击发送并开始思考'),
           input_message_content: expect.objectContaining({
-            message_text: expect.any(String),
+            rich_message: expect.objectContaining({
+              markdown: expect.any(String),
+            }),
           }),
         }),
         expect.objectContaining({
@@ -200,8 +202,9 @@ describe('registerInlineHandler', () => {
     expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
       expect.objectContaining({
         inline_message_id: 'test_inline_msg_id_123',
-        text: expect.any(String),
-        blocks: expect.any(Array),
+        rich_message: expect.objectContaining({
+          markdown: expect.any(String),
+        }),
       }),
     );
   });
