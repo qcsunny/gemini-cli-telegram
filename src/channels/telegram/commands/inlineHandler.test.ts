@@ -200,8 +200,8 @@ describe('registerInlineHandler', () => {
     expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
       expect.objectContaining({
         inline_message_id: 'test_inline_msg_id_123',
-        parse_mode: 'HTML',
         text: expect.any(String),
+        blocks: expect.any(Array),
       }),
     );
   });

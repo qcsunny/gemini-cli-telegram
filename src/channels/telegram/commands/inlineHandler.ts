@@ -361,16 +361,13 @@ export function registerInlineHandler(
           footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined,
         });
 
-        const fallbackHtml = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n<b>🤖 回答 (${escapeHtmlText(modelUsed)}${escapeHtmlText(fallbackNote)})：</b>\n\n${renderIRToHtml(markdownToIR(result.output))}`;
-        const finalHtml = footerText ? `${fallbackHtml}\n\n<i>${escapeHtmlText(footerText)}${isFallback ? ' (已自动降级)' : ''}</i>` : fallbackHtml;
-
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
-          text: finalHtml,
-          parse_mode: 'HTML',
-        });
+          text: fullMarkdown,
+          blocks: blocks,
+        } as any);
 
-        logger.info(`[InlineResult] Edited with HTML formatting: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
+        logger.info(`[InlineResult] Edited with 10.2 Native Rich Message: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
         const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;
