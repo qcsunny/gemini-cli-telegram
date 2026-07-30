@@ -93,8 +93,18 @@ export function buildModelKeyboard(
   models: Array<{ id: string; display: string; active?: boolean }>,
   hasMore = false,
   page = 0,
+  currentTier = 0,
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
+
+  // Tier Quick-Switch Tab Bar
+  keyboard
+    .text(currentTier === 0 ? '▶ 🚀 旗舰' : '🚀 旗舰', '/model_tier 0')
+    .text(currentTier === 1 ? '▶ ⚡ 高级' : '⚡ 高级', '/model_tier 1')
+    .text(currentTier === 2 ? '▶ 💡 通用' : '💡 通用', '/model_tier 2')
+    .text(currentTier === 3 ? '▶ 🍃 轻量' : '🍃 轻量', '/model_tier 3')
+    .row();
+
   const chunkSize = 1;
 
   for (let i = 0; i < models.length; i += chunkSize) {

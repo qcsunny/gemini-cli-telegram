@@ -120,6 +120,43 @@ export function registerCallbackRouter(
       return;
     }
 
+    if (data.startsWith('/model_tier ')) {
+      const tier = parseInt(data.replace('/model_tier ', ''), 10);
+      const tierNames = ['🚀 旗舰推理', '⚡ 高级推理', '💡 通用能力', '🍃 轻量与免费'];
+      const tierName = tierNames[tier] || '模型分类';
+      ctx.answerCallbackQuery(`✨ 切换分类: ${tierName}`).catch(e => logger.error(`Failed callback: ${e}`));
+
+      const session = sessionManager.getSession(chatId);
+      const currentModel = session?.config?.getModel() || 'unknown';
+      const models = await getAvailableModels();
+
+      // Determine page index corresponding to the tier start
+      let startIdx = 0;
+      if (tier === 1) startIdx = 3;
+      else if (tier === 2) startIdx = 9;
+      else if (tier === 3) startIdx = 18;
+
+      const page = Math.floor(startIdx / MODELS_PER_PAGE);
+      const start = page * MODELS_PER_PAGE;
+      const pageModels = models.slice(start, start + MODELS_PER_PAGE);
+      const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
+
+      const modelItems = pageModels.map((m, i) => ({
+        id: (start + i + 1).toString(),
+        display: m,
+        active: m === currentModel,
+      }));
+
+      await ctx.editMessageText(
+        `${ICONS.model} <b>Model Selection</b> (${tierName})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page, tier),
+        },
+      );
+      return;
+    }
+
     if (data.startsWith('/model_page ')) {
       const page = parseInt(data.replace('/model_page ', ''), 10);
       const session = sessionManager.getSession(chatId);
@@ -131,7 +168,7 @@ export function registerCallbackRouter(
 
       ctx.answerCallbackQuery(`Page ${page + 1}`).catch(e => logger.error(`Failed callback: ${e}`));
       const modelItems = pageModels.map((m, i) => ({
-        id: ((page * MODELS_PER_PAGE) + i + 1).toString(),
+        id: (start + i + 1).toString(),
         display: m,
         active: m === currentModel,
       }));

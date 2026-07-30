@@ -35,16 +35,26 @@ function getDefaultModels(): string[] {
   return _defaultModels;
 }
 
-/** Clears cached model order, forcing re-read from disk on next call. */
-export function clearDefaultModelsCache(): void {
+let _cachedAvailableModels: string[] | undefined;
+
+export function clearAvailableModelsCache(): void {
+  _cachedAvailableModels = undefined;
   _defaultModels = undefined;
   clearModelOrderCache();
 }
 
+/** Clears cached model order, forcing re-read from disk on next call. */
+export function clearDefaultModelsCache(): void {
+  clearAvailableModelsCache();
+}
+
 export async function getAvailableModels(): Promise<string[]> {
+  if (_cachedAvailableModels) return _cachedAvailableModels;
   const cfg = loadUserConfig();
   if (cfg?.orderedModels && cfg.orderedModels.length > 0) {
-    return cfg.orderedModels;
+    _cachedAvailableModels = cfg.orderedModels;
+    return _cachedAvailableModels;
   }
-  return getDefaultModels();
+  _cachedAvailableModels = getDefaultModels();
+  return _cachedAvailableModels;
 }
