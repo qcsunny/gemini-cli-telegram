@@ -7,10 +7,13 @@ import { opencodeHistories, makeOpenCodeConvId } from '../conversationManager.js
 import { saveMessage } from '../messageStore.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 function getOpenCodePath(): string {
   if (process.env['OPENCODE_PATH']) return process.env['OPENCODE_PATH'];
   const candidates = [
-    '/home/qcsunny/.opencode/bin/opencode',
+    path.join(os.homedir(), '.opencode', 'bin', 'opencode'),
     '/usr/local/bin/opencode',
     '/usr/bin/opencode',
   ];
