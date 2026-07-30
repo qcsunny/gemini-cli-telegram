@@ -12,8 +12,13 @@ import type { SessionOptions } from '../../../core/types.js';
 
 // Mock agyCli
 vi.mock('../../../agy/agyCli.js', () => ({
-  runAgyPrint: vi.fn().mockResolvedValue({
-    output: '这是关于量子计算的测试回答。',
+  runAgyPrint: vi.fn().mockImplementation(async (opts: any) => {
+    if (opts?.onChunk) {
+      opts.onChunk('这是关于量子计算的测试回答。');
+    }
+    return {
+      output: '这是关于量子计算的测试回答。',
+    };
   }),
 }));
 
@@ -180,6 +185,7 @@ describe('registerInlineHandler', () => {
     const aiResultId = callArg.find((r: any) => r.id.startsWith('ai-')).id;
 
     const mockChosenCtx = {
+      me: { username: 'testbot' },
       chosenInlineResult: {
         result_id: aiResultId,
         from: { id: 12345 },
