@@ -3,7 +3,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { markdownToRichBlocks, buildFooterBlocksFromHtml } from '../formatter/blocks.js';
+import { markdownToRichBlocks, buildFooterBlocksFromHtml, buildFinalBlocks } from '../formatter/blocks.js';
 import { markdownToIR, renderIRToHtml, formatTokenCount } from '../formatter/core.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -314,6 +314,7 @@ export function registerInlineHandler(
 
     logger.info(`[ChosenInline] userId=${chosen.from.id} model=${pending.model} — starting model`);
 
+    const startTime = Date.now();
     try {
       const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
         pending.prompt,
@@ -322,14 +323,13 @@ export function registerInlineHandler(
         ctrl.signal,
         pending.projectPath,
       );
+      const duration = result?.durationMs || (Date.now() - startTime);
 
       if (result?.output) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
         
         let footerParts: string[] = [];
-        if (result.durationMs) {
-          footerParts.push(`⏱️ ${(result.durationMs / 1000).toFixed(1)}s`);
-        }
+        footerParts.push(`⏱️ ${(duration / 1000).toFixed(1)}s`);
         if (result.usage) {
           const inCount = result.usage.input || 0;
           const outCount = result.usage.output || 0;
@@ -354,7 +354,7 @@ export function registerInlineHandler(
 
         // 100% Pure Telegram 10.1 Native RichBlock (No HTML fallback fallback)
         const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}`;
-        const blocks = markdownToRichBlocks(fullMarkdown, {
+        const blocks = buildFinalBlocks(fullMarkdown, undefined, {
           footerText: footerText ? `${footerText}${isFallback ? ' (已自动降级)' : ''}` : undefined,
         });
 

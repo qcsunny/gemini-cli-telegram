@@ -22,6 +22,9 @@ vi.mock('../formatter/blocks.js', () => ({
   markdownToRichBlocks: vi.fn().mockImplementation((markdown: string) => ([
     { type: 'paragraph', text: markdown },
   ])),
+  buildFinalBlocks: vi.fn().mockImplementation((content: string) => ([
+    { type: 'paragraph', text: content },
+  ])),
   buildFooterBlocksFromHtml: vi.fn().mockReturnValue([]),
 }));
 
@@ -192,7 +195,7 @@ describe('registerInlineHandler', () => {
     await chosenInlineResultHandler!(mockChosenCtx);
 
     // Wait for async runModelWithFallbackChain in background to complete
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     expect(mockChosenCtx.api.editMessageTextInline).toHaveBeenCalledWith(
       'test_inline_msg_id_123',
