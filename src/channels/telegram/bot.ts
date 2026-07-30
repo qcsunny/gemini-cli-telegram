@@ -183,15 +183,6 @@ async function withSession(
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
   const reply = buildChannelReply(ctx, chatId, parseMode, session);
 
-  // 0ms 瞬间在 Telegram 聊天窗口内发出 100% 肉眼可见的消息气泡 (Visible Message Bubble)！
-  try {
-    const modelName = session.model || 'Gemini 3.1 Pro';
-    const initText = `🧠 <b>AI 推理引擎已启动</b>\n<i>正在连接 ${modelName} 深度思考中...</i>`;
-    const sentMsg = await ctx.reply(initText, { parse_mode: 'HTML' });
-    (session as any)._initialBubbleId = sentMsg.message_id;
-  } catch (e) {
-    logger.debug(`[withSession] Instant bubble creation failed: ${e}`);
-  }
 
   try {
     await handler(session, reply);

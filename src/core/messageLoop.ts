@@ -74,10 +74,7 @@ export async function processMessage(
   // 2. Local variables for streaming response
   let thoughtBuffer = '';
   let answerBuffer = '';
-  let currentMessageId: number | null = (session as any)?._initialBubbleId ?? null;
-  if ((session as any)?._initialBubbleId) {
-    delete (session as any)._initialBubbleId;
-  }
+  let currentMessageId: number | null = null;
   let lastEditTime = 0;
   let isFinished = false;
   let isDone = false;
@@ -229,10 +226,7 @@ export async function processMessage(
         thoughtBuffer = '';
         answerBuffer = '';
         isDone = false;
-        // Preserve initial bubble ID on the first attempt so it gets edited in-place
-        if (attempts > 1) {
-          currentMessageId = null;
-        }
+        currentMessageId = null;
         phase = 'thinking';
         thoughtEventCount = 0;
         textEventCount = 0;
