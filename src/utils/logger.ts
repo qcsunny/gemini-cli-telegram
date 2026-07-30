@@ -79,7 +79,14 @@ export const pinoInstance = (() => {
   const destError = fs.createWriteStream(ERROR_LOG_PATH, { flags: 'a' });
 
   return pino(
-    { level },
+    {
+      level,
+      timestamp: () => {
+        const d = new Date(Date.now() + 3 * 3600 * 1000);
+        return ',"time":"' + d.toISOString().replace('Z', '+03:00') + '"';
+      },
+      base: { pid: process.pid },
+    },
     pino.multistream([
       { stream: createInfoWarnStream(destDaemon), level: 'info' },
       { stream: destError, level: 'error' },

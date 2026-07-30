@@ -6,7 +6,7 @@
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig } from '../../config/userConfig.js';
 import { geminiDirectHistories } from '../conversationManager.js';
-import { saveMessage } from '../messageStore.js';
+import { saveMessage, getHistory } from '../messageStore.js';
 import { ProxyAgent } from 'undici';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
@@ -32,8 +32,8 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
   const modelId = mapModelToGeminiId(model);
   const convId = existingConvId || `gemini-direct-${globalThis.crypto.randomUUID()}`;
 
-  // Build history in memory
-  const history: any[] = geminiDirectHistories.get(convId) ?? [];
+  // Build history in memory (lazy-loaded from SQLite on first access)
+  const history: any[] = getHistory(geminiDirectHistories, convId, 'gemini-direct');
   history.push({ role: 'user', parts: [{ text: prompt }] });
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?alt=sse&key=${apiKey}`;

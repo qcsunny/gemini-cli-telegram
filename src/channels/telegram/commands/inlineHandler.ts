@@ -1,10 +1,10 @@
 import type { Bot, Context } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
-import type { SessionOptions } from '../../../core/types.js';
+import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { markdownToRichBlocks, buildFooterBlocksFromHtml, buildFinalBlocks } from '../formatter/blocks.js';
-import { markdownToIR, renderIRToHtml, formatTokenCount } from '../formatter/core.js';
+import { buildFinalBlocks } from '../formatter/blocks.js';
+import { formatTokenCount } from '../formatter/core.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { calculateCost } from '../../../utils/pricing.js';
@@ -20,6 +20,7 @@ const RESULTS_TTL = 120_000;
 interface PendingResult {
   prompt: string;
   model: string;
+  projectPath?: string;
   createdAt: number;
 }
 
@@ -202,7 +203,7 @@ export function registerInlineHandler(
     const { model: modelToUse, prompt, aliasUsed, projectUsed } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
 
     // Default to active session project if no explicit @p:N flag was provided
-    const targetProjectPath = projectUsed?.path || activeSession?.cwd || defaultOptions.cwd;
+    const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
     if (!prompt) {
       const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>@p${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');

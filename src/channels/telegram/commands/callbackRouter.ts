@@ -139,7 +139,6 @@ export function registerCallbackRouter(
       const page = Math.floor(startIdx / MODELS_PER_PAGE);
       const start = page * MODELS_PER_PAGE;
       const pageModels = models.slice(start, start + MODELS_PER_PAGE);
-      const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
 
       const modelItems = pageModels.map((m, i) => ({
         id: (start + i + 1).toString(),

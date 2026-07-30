@@ -34,9 +34,9 @@ export function makeOpenCodeConvId(): string {
   return `opencode-${globalThis.crypto.randomUUID()}`;
 }
 
-/** Restore web2api/deepseek/gemini-direct/opencode conversation histories from SQLite on startup. */
+/** Register known conversation IDs from SQLite on startup (lazy loading). */
 export function restoreHistoriesFromDb(): void {
-  restoreAllHistories(web2apiHistories, deepseekHistories, geminiDirectHistories, opencodeHistories);
+  restoreAllHistories();
 }
 
 export function clearDeepSeekHistory(conversationId: string): void {

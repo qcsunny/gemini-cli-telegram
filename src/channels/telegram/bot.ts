@@ -84,10 +84,23 @@ function getSequentialKey(ctx: Context): string | undefined {
     return `callback:${chatId}`;
   }
   const text = ctx.message?.text ?? '';
-  if (text.startsWith('/cancel')) {
+  if (text.startsWith('/cancel') || text.startsWith('/new')) {
     return `control:${chatId}`;
   }
   return `chat:${chatId}`;
+}
+
+/**
+ * Combine multiple AbortSignals into one (polyfill for AbortSignal.any).
+ * The combined signal aborts when any input signal aborts.
+ */
+function combineSignals(...signals: AbortSignal[]): AbortSignal {
+  const ctrl = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) { ctrl.abort(s.reason); return ctrl.signal; }
+    s.addEventListener('abort', () => ctrl.abort(s.reason), { once: true });
+  }
+  return ctrl.signal;
 }
 
 /**
@@ -328,6 +341,7 @@ export class TelegramBot {
   private defaultOptions: SessionOptions;
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private proxyAgent: ProxyAgent | undefined;
+  private pollAgent: ProxyAgent | undefined;
 
   constructor(token: string, options: TelegramBotOptions = {}) {
     const clientConfig: any = {};
@@ -336,44 +350,66 @@ export class TelegramBot {
         uri: options.proxy,
         connections: 10,
       });
+      this.pollAgent = new ProxyAgent({
+        uri: options.proxy,
+        connections: 2,
+      });
       const inlineAgent = new ProxyAgent({
         uri: options.proxy,
         connections: 2,
       });
       clientConfig.baseFetchConfig = {
-        dispatcher: this.proxyAgent,
         compress: true,
       };
       clientConfig.fetch = async (url: any, init: any) => {
         const urlStr = (typeof url === 'string' ? url : url?.href ?? '');
-        const cleanInit = init ? { ...init } : {};
-        delete cleanInit.signal;
-        // answerInlineQuery uses a dedicated agent so it is never queued
-        // behind the long-poll getUpdates connection.
+        const isGetUpdates = urlStr.includes('/getUpdates');
         const isInlineAnswer = urlStr.includes('/answerInlineQuery');
+
+        console.error(`[DBG] fetch: ${urlStr.slice(0,60)} isGetUpdates=${isGetUpdates}`);
+
+        // Long-poll getUpdates: dedicated agent so it never blocks the main pool
+        if (isGetUpdates) {
+          console.error('[DBG] getUpdates → pollAgent');
+          return await undiciFetch(url, { ...init, dispatcher: this.pollAgent });
+        }
+
+        // answerInlineQuery: dedicated agent + fast retry with 1.5s timeout
         if (isInlineAnswer) {
           for (let attempt = 0; attempt < 2; attempt++) {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), 1500);
             try {
-              const res = await undiciFetch(url, {
-                ...cleanInit,
+              return await undiciFetch(url, {
+                ...init,
                 dispatcher: inlineAgent,
                 signal: ctrl.signal,
               });
-              clearTimeout(timer);
-              return res;
             } catch (e: any) {
               clearTimeout(timer);
               if (attempt === 1) throw e;
             }
           }
         }
+
+        // Normal API calls: keep grammy's signal, add 25s safety timeout
         let lastErr: any;
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
-            return await undiciFetch(url, { ...cleanInit, dispatcher: this.proxyAgent });
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 25000);
+            const combined = init?.signal && !init.signal.aborted
+              ? combineSignals(ctrl.signal, init.signal)
+              : ctrl.signal;
+            const res = await undiciFetch(url, {
+              ...init,
+              dispatcher: this.proxyAgent,
+              signal: combined,
+            });
+            clearTimeout(timer);
+            return res;
           } catch (e: any) {
+            if (init?.signal?.aborted) throw e;
             lastErr = e;
             await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
           }
@@ -618,7 +654,7 @@ export class TelegramBot {
           this.runner = run(this.bot, {
             runner: {
               fetch: { timeout: 60 },
-              silent: true,
+        silent: false,
             },
           });
           // Catch runner errors to prevent unhandled rejection

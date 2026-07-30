@@ -92,21 +92,20 @@ export function clearMessages(conversationId: string, backend: Backend): void {
         ),
       )
       .run();
+    knownConversationIds.delete(`${backend}|${conversationId}`);
   } catch (e) {
     logger.warn(`[messageStore] clearMessages failed: ${e}`);
   }
 }
 
+/** Known conversation IDs (backend|convId) for lazy loading. */
+export const knownConversationIds = new Set<string>();
+
 /**
- * Restore in-memory history Maps from the database at startup.
- * Scans all distinct conversation_id+backend pairs and loads their messages.
+ * Register known conversation IDs from database at startup.
+ * Messages are NOT loaded into memory — they will be lazy-loaded on first access.
  */
-export function restoreAllHistories(
-  web2apiHistories: Map<string, StoredMessage[]>,
-  deepseekHistories: Map<string, StoredMessage[]>,
-  geminiDirectHistories: Map<string, StoredMessage[]>,
-  opencodeHistories?: Map<string, StoredMessage[]>,
-): void {
+export function restoreAllHistories(): void {
   try {
     const db = getDb();
     const rows = db
@@ -119,20 +118,34 @@ export function restoreAllHistories(
       .all() as { conversationId: string; backend: string }[];
 
     for (const row of rows) {
-      const msgs = loadMessages(row.conversationId, row.backend as Backend);
-      if (msgs.length === 0) continue;
-      const map =
-        row.backend === 'web2api' ? web2apiHistories :
-        row.backend === 'deepseek' ? deepseekHistories :
-        row.backend === 'gemini-direct' ? geminiDirectHistories :
-        row.backend === 'opencode' ? opencodeHistories :
-        null;
-      if (map) {
-        map.set(row.conversationId, msgs);
-        logger.info(`[messageStore] Restored ${msgs.length} messages for ${row.backend} conv ${row.conversationId.slice(0, 12)}...`);
-      }
+      knownConversationIds.add(`${row.backend}|${row.conversationId}`);
     }
+    logger.info(`[messageStore] Registered ${rows.length} known conversations for lazy loading`);
   } catch (e) {
     logger.warn(`[messageStore] restoreAllHistories failed: ${e}`);
   }
+}
+
+/**
+ * Get conversation history, lazy-loading from SQLite on first access.
+ * Once loaded, the result is cached in the in-memory map for subsequent calls.
+ */
+export function getHistory(
+  map: Map<string, StoredMessage[]>,
+  convId: string,
+  backend: Backend,
+): StoredMessage[] {
+  const cached = map.get(convId);
+  if (cached) return cached;
+
+  const key = `${backend}|${convId}`;
+  if (knownConversationIds.has(key)) {
+    const msgs = loadMessages(convId, backend);
+    if (msgs.length > 0) {
+      map.set(convId, msgs);
+      logger.info(`[messageStore] Lazy-loaded ${msgs.length} messages for ${backend} conv ${convId.slice(0, 12)}...`);
+    }
+    return msgs;
+  }
+  return [];
 }
