@@ -332,11 +332,7 @@ export function registerInlineHandler(
       if (now - lastEditTime >= 350 && accumulatedText.trim().length > 0) {
         lastEditTime = now;
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
-        let chunkText = accumulatedText;
-        if (chunkText.length > 3800) {
-          chunkText = chunkText.slice(0, 3800) + '\n\n… *(字数已达 Telegram Inline 卡片上限，生成完毕后将提供全量链接)*';
-        }
-        const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${chunkText}\n\n_✍️ AI 正在实时打字更新中..._`;
+        const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
         ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
           rich_message: {
@@ -381,28 +377,11 @@ export function registerInlineHandler(
             footerParts.push(tokenStr);
           }
         }
-        let finalOutput = result.output;
-        let isTruncated = false;
+        const footerText = footerParts.join(' · ');
+        const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
 
-        // Telegram inline message text is strictly limited to 4096 chars.
-        // We truncate at 3800 chars to leave space for prompt and footer.
-        const MAX_INLINE_OUTPUT_LEN = 3800;
-        if (finalOutput.length > MAX_INLINE_OUTPUT_LEN) {
-          finalOutput = finalOutput.slice(0, MAX_INLINE_OUTPUT_LEN) + '\n\n… *(由于 Telegram Inline 卡片 4000 字上限，后半部分已安全保护)*';
-          isTruncated = true;
-        }
-
-        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${finalOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
-
-        // Get bot username for deep link button if truncated
-        const botUsername = ctx.me?.username;
-        const replyMarkup = isTruncated && botUsername
-          ? {
-              inline_keyboard: [[
-                { text: `${ICONS.link || '🔗'} 在 Telegram 私聊中查看全量无裁切回答`, url: `https://t.me/${botUsername}?start=view_inline_${chosen.result_id}` }
-              ]],
-            }
-          : undefined;
+        // Pass 100% full markdown without artificial slicing (Rich Message supports up to 32,768 chars)
+        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
 
         // Official Telegram 10.2 InputRichMessageContent (rich_message)
         await ctx.api.raw.editMessageText({
@@ -410,10 +389,9 @@ export function registerInlineHandler(
           rich_message: {
             markdown: fullMarkdown,
           },
-          reply_markup: replyMarkup,
         } as any);
 
-        logger.info(`[InlineResult] Edited with 10.2 Native Rich Message: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length} isTruncated=${isTruncated}`);
+        logger.info(`[InlineResult] Edited with 10.2 Native Rich Message: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
         const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;
