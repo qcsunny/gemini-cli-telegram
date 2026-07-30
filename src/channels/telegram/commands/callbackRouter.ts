@@ -130,27 +130,35 @@ export function registerCallbackRouter(
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
 
-      // Determine page index corresponding to the tier start
-      let startIdx = 0;
-      if (tier === 1) startIdx = 3;
-      else if (tier === 2) startIdx = 9;
-      else if (tier === 3) startIdx = 18;
+      const cfg = loadUserConfig();
+      const tiers = cfg?.modelsConfig?.tiers || [];
+      const targetTierObj = tiers[tier];
 
-      const page = Math.floor(startIdx / MODELS_PER_PAGE);
-      const start = page * MODELS_PER_PAGE;
-      const pageModels = models.slice(start, start + MODELS_PER_PAGE);
+      let pageModels: string[] = [];
+      if (targetTierObj && targetTierObj.models && targetTierObj.models.length > 0) {
+        pageModels = models.filter(m => targetTierObj.models.includes(m));
+        if (pageModels.length === 0) {
+          pageModels = models.slice(0, MODELS_PER_PAGE);
+        }
+      } else {
+        pageModels = models.slice(0, MODELS_PER_PAGE);
+      }
 
-      const modelItems = pageModels.map((m, i) => ({
-        id: (start + i + 1).toString(),
-        display: m,
-        active: m === currentModel,
-      }));
+      const modelItems = pageModels.map((m) => {
+        const foundIdx = models.findIndex(allM => allM === m);
+        const modelId = foundIdx >= 0 ? (foundIdx + 1).toString() : m;
+        return {
+          id: modelId,
+          display: m,
+          active: m === currentModel,
+        };
+      });
 
       await ctx.editMessageText(
         `${ICONS.model} <b>Model Selection</b> (${tierName})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
-          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page, tier),
+          reply_markup: buildModelKeyboard(modelItems, false, 0, tier),
         },
       );
       return;
