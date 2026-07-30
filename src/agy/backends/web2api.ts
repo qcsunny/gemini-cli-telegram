@@ -7,7 +7,7 @@ import * as http from 'node:http';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig, getBackendUrl, getWeb2ApiKey } from '../../config/userConfig.js';
-import { saveMessage } from '../messageStore.js';
+import { saveMessage, getHistory } from '../messageStore.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { web2apiHistories, makeWeb2ApiConvId } from '../conversationManager.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
@@ -26,7 +26,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
   const convId = existingConvId || makeWeb2ApiConvId();
 
   // Build message history: retrieve existing turns + append new user message
-  const history = web2apiHistories.get(convId) ?? [];
+  const history = getHistory(web2apiHistories, convId, 'web2api');
   history.push({ role: 'user', content: prompt });
 
   const body = JSON.stringify({

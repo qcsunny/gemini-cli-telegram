@@ -11,7 +11,7 @@ import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { ICONS, buildMainKeyboard, buildResumeKeyboard, escapeHtml, formatWelcome } from '../ui.js';
 import { fullInlineOutputs } from './inlineHandler.js';
-import { buildFinalBlocks } from '../formatter/blocks.js';
+
 
 export function registerSessionHandlers(
   bot: Bot,
@@ -25,12 +25,9 @@ export function registerSessionHandlers(
       const resultId = match.replace('full_', '');
       const fullData = fullInlineOutputs.get(resultId);
       if (fullData) {
-        const chatId = ctx.chat?.id;
-        if (chatId) {
-          const reply = buildChannelReply(ctx, chatId, 'RichText');
-          await reply.sendRich({ content: fullMarkdown });
-          return;
-        }
+        const markdown = `<b>💬 问题：</b> ${escapeHtml(fullData.prompt)}\n\n<b>🤖 回答 (${escapeHtml(fullData.model)})：</b>\n\n${escapeHtml(fullData.output)}`;
+        await ctx.reply(markdown, { parse_mode: 'HTML' });
+        return;
       }
     }
 
@@ -56,21 +53,34 @@ export function registerSessionHandlers(
     if (!chatId) return;
 
     try {
+      const activeSession = sessionManager.getSession(chatId);
+      if (activeSession) {
+        if (activeSession.typingInterval) {
+          clearInterval(activeSession.typingInterval);
+          activeSession.typingInterval = undefined;
+        }
+        activeSession.abortController.abort('Reset by /new');
+        activeSession.busy = false;
+      }
+
       const projectManager = sessionManager.getProjectManager();
-      const allProjects = projectManager.getProjects();
-      const defaultProj = allProjects.find(p => p.name === '通用知识专家_RichText') || allProjects[0];
+      const allProjects = projectManager.getProjects() || [];
+      const defaultProj = allProjects.find(p => p?.name === '通用知识专家_RichText') || allProjects[0];
+      
       await sessionManager.reset(chatId, {
         ...defaultOptions,
         project: defaultProj,
-        model: defaultOptions.model,
+        model: defaultOptions.model || 'Gemini 3.6 Flash (High)',
       });
+
+      const modelName = defaultOptions.model || 'Gemini 3.6 Flash (High)';
       await ctx.reply(
-        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${defaultOptions.model}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
+        `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${escapeHtml(modelName)}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
       );
     } catch (e) {
       logger.error(`Error resetting session for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} <b>Failed to reset session.</b>`);
+      await ctx.reply(`${ICONS.error} <b>Failed to reset session:</b> ${e instanceof Error ? e.message : String(e)}`);
     }
   });
 

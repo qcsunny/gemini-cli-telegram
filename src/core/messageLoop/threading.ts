@@ -43,7 +43,7 @@ export async function withTimeout<T>(
   };
   armInactivity();
 
-  const timeout: Promise<never> = new Promise((_reject) => {
+  const timeout: Promise<never> = new Promise((_, _reject) => {
     reject = _reject;
   });
 

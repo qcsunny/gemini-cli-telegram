@@ -19,7 +19,7 @@ import type { RichBlock } from '../richMessage.js';
 import { markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
-import { draftBackoffUntil } from './rateLimiter.js';
+import { draftBackoffUntil, record429Backoff, is429Error, get429RetryAfter } from './rateLimiter.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
 
 function buildRichMessagePayload(blocks: RichBlock[]): InputRichMessage<never> {
@@ -562,6 +562,9 @@ export function buildChannelReply(
           return;
         }
       } catch (err: any) {
+        if (is429Error(err)) {
+          record429Backoff(chatId, get429RetryAfter(err));
+        }
         logger.info(`[TRACE-EVIDENCE] editRichDraft Option A failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 

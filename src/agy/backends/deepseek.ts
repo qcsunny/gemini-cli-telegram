@@ -8,7 +8,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig, getBackendUrl } from '../../config/userConfig.js';
 import { loadUserConfig } from '../../config/userConfig.js';
-import { saveMessage } from '../messageStore.js';
+import { saveMessage, getHistory } from '../messageStore.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { deepseekHistories, makeDeepSeekConvId } from '../conversationManager.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
@@ -20,7 +20,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   const convId = existingConvId || makeDeepSeekConvId();
 
-  const history = deepseekHistories.get(convId) ?? [];
+  const history = getHistory(deepseekHistories, convId, 'deepseek');
   history.push({ role: 'user', content: prompt });
 
   const config = loadUserConfig();

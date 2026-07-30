@@ -23,8 +23,6 @@ export function registerConfigHandlers(
       const page = 0;
       const start = page * MODELS_PER_PAGE;
       const pageModels = models.slice(start, start + MODELS_PER_PAGE);
-      const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
-
       const modelItems = pageModels.map((m, i) => ({
         id: ((page * MODELS_PER_PAGE) + i + 1).toString(),
         display: m,
