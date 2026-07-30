@@ -392,15 +392,17 @@ describe('TelegramBot', () => {
       expect(draftId).toBeDefined();
     });
 
-    it('should redirect editPlain to sendRichDraft when parseMode is RichText', async () => {
+    it('should redirect editPlain to editMessageText or sendRichDraft when parseMode is RichText', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       await reply.editPlain(100, 'streaming update');
 
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+      const calledEdit = mockCtx.api.editMessageText.mock.calls.length > 0 || mockCtx.api.raw.sendRichMessageDraft.mock.calls.length > 0;
+      expect(calledEdit).toBe(true);
     });
 
     it('should trigger circuit breaker and fall back to plain editing if sendRichDraft fails twice', async () => {
       mockCtx.api.raw.sendRichMessageDraft.mockRejectedValue(new Error('Draft rate limit'));
+      mockCtx.api.editMessageText.mockRejectedValue(new Error('Edit rate limit'));
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       
       // Attempt sending drafts, which fail

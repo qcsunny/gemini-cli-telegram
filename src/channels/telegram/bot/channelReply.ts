@@ -530,19 +530,27 @@ export function buildChannelReply(
       // Throttle to avoid 429 on rapid stream updates
       await throttleDraft(chatId);
 
-      // Per Bot API 10.1: there is no "editRichMessageDraft" method.
-      // Updating a draft is done by calling sendRichMessageDraft again with the same draft_id.
-      // Option A (10.2): Native structured blocks with native `thinking` placeholder.
+      // Try Option A (10.2): Native editRichMessage / editMessageText for visible message bubbles
       try {
         const contentRaw = typeof originalText === 'string' ? originalText : originalText.content;
         const thoughtRaw = typeof originalText === 'string' ? undefined : originalText.thought;
+        const html = getHtmlPayloadWithDetails(originalText, isStreaming);
+
+        // First attempt: try editRichMessage / editMessageText for true visible message bubble
+        try {
+          await ctx.api.editMessageText(chatId, draftId, html, {
+            parse_mode: 'HTML',
+          });
+          logger.info(`[TRACE-EVIDENCE] editMessageText success for visible bubble messageId=${draftId}.`);
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        } catch (editErr: any) {
+          logger.debug(`[TRACE-EVIDENCE] Direct editMessageText for draftId=${draftId} failed, trying sendRichMessageDraft: ${editErr.message}`);
+        }
+
         const blocks = buildStreamingBlocks({ content: contentRaw, thought: thoughtRaw });
-        if (blocks.length > 0) {
-          if (!validateBlocksPayload(blocks)) {
-            logger.warn(`[BLOCK VALIDATION] Edit draft blocks failed pre-flight, falling through`);
-            throw new Error('Edit draft blocks validation failed');
-          }
-          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A - blocks): blocks=${blocks.length}`);
+        if (blocks.length > 0 && validateBlocksPayload(blocks)) {
+          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A - blocks): draftId=${draftId}, blocks=${blocks.length}`);
           await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessagePayload(blocks), {
             message_thread_id: messageThreadId,
           });
@@ -551,7 +559,7 @@ export function buildChannelReply(
           return;
         }
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A (blocks) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 
       // Option B: Rich HTML
