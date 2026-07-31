@@ -254,7 +254,7 @@ export function getAgyConversationsPath(config?: UserConfig | null): string {
 
 /** Default tuning constants — used when config.tuning fields are omitted. */
 export const TUNING_DEFAULTS = {
-  debounceIntervalMs: 1000,
+  debounceIntervalMs: 350,
   modelRunHardTimeoutMs: 900_000,
   modelRunInactivityMs: 600_000,
   retriesPerModel: 3,
