@@ -148,8 +148,25 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
                 }
               }
             }
-        } catch {
-            // ignore incomplete SSE chunk lines
+        } catch (parseErr: any) {
+            // BUG-06: Distinguish between expected partial SSE chunk truncation
+            // (safe to ignore) and actual API error responses wrapped in JSON.
+            // If the raw string looks like a complete JSON object with an 'error'
+            // field, surface it so the caller's fallback logic can handle it.
+            if (dataStr.includes('"error"') && dataStr.startsWith('{')) {
+              try {
+                const errObj = JSON.parse(dataStr);
+                if (errObj?.error) {
+                  const apiErrMsg = errObj.error.message || JSON.stringify(errObj.error);
+                  logger.warn(`[runGeminiDirect] API returned error JSON in SSE stream: ${apiErrMsg}`);
+                  throw new Error(`Gemini API error: ${apiErrMsg}`);
+                }
+              } catch (rethrow: any) {
+                if (rethrow.message?.startsWith('Gemini API error:')) throw rethrow;
+                // Inner JSON.parse failed — still a malformed chunk, ignore.
+              }
+            }
+            // Otherwise: incomplete/partial SSE chunk line — safe to ignore.
           }
       }
     }
@@ -178,6 +195,12 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
     const maxMessages = getTuningConfig().maxHistoryMessages;
     const trimmed = history.length > maxMessages ? history.slice(history.length - maxMessages) : history;
     geminiDirectHistories.set(convId, trimmed);
+    // BUG-04: Prevent unbounded Map growth (OOM risk). Evict oldest entry
+    // when the map exceeds 500 active conversations.
+    if (geminiDirectHistories.size > 500) {
+      const firstKey = geminiDirectHistories.keys().next().value;
+      if (firstKey !== undefined) geminiDirectHistories.delete(firstKey);
+    }
 
     const finalResult: AgyRunResult = {
       conversationId: convId,

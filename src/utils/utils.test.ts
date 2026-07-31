@@ -7,16 +7,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import { MessageCache } from './messageCache.js';
+import { formatFooterMarker, estimateTokens, calculateCost } from './pricing.js';
+import { startHealthServer, stopHealthServer } from './healthServer.js';
 
 describe('Utils Test Suite', () => {
 
   // ── 1. MessageCache ──
   describe('MessageCache', () => {
-    let MessageCache: typeof import('./messageCache.js').MessageCache;
-    let cache: import('./messageCache.js').MessageCache;
+    let cache: MessageCache;
 
-    beforeEach(async () => {
-      MessageCache = (await import('./messageCache.js')).MessageCache;
+    beforeEach(() => {
       cache = new MessageCache(10000, 5); // 10s TTL, max 5 entries
     });
 
@@ -72,7 +73,6 @@ describe('Utils Test Suite', () => {
   // ── 2. Pricing & Token Estimation ──
   describe('Pricing and Token Estimation', () => {
     it('should format footer marker string correctly', async () => {
-      const { formatFooterMarker } = await import('./pricing.js');
       const footer = formatFooterMarker('gemini-3.6-flash', 'Hello prompt', 'Hello output', {
         input: 100,
         output: 50,
@@ -85,7 +85,6 @@ describe('Utils Test Suite', () => {
     });
 
     it('should estimate CJK tokens with updated ratio', async () => {
-      const { estimateTokens } = await import('./pricing.js');
       const enTokens = estimateTokens('Hello world');
       const cjkTokens = estimateTokens('你好世界');
       expect(enTokens).toBeGreaterThan(0);
@@ -93,47 +92,40 @@ describe('Utils Test Suite', () => {
     });
 
     it('should handle mixed CJK and English text', async () => {
-      const { estimateTokens } = await import('./pricing.js');
       const tokens = estimateTokens('Hello 你好 world 世界');
       expect(tokens).toBeGreaterThan(4);
     });
 
     it('should apply correct cache discount per provider', async () => {
-      const { calculateCost } = await import('./pricing.js');
       const costNoCache = calculateCost('gemini-3.1-pro', 1000, 500, 0, 0);
       const costCached = calculateCost('gemini-3.1-pro', 0, 500, 1000, 0);
       expect(costCached.totalCost).toBeLessThan(costNoCache.totalCost);
     });
 
     it('should fallback to default rates for unknown models', async () => {
-      const { calculateCost } = await import('./pricing.js');
       const cost = calculateCost('unknown-model-xyz', 100, 100, 0, 0);
       expect(cost).toBeDefined();
       expect(typeof cost.totalCost).toBe('number');
     });
 
     it('should not charge thinking tokens for models with thinkingMultiplier=none', async () => {
-      const { calculateCost } = await import('./pricing.js');
       const costWithoutThinking = calculateCost('gemini-3.6-flash', 1000, 500, 0, 0);
       const costWithThinking = calculateCost('gemini-3.6-flash', 1000, 500, 0, 200);
       expect(costWithThinking.totalCost).toEqual(costWithoutThinking.totalCost);
     });
 
     it('should NOT charge thinking separately (output already includes thinking)', async () => {
-      const { calculateCost } = await import('./pricing.js');
       const cost = calculateCost('deepseek-r1', 100, 100, 0, 50);
       expect(cost).toBeDefined();
     });
 
     it('should switch to long-context rates when input exceeds 200K tokens', async () => {
-      const { calculateCost } = await import('./pricing.js');
       const costShort = calculateCost('gemini-3.1-pro', 100000, 100, 0, 0);
       const costLong = calculateCost('gemini-3.1-pro', 300000, 100, 0, 0);
       expect(costLong.totalCost).toBeGreaterThan(costShort.totalCost * 2.5);
     });
 
     it('should not apply long-context rates for models without longContextRates', async () => {
-      const { calculateCost } = await import('./pricing.js');
       const cost = calculateCost('deepseek-v3', 300000, 100, 0, 0);
       expect(cost).toBeDefined();
     });
@@ -144,12 +136,10 @@ describe('Utils Test Suite', () => {
     const TEST_PORT = 19099;
 
     afterAll(async () => {
-      const { stopHealthServer } = await import('./healthServer.js');
       stopHealthServer();
     });
 
     it('should respond with 200 and JSON status on GET /health', async () => {
-      const { startHealthServer } = await import('./healthServer.js');
       startHealthServer(TEST_PORT);
       await new Promise(r => setTimeout(r, 20));
 
@@ -169,7 +159,6 @@ describe('Utils Test Suite', () => {
     });
 
     it('should return 404 for unknown paths', async () => {
-      const { startHealthServer } = await import('./healthServer.js');
       startHealthServer(TEST_PORT);
       await new Promise(r => setTimeout(r, 20));
 

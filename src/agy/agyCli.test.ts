@@ -3,6 +3,14 @@ import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import {
+  extractUsageFromProto,
+  readUsageFromDatabase,
+  readConversationHistory,
+  isWeb2ApiModel,
+  isDeepSeekModel,
+  getAvailableModels,
+} from '../agy/agyCli.js';
 
 /**
  * Build a minimal protobuf blob matching agy's usage metadata format.
@@ -46,26 +54,22 @@ function makeUsageBlob(input: number, output: number, cached: number, thinking: 
 
 describe('extractUsageFromProto', () => {
   it('should parse a valid usage blob', { timeout: 30000 }, async () => {
-    const { extractUsageFromProto } = await import('../agy/agyCli.js');
     const blob = makeUsageBlob(100, 200, 50, 25);
     const result = extractUsageFromProto(new Uint8Array(blob));
     expect(result).toEqual({ input: 100, output: 200, cached: 50, thinking: 25 });
   });
 
   it('should return null for empty buffer', async () => {
-    const { extractUsageFromProto } = await import('../agy/agyCli.js');
     expect(extractUsageFromProto(new Uint8Array([]))).toBeNull();
   });
 
   it('should handle zero values', async () => {
-    const { extractUsageFromProto } = await import('../agy/agyCli.js');
     const blob = makeUsageBlob(0, 0, 0, 0);
     const result = extractUsageFromProto(new Uint8Array(blob));
     expect(result).toEqual({ input: 0, output: 0, cached: 0, thinking: 0 });
   });
 
   it('should handle large token counts', async () => {
-    const { extractUsageFromProto } = await import('../agy/agyCli.js');
     const blob = makeUsageBlob(999999, 888888, 777777, 666666);
     const result = extractUsageFromProto(new Uint8Array(blob));
     expect(result).toEqual({ input: 999999, output: 888888, cached: 777777, thinking: 666666 });
@@ -84,7 +88,6 @@ describe('readUsageFromDatabase', () => {
   });
 
   it('should read usage from a valid database', async () => {
-    const { readUsageFromDatabase } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'valid.db');
 
     const db = new Database(dbPath);
@@ -98,13 +101,11 @@ describe('readUsageFromDatabase', () => {
   });
 
   it('should return undefined when database does not exist', async () => {
-    const { readUsageFromDatabase } = await import('../agy/agyCli.js');
     const result = readUsageFromDatabase('/nonexistent/path.db');
     expect(result).toBeUndefined();
   });
 
   it('should return undefined when steps table is empty', async () => {
-    const { readUsageFromDatabase } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'empty.db');
 
     const db = new Database(dbPath);
@@ -116,7 +117,6 @@ describe('readUsageFromDatabase', () => {
   });
 
   it('should return undefined when metadata is null', async () => {
-    const { readUsageFromDatabase } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'null-metadata.db');
 
     const db = new Database(dbPath);
@@ -129,7 +129,6 @@ describe('readUsageFromDatabase', () => {
   });
 
   it('should accumulate usage across all steps', async () => {
-    const { readUsageFromDatabase } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'cumulative.db');
 
     const db = new Database(dbPath);
@@ -175,7 +174,6 @@ describe('readConversationHistory', () => {
   }
 
   it('should read user and assistant turns from a valid database', async () => {
-    const { readConversationHistory } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'valid-conv.db');
 
     const db = new Database(dbPath);
@@ -194,7 +192,6 @@ describe('readConversationHistory', () => {
   });
 
   it('should include thinking steps when present', async () => {
-    const { readConversationHistory } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'include-think.db');
 
     const db = new Database(dbPath);
@@ -216,7 +213,6 @@ describe('readConversationHistory', () => {
   });
 
   it('should handle final output steps (type 23) as assistant', async () => {
-    const { readConversationHistory } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'final-output.db');
 
     const db = new Database(dbPath);
@@ -235,13 +231,11 @@ describe('readConversationHistory', () => {
   });
 
   it('should return null when database does not exist', async () => {
-    const { readConversationHistory } = await import('../agy/agyCli.js');
     const result = readConversationHistory('/nonexistent/path.db');
     expect(result).toBeNull();
   });
 
   it('should return empty array when no user/assistant steps exist', async () => {
-    const { readConversationHistory } = await import('../agy/agyCli.js');
     const dbPath = path.join(tmpDir, 'empty-conv.db');
 
     const db = new Database(dbPath);
@@ -255,26 +249,22 @@ describe('readConversationHistory', () => {
 
 describe('isWeb2ApiModel / isDeepSeekModel', () => {
   it('should identify Web2API models', async () => {
-    const { isWeb2ApiModel } = await import('../agy/agyCli.js');
     expect(isWeb2ApiModel('Web2API: Gemini 3.6 Flash')).toBe(true);
     expect(isWeb2ApiModel('Web2API: Gemini Auto')).toBe(true);
   });
 
   it('should not identify non-Web2API models', async () => {
-    const { isWeb2ApiModel } = await import('../agy/agyCli.js');
     expect(isWeb2ApiModel('Gemini 3.6 Flash (High)')).toBe(false);
     expect(isWeb2ApiModel('DeepSeek: Pro')).toBe(false);
     expect(isWeb2ApiModel('Claude Opus 4.6 (Thinking)')).toBe(false);
   });
 
   it('should identify DeepSeek models', async () => {
-    const { isDeepSeekModel } = await import('../agy/agyCli.js');
     expect(isDeepSeekModel('DeepSeek: Pro')).toBe(true);
     expect(isDeepSeekModel('DeepSeek: Flash Thinking')).toBe(true);
   });
 
   it('should not identify non-DeepSeek models', async () => {
-    const { isDeepSeekModel } = await import('../agy/agyCli.js');
     expect(isDeepSeekModel('Gemini 3.6 Flash (High)')).toBe(false);
     expect(isDeepSeekModel('Web2API: Gemini Auto')).toBe(false);
   });
@@ -282,7 +272,6 @@ describe('isWeb2ApiModel / isDeepSeekModel', () => {
 
 describe('getAvailableModels', () => {
   it('should return model list from config orderedModels when present', async () => {
-    const { getAvailableModels } = await import('../agy/agyCli.js');
     const userConfig = await import('../config/userConfig.js');
     vi.spyOn(userConfig, 'loadUserConfig').mockReturnValue({
       telegramBotToken: 'token',
@@ -295,7 +284,6 @@ describe('getAvailableModels', () => {
   });
 
   it('should fall back to default order when no config', async () => {
-    const { getAvailableModels } = await import('../agy/agyCli.js');
     const userConfig = await import('../config/userConfig.js');
     vi.spyOn(userConfig, 'loadUserConfig').mockReturnValue(null);
 

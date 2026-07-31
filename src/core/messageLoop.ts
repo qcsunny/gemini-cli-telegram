@@ -27,6 +27,7 @@ import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnection
 import { withTimeout } from './messageLoop/threading.js';
 import { stripWholeMessageCodeFence, normalizeCodeFences, stripSearchResultPayloads } from './messageLoop/textUtils.js';
 import { detectAndSendNewArtifacts } from './messageLoop/artifact.js';
+import { forceReleaseDraft } from '../channels/telegram/bot/channelReply.js';
 
 const sleep = (ms: number) => {
   if (process.env['VITEST'] || process.env['NODE_ENV'] === 'test') return Promise.resolve();
@@ -209,7 +210,14 @@ export async function processMessage(
         const logTag = switchedChannel ? `[messageLoop] 🔀 Channel switch ${prevCh}→${nextCh}` : '[messageLoop]';
         logger.warn(`${logTag} Model "${prevModel}" failed (${reason}). Downgrading to "${modelToUse}" (attempt ${attempts}/${maxAttempts}).`);
         const switchNote = switchedChannel ? `（切换至 ${nextCh} 通道）` : '';
-        await reply.send(`${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escapeHtml(reason).slice(0, 200)}），正在自动降级至 \`${modelToUse}\`${switchNote} 重试...`);
+        // BUG-05: Edit the existing message instead of sending a new one to avoid
+        // flooding the chat with multiple "downgrading..." messages.
+        const degradeHtml = `${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escapeHtml(reason).slice(0, 200)}），正在自动降级至 \`${modelToUse}\`${switchNote} 重试...`;
+        if (currentMessageId) {
+          try { await reply.edit(currentMessageId, degradeHtml); } catch { await reply.send(degradeHtml); }
+        } else {
+          await reply.send(degradeHtml);
+        }
         return true;
       };
 
@@ -573,9 +581,14 @@ export async function processMessage(
           }
         }
 
+        // BUG-07: Choose error hint based on the actual failing channel, not always agy CLI.
+        const failingChannel = getChannelModel(modelToUse);
+        const channelHint = (!failingChannel || failingChannel === 'agy')
+          ? '请确认您的本地 `agy` CLI 已正确登录并配置网络。'
+          : `请检查 ${failingChannel} 后端服务的连通性与配置是否正常。`;
         const errorHtml = isFriendlyUpstreamMsg
           ? `${escapeHtml(stderrStr.trim())}`
-          : `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。${signal.aborted || finalResult.isTimeout ? '任务已被取消或超时（可能是系统看门狗或用户主动停止）。' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : '请确认您的本地 \`agy\` CLI 已正确登录并配置网络。')}${detailMsg}`;
+          : `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。${signal.aborted || finalResult.isTimeout ? '任务已被取消或超时（可能是系统看门狗或用户主动停止）。' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : channelHint)}${detailMsg}`;
         if (currentMessageId) {
           try {
             await reply.edit(currentMessageId, errorHtml);
@@ -600,6 +613,9 @@ export async function processMessage(
     session.busy = false;
     session._busySince = undefined;
     session.childPid = undefined;
+    // BUG-02: Force-release any active draft to prevent activeDraftIds leaks
+    // on error/cancel paths that bypass the normal finalizer.
+    forceReleaseDraft(chatId);
   }
 }
 

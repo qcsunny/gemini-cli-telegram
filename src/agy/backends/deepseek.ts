@@ -129,6 +129,12 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
           const maxMessages = getTuningConfig().maxHistoryMessages;
           const trimmed = history.length > maxMessages ? history.slice(history.length - maxMessages) : history;
           deepseekHistories.set(convId, trimmed);
+          // BUG-04: Prevent unbounded Map growth (OOM risk). Evict oldest entry
+          // when the map exceeds 500 active conversations.
+          if (deepseekHistories.size > 500) {
+            const firstKey = deepseekHistories.keys().next().value;
+            if (firstKey !== undefined) deepseekHistories.delete(firstKey);
+          }
         }
         saveMessage(convId, 'user', prompt, 'deepseek');
         saveMessage(convId, 'assistant', finalOutput, 'deepseek');
@@ -139,6 +145,12 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
     });
 
     req.on('error', reject);
+
+    // BUG-03: Add Socket-level read timeout so TCP half-open connections
+    // (server connected but never sends data back) don't hang indefinitely.
+    req.setTimeout(60_000, () => {
+      req.destroy(new Error('DeepSeek socket read timeout (60s)'));
+    });
 
     signal?.addEventListener('abort', () => {
       logger.debug('[deepseek] Aborting request');

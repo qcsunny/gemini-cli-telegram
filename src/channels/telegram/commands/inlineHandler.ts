@@ -3,8 +3,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { buildFinalBlocks } from '../formatter/blocks.js';
-import { formatTokenCount, markdownToIR, renderIRToHtml } from '../formatter/core.js';
+import { formatTokenCount } from '../formatter/core.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -23,21 +22,34 @@ interface PendingResult {
   model: string;
   projectPath?: string;
   createdAt: number;
+  /** Refreshed on every stream chunk to prevent premature TTL expiry on long active streams. */
+  lastActiveTime: number;
 }
 
 const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
 
+/** Touch the lastActiveTime of a pending result to keep it alive while streaming. */
+export function touchPendingResult(resultId: string): void {
+  const entry = pendingResults.get(resultId);
+  if (entry) entry.lastActiveTime = Date.now();
+}
+
 const cleanupTimer = setInterval(() => {
   const cutoff = Date.now() - RESULTS_TTL;
   for (const [key, val] of pendingResults) {
-    if (val.createdAt < cutoff) pendingResults.delete(key);
+    // Only remove entries that have been INACTIVE for RESULTS_TTL.
+    // Active streams continuously update lastActiveTime, so they are never
+    // evicted mid-stream even if the session started more than RESULTS_TTL ago.
+    if (val.lastActiveTime < cutoff) pendingResults.delete(key);
   }
   for (const [key, val] of fullInlineOutputs) {
     if (val.createdAt < cutoff) fullInlineOutputs.delete(key);
   }
   for (const [resultId, ctrl] of userControllers) {
+    // Only abort controllers whose pendingResult has already been cleaned up
+    // (i.e. truly inactive/expired), never abort an active stream.
     if (!pendingResults.has(resultId)) {
       try { ctrl.abort(); } catch {}
       userControllers.delete(resultId);
@@ -394,11 +406,11 @@ export function registerInlineHandler(
     // Store prompt info (no model startup — zero latency)
     logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} project="${projectUsed?.name || 'default'}" prompt="${prompt.slice(0, 40)}..."`);
     const resultId = `ai-${Date.now()}-${fromId}`;
-    pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, createdAt: Date.now() });
+    pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, createdAt: Date.now(), lastActiveTime: Date.now() });
 
     try {
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
-      const initMarkdown = `✨ **AI 推理引擎已启动**\n\n**🧠 目标模型：** \`${modelToUse}\`\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在通过 Antigravity 引擎深度推演，回答完成后将自动原地更新。*`;
+      const initMarkdown = `✨ **AI 推理引擎已启动**\n\n**🧠 目标模型：** \`${modelToUse}\`\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`;
 
       const results = [
         {
@@ -471,6 +483,9 @@ export function registerInlineHandler(
 
     const onChunk = (chunk: string) => {
       accumulatedText += chunk;
+      // BUG-01: Refresh lastActiveTime on every chunk so the cleanup timer
+      // never kills an actively-streaming long response.
+      touchPendingResult(chosen.result_id);
       if (accumulatedText.trim().length > 0) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
         const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${activeModelName})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
