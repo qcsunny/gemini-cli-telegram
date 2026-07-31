@@ -1,8 +1,12 @@
 import type { Bot, Context } from 'grammy';
+import { InputFile } from 'grammy';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type { SessionManager } from '../../../core/session.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
+import { getAgyDataDir } from '../../../config/userConfig.js';
 import { formatTokenCount } from '../formatter/core.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
@@ -21,6 +25,7 @@ interface PendingResult {
   prompt: string;
   model: string;
   projectPath?: string;
+  task?: InlineTask;
   createdAt: number;
   /** Refreshed on every stream chunk to prevent premature TTL expiry on long active streams. */
   lastActiveTime: number;
@@ -29,6 +34,23 @@ interface PendingResult {
 const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
+
+interface RegenerateContext {
+  prompt: string;
+  model: string;
+  projectPath?: string;
+  fromId: number;
+  inlineMessageId: string;
+  task?: InlineTask;
+  createdAt: number;
+}
+
+const regenerateContexts = new Map<string, RegenerateContext>();
+
+/** Paginated pages of a finished answer, keyed by resultId. */
+const inlinePages = new Map<string, string[]>();
+
+const ACTION_TTL = 30 * 60_000;
 
 /** Touch the lastActiveTime of a pending result to keep it alive while streaming. */
 export function touchPendingResult(resultId: string): void {
@@ -55,6 +77,13 @@ const cleanupTimer = setInterval(() => {
       userControllers.delete(resultId);
     }
   }
+  const actionCutoff = Date.now() - ACTION_TTL;
+  for (const [key, val] of regenerateContexts) {
+    if (val.createdAt < actionCutoff) {
+      regenerateContexts.delete(key);
+      inlinePages.delete(key);
+    }
+  }
 }, 60_000);
 cleanupTimer.unref();
 
@@ -64,6 +93,7 @@ cleanupTimer.unref();
 export class InlineStreamQueue {
   private queue: Promise<void> = Promise.resolve();
   private pendingMarkdown: string | null = null;
+  private pendingReplyMarkup: unknown = null;
   private isProcessing = false;
   private nextAllowedTime = 0;
   private currentThrottleMs = 500; // Start with fast 500ms adaptive throttle for smooth typing
@@ -87,9 +117,11 @@ export class InlineStreamQueue {
 
   /**
    * Push final completion markdown and flush until success with 429 backoff retry.
+   * @param replyMarkup optional inline keyboard attached to the final edit (e.g. regenerate / pagination buttons).
    */
-  public async flushFinal(markdown: string): Promise<boolean> {
+  public async flushFinal(markdown: string, replyMarkup?: unknown): Promise<boolean> {
     this.pendingMarkdown = markdown;
+    if (replyMarkup !== undefined) this.pendingReplyMarkup = replyMarkup;
     return new Promise<boolean>((resolve) => {
       this.queue = this.queue.then(async () => {
         const success = await this.executeEdit(true);
@@ -142,12 +174,16 @@ export class InlineStreamQueue {
       }
 
       try {
-        await this.api.raw.editMessageText({
+        const editPayload: Record<string, unknown> = {
           inline_message_id: this.inlineMessageId,
           rich_message: {
             markdown: targetMarkdown,
           },
-        } as any);
+        };
+        if (this.pendingReplyMarkup !== null) {
+          editPayload['reply_markup'] = this.pendingReplyMarkup;
+        }
+        await this.api.raw.editMessageText(editPayload as any);
 
         this.lastEditTime = Date.now();
         this.lastSentLen = targetMarkdown.length;
@@ -200,6 +236,32 @@ const MODEL_PREFIX_MAP: Record<string, string> = {
   '/opencode': 'OpenCode: DeepSeek V4 Flash Free',
 };
 
+export type InlineTask = 'translate' | 'summarize' | 'fix' | 'code' | 'image';
+
+const TASK_PREFIX_MAP: Record<string, InlineTask> = {
+  '/translate': 'translate',
+  '/summarize': 'summarize',
+  '/fix': 'fix',
+  '/code': 'code',
+  '/img': 'image',
+};
+
+const TASK_INSTRUCTION: Record<Exclude<InlineTask, 'image'>, string> = {
+  translate: '请将以下内容翻译成中文，保持原意与格式：\n\n',
+  summarize: '请用简洁的语言总结以下内容，列出要点：\n\n',
+  fix: '请分析以下代码/报错信息并给出修复方案，附上修改后的代码：\n\n',
+  code: '请给出实现以下需求的完整代码（含必要注释）：\n\n',
+};
+
+const THUMBNAIL_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72';
+const THUMBNAILS = {
+  bot: `${THUMBNAIL_BASE}/1f916.png`,
+  sparkles: `${THUMBNAIL_BASE}/2728.png`,
+  thinking: `${THUMBNAIL_BASE}/1f914.png`,
+  warning: `${THUMBNAIL_BASE}/26a0.png`,
+  chat: `${THUMBNAIL_BASE}/1f4ac.png`,
+};
+
 export function parseInlineModelAndPrompt(
   rawQuery: string,
   defaultModel: string,
@@ -209,21 +271,29 @@ export function parseInlineModelAndPrompt(
   prompt: string;
   aliasUsed?: string;
   projectUsed?: ProjectInfo;
+  task?: InlineTask;
 } {
   let text = rawQuery.trim();
   let selectedModel = defaultModel;
   let aliasUsed: string | undefined;
   let projectUsed: ProjectInfo | undefined;
+  let task: InlineTask | undefined;
 
   const parts = text.split(/\s+/);
-  if (parts.length > 0 && parts[0].startsWith('/')) {
+  while (parts.length > 0 && parts[0].startsWith('/')) {
     const alias = parts[0].toLowerCase();
     if (MODEL_PREFIX_MAP[alias]) {
       selectedModel = MODEL_PREFIX_MAP[alias];
       aliasUsed = alias;
-      text = parts.slice(1).join(' ').trim();
+      parts.shift();
+    } else if (TASK_PREFIX_MAP[alias]) {
+      task = TASK_PREFIX_MAP[alias];
+      parts.shift();
+    } else {
+      break;
     }
   }
+  text = parts.join(' ').trim();
 
   const pMatch = text.match(/@p:?(\d+|[^\s]+)/i);
   if (pMatch) {
@@ -238,11 +308,17 @@ export function parseInlineModelAndPrompt(
     }
   }
 
+  if (task && task !== 'image') {
+    const instr = TASK_INSTRUCTION[task];
+    text = text ? `${instr}${text}` : instr.trim();
+  }
+
   return {
     model: selectedModel,
     prompt: text,
     aliasUsed,
     projectUsed,
+    task,
   };
 }
 
@@ -309,6 +385,49 @@ function anySignal(...signals: AbortSignal[]): AbortSignal {
   return ctrl.signal;
 }
 
+const PAGE_CHARS = 2500;
+const PAGE_THRESHOLD = 6000;
+
+function splitIntoPages(text: string, pageChars: number = PAGE_CHARS): string[] {
+  if (text.length <= pageChars) return [text];
+  const pages: string[] = [];
+  const chunks = text.split(/\n{2,}/);
+  let current = '';
+  for (const chunk of chunks) {
+    if (current && (current + '\n\n' + chunk).length > pageChars) {
+      pages.push(current);
+      current = chunk;
+    } else {
+      current = current ? current + '\n\n' + chunk : chunk;
+    }
+  }
+  if (current) pages.push(current);
+  if (pages.length === 0) pages.push(text);
+  return pages;
+}
+
+async function findNewImageArtifacts(conversationId: string, turnStartTime: number): Promise<string[]> {
+  if (!conversationId) return [];
+  const artifactDir = path.join(getAgyDataDir(), 'brain', conversationId);
+  const images: string[] = [];
+  try {
+    const files = await fs.readdir(artifactDir).catch(() => [] as string[]);
+    for (const file of files) {
+      if (file.startsWith('.') || file === 'scratch' || file === '.system_generated' || file === '.user_uploaded') continue;
+      const ext = path.extname(file).toLowerCase();
+      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) continue;
+      const filePath = path.join(artifactDir, file);
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (stat?.isFile() && stat.mtimeMs >= turnStartTime - 2000) {
+        images.push(filePath);
+      }
+    }
+  } catch (e) {
+    logger.warn(`[InlineHandler] Error scanning image artifacts: ${e}`);
+  }
+  return images.sort((a, b) => a.localeCompare(b));
+}
+
 export function registerInlineHandler(
   bot: Bot,
   sessionManager: SessionManager,
@@ -316,11 +435,87 @@ export function registerInlineHandler(
   options: InlineHandlerOptions = {},
 ): void {
   bot.on('callback_query:data', async (ctx: Context) => {
-    if (ctx.callbackQuery?.data === 'inline_thinking') {
+    const data = ctx.callbackQuery?.data;
+    const inlineMessageId = ctx.callbackQuery?.inline_message_id;
+    if (!data || !inlineMessageId) return;
+
+    if (data === 'inline_thinking') {
       await ctx.answerCallbackQuery({
         text: '🧠 AI 推理引擎正在全量计算中，回答完成后将自动原地更新，请稍候...',
         show_alert: true,
       }).catch(() => {});
+      return;
+    }
+
+    if (data.startsWith('inline_regenerate:')) {
+      const resultId = data.slice('inline_regenerate:'.length);
+      const regen = regenerateContexts.get(resultId);
+      if (!regen) {
+        await ctx.answerCallbackQuery({ text: '❌ 会话已过期，请重新发起提问。', show_alert: true }).catch(() => {});
+        return;
+      }
+      await ctx.answerCallbackQuery({ text: '🔄 正在重新生成回答，请稍候...' }).catch(() => {});
+      const ctrl = new AbortController();
+      userControllers.set(resultId, ctrl);
+      const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
+      let accumulatedText = '';
+      let activeModelName = regen.model;
+      const onModelStart = (modelName: string) => { accumulatedText = ''; activeModelName = modelName; };
+      const onChunk = (chunk: string) => {
+        accumulatedText += chunk;
+        touchPendingResult(resultId);
+        if (accumulatedText.trim().length > 0) {
+          const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
+          const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${activeModelName})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
+          streamQueue.enqueueStream(streamMarkdown);
+        }
+      };
+      try {
+        await runInlineGeneration(ctx, sessionManager, defaultOptions, {
+          resultId,
+          inlineMessageId,
+          fromId: regen.fromId,
+          prompt: regen.prompt,
+          model: regen.model,
+          projectPath: regen.projectPath,
+          task: regen.task,
+          ctrl,
+          streamQueue,
+          onModelStart,
+          onChunk,
+        });
+      } catch (e) {
+        logger.warn(`[InlineResult] Regenerate failed: ${e}`);
+      } finally {
+        userControllers.delete(resultId);
+      }
+      return;
+    }
+
+    if (data.startsWith('inline_page:')) {
+      const [resultId, pageIdxStr] = data.slice('inline_page:'.length).split(':');
+      const pageIdx = parseInt(pageIdxStr, 10);
+      const pages = inlinePages.get(resultId);
+      if (!pages || Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= pages.length) {
+        await ctx.answerCallbackQuery({ text: '❌ 分页已过期。', show_alert: true }).catch(() => {});
+        return;
+      }
+      await ctx.answerCallbackQuery().catch(() => {});
+      await ctx.api.raw.editMessageText({
+        inline_message_id: inlineMessageId,
+        rich_message: { markdown: pages[pageIdx] },
+        reply_markup: {
+          inline_keyboard: [
+            [
+              ...(pageIdx > 0 ? [{ text: '◀️ 上一页', callback_data: `inline_page:${resultId}:${pageIdx - 1}` }] : []),
+              { text: `${pageIdx + 1}/${pages.length}`, callback_data: 'inline_noop' },
+              ...(pageIdx < pages.length - 1 ? [{ text: '下一页 ▶️', callback_data: `inline_page:${resultId}:${pageIdx + 1}` }] : []),
+            ],
+            [{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }],
+          ],
+        },
+      } as any).catch((e: Error) => logger.warn(`[InlineResult] Page edit failed: ${e}`));
+      return;
     }
   });
 
@@ -336,6 +531,7 @@ export function registerInlineHandler(
         id: 'unauthorized',
         title: '⚠️ 未授权访问 / Unauthorized',
         description: '您的 Telegram ID 未在白名单许可列表中。',
+        thumbnail_url: THUMBNAILS.warning,
         input_message_content: {
           message_text: `${ICONS.warning} <b>未授权访问</b>\n\n您的 Telegram ID (<code>${fromId}</code>) 未获得此 AI Bot 的 Inline 使用权限。`,
           parse_mode: 'HTML' as const,
@@ -350,12 +546,12 @@ export function registerInlineHandler(
     const sessionModel = activeSession?.config?.getModel();
     const activeModel = sessionModel || defaultOptions.model || '';
     const allProjects = sessionManager.getProjects();
-    const { model: modelToUse, prompt, aliasUsed, projectUsed } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
+    const { model: modelToUse, prompt, aliasUsed, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
 
     // Default to active session project if no explicit @p:N flag was provided
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
-    if (!prompt) {
+    if (!prompt && task !== 'image') {
       const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>@p${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
       const results = [
         {
@@ -363,6 +559,7 @@ export function registerInlineHandler(
           id: 'help-main',
           title: `🤖 Ask AI — Gemini / DeepSeek / OpenCode`,
           description: `Type a question to ask AI (model: ${modelToUse})`,
+          thumbnail_url: THUMBNAILS.bot,
           input_message_content: {
             message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Quick model switches:</b>\n• <code>/flash 提问</code> — Gemini 3.6 Flash\n• <code>/pro 提问</code> — Gemini 3.1 Pro\n• <code>/deepseek 提问</code> — DeepSeek Flash\n\n<b>Project switches (@pN):</b>\n${projectHelpList || '• 自动继承 Bot 当前绑定的项目'}`,
             parse_mode: 'HTML' as const,
@@ -373,6 +570,7 @@ export function registerInlineHandler(
           id: 'help-flash',
           title: '⚡ @static32bot /flash 提问',
           description: 'Gemini 3.6 Flash — fastest responses',
+          thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
             message_text: `⚡ <b>Fast mode</b>\n\nUse <code>/flash</code> prefix for quick answers:\n<code>@static32bot /flash 什么是量子计算？</code>\n\nForces Gemini 3.6 Flash model for fast response.`,
             parse_mode: 'HTML' as const,
@@ -383,6 +581,7 @@ export function registerInlineHandler(
           id: 'help-pro',
           title: '🧠 @static32bot /pro 提问',
           description: 'Gemini 3.1 Pro — deep reasoning',
+          thumbnail_url: THUMBNAILS.thinking,
           input_message_content: {
             message_text: `🧠 <b>Pro / Deep Reasoning</b>\n\nUse <code>/pro</code> prefix for complex analysis:\n<code>@static32bot /pro 请详细解释...</code>\n\nForces Gemini 3.1 Pro model for deep reasoning.`,
             parse_mode: 'HTML' as const,
@@ -393,8 +592,20 @@ export function registerInlineHandler(
           id: 'help-deepseek',
           title: '🔍 @static32bot /deepseek 提问',
           description: 'DeepSeek Flash model',
+          thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
             message_text: `🔍 <b>DeepSeek Model</b>\n\nUse <code>/deepseek</code> prefix:\n<code>@static32bot /deepseek 你的问题</code>\n\nForces DeepSeek Flash model.`,
+            parse_mode: 'HTML' as const,
+          },
+        },
+        {
+          type: 'article' as const,
+          id: 'help-task',
+          title: '🎯 任务型前缀：翻译 / 总结 / 修复 / 代码 / 图片',
+          description: '/translate /summarize /fix /code /img 一键调用',
+          thumbnail_url: THUMBNAILS.sparkles,
+          input_message_content: {
+            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与模型前缀混用（如 <code>/flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（发送到私聊）`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -404,20 +615,41 @@ export function registerInlineHandler(
     }
 
     // Store prompt info (no model startup — zero latency)
-    logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} project="${projectUsed?.name || 'default'}" prompt="${prompt.slice(0, 40)}..."`);
+    logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} task=${task || 'chat'} project="${projectUsed?.name || 'default'}" prompt="${prompt.slice(0, 40)}..."`);
     const resultId = `ai-${Date.now()}-${fromId}`;
-    pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, createdAt: Date.now(), lastActiveTime: Date.now() });
+    pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now() });
 
     try {
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
-      const initMarkdown = `✨ **AI 推理引擎已启动**\n\n**🧠 目标模型：** \`${modelToUse}\`\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`;
+      const taskLabel = task === 'image'
+        ? '🖼️ **图像生成模式**'
+        : task === 'translate' ? '🌐 **翻译模式**'
+        : task === 'summarize' ? '📋 **总结模式**'
+        : task === 'fix' ? '🛠️ **修复模式**'
+        : task === 'code' ? '💻 **代码模式**'
+        : undefined;
+      const initTitle = task === 'image'
+        ? `🖼️ 点击生成图片 [${modelToUse}]`
+        : task === 'translate' ? `🌐 点击翻译 [${modelToUse}]`
+        : task === 'summarize' ? `📋 点击总结 [${modelToUse}]`
+        : task === 'fix' ? `🛠️ 点击修复 [${modelToUse}]`
+        : task === 'code' ? `💻 点击生成代码 [${modelToUse}]`
+        : `🤔 点击发送并开始思考 [${modelToUse}]`;
+      let initMarkdown: string;
+      if (task === 'image') {
+        initMarkdown = `**🎨 图像生成模式**\n\n**💬 提示词：**\n> ${displayPrompt}\n\n*🚀 正在生成图片，完成后将自动发送到你的私聊。*`;
+      } else {
+        const modelLine = `**🧠 目标模型：** \`${modelToUse}\`\n`;
+        initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI 推理引擎已启动**\n\n${modelLine}**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`;
+      }
 
       const results = [
         {
           type: 'article' as const,
           id: resultId,
-          title: `🤔 点击发送并开始思考 [${modelToUse}]`,
-          description: `点击发送，${prompt.slice(0, 40)}... AI 回答将自动更新`,
+          title: initTitle,
+          description: `${task === 'image' ? '生成图片' : `点击发送，${prompt.slice(0, 40)}...`} AI ${task === 'image' ? '图片' : '回答'}将自动更新`,
+          thumbnail_url: task === 'image' ? THUMBNAILS.sparkles : THUMBNAILS.thinking,
           input_message_content: {
             rich_message: {
               markdown: initMarkdown,
@@ -425,7 +657,7 @@ export function registerInlineHandler(
           } as any,
           reply_markup: {
             inline_keyboard: [[
-              { text: `${ICONS.bot} ⏳ AI 正在深度思考中...`, callback_data: 'inline_thinking' }
+              { text: `${ICONS.bot} ⏳ AI 正在${task === 'image' ? '生成图片' : '深度思考'}中...`, callback_data: 'inline_thinking' }
             ]],
           },
         },
@@ -434,6 +666,7 @@ export function registerInlineHandler(
           id: `prompt-${Date.now()}`,
           title: `💬 发送提问卡片 (${aliasUsed || '默认模型'})`,
           description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
+          thumbnail_url: THUMBNAILS.chat,
           input_message_content: {
             rich_message: {
               markdown: `**💬 AI 提问卡片**\n\n**模型：** \`${modelToUse}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`,
@@ -468,9 +701,8 @@ export function registerInlineHandler(
     const ctrl = new AbortController();
     userControllers.set(chosen.result_id, ctrl);
 
-    logger.info(`[ChosenInline] userId=${chosen.from.id} resultId=${chosen.result_id} model=${pending.model} — starting model`);
+    logger.info(`[ChosenInline] userId=${chosen.from.id} resultId=${chosen.result_id} model=${pending.model} task=${pending.task || 'chat'} — starting model`);
 
-    // Initialize serialized adaptive queue for this inline message
     const streamQueue = new InlineStreamQueue(ctx.api, chosen.inline_message_id);
 
     let accumulatedText = '';
@@ -494,72 +726,19 @@ export function registerInlineHandler(
     };
 
     try {
-      const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
-        pending.prompt,
-        pending.model,
-        defaultOptions,
-        ctrl.signal,
-        pending.projectPath,
-        onChunk,
+      await runInlineGeneration(ctx, sessionManager, defaultOptions, {
+        resultId: chosen.result_id,
+        inlineMessageId: chosen.inline_message_id,
+        fromId: chosen.from.id,
+        prompt: pending.prompt,
+        model: pending.model,
+        projectPath: pending.projectPath,
+        task: pending.task,
+        ctrl,
+        streamQueue,
         onModelStart,
-      );
-      
-      if (result?.output) {
-        const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
-        
-        let footerParts: string[] = [];
-        footerParts.push(`⏱️ ${((result.durationMs || 1000) / 1000).toFixed(1)}s`);
-        if (result.usage) {
-          const inCount = result.usage.input || 0;
-          const outCount = result.usage.output || 0;
-          const cachedCount = result.usage.cached || 0;
-          const thinkingCount = result.usage.thinking || 0;
-          if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}`);
-          if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}`);
-          const totalTokens = inCount + outCount;
-          if (totalTokens > 0) {
-            let tokenStr = `🪙 ${formatTokenCount(totalTokens)} tokens`;
-            const { totalCost, currency } = calculateCost(modelUsed, inCount, outCount, cachedCount, thinkingCount);
-            if (totalCost > 0) {
-              const sym = currency === 'CNY' ? '¥' : '$';
-              const costStr = totalCost < 0.0001 ? '<0.0001' : totalCost.toFixed(5);
-              tokenStr += ` (${sym}${costStr})`;
-            }
-            footerParts.push(tokenStr);
-          }
-        }
-        const footerText = footerParts.join(' · ');
-
-        // Auto wrap long outputs (> 250 chars) into Telegram 10.2 Native Collapsible Details Block to prevent chat flooding
-        const cleanOutput = stripWholeMessageCodeFence(result.output);
-        let bodyMarkdown = cleanOutput;
-        const rawOutputLen = cleanOutput.length;
-        let isCollapsible = false;
-
-        if (cleanOutput.trim().length > 250) {
-          const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
-          bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
-          isCollapsible = true;
-        }
-
-        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
-
-        logger.info(`[InlineResult] Submitting final flush edit: userId=${chosen.from.id} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
-
-        // Guaranteed final flush via serialized queue
-        const success = await streamQueue.flushFinal(fullMarkdown);
-        if (success) {
-          logger.info(`[InlineResult] Successfully flushed final inline message: inline_message_id=${chosen.inline_message_id} userId=${chosen.from.id}`);
-        }
-      } else {
-        const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
-        const failText = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n⚠️ <b>生成回答失败</b>\n模型未返回有效的文本输出，请重试。`;
-        await ctx.api.raw.editMessageText({
-          inline_message_id: chosen.inline_message_id,
-          text: failText,
-          parse_mode: 'HTML',
-        } as any).catch(() => {});
-      }
+        onChunk,
+      });
     } catch (e) {
       logger.warn(`[InlineResult] Failed to edit message: ${e}`);
     } finally {
@@ -567,6 +746,211 @@ export function registerInlineHandler(
       userControllers.delete(chosen.result_id);
     }
   });
+}
+
+interface InlineGenerationContext {
+  resultId: string;
+  inlineMessageId: string;
+  fromId: number;
+  prompt: string;
+  model: string;
+  projectPath?: string;
+  task?: InlineTask;
+  ctrl: AbortController;
+  streamQueue: InlineStreamQueue;
+  onModelStart: (modelName: string) => void;
+  onChunk: (chunk: string) => void;
+}
+
+async function runInlineGeneration(
+  ctx: Context,
+  sessionManager: SessionManager,
+  defaultOptions: SessionOptions,
+  gctx: InlineGenerationContext,
+): Promise<void> {
+  const {
+    resultId, inlineMessageId, fromId, prompt, model, projectPath,
+    task, ctrl, streamQueue, onModelStart, onChunk,
+  } = gctx;
+
+  // Keep regenerate context alive so the 🔄 button can re-run this prompt.
+  regenerateContexts.set(resultId, {
+    prompt,
+    model,
+    projectPath,
+    fromId,
+    inlineMessageId,
+    task,
+    createdAt: Date.now(),
+  });
+
+  const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
+    prompt,
+    model,
+    defaultOptions,
+    ctrl.signal,
+    projectPath,
+    onChunk,
+    onModelStart,
+  );
+
+  if (task === 'image') {
+    await finalizeImageResult(ctx, resultId, inlineMessageId, fromId, prompt, result, modelUsed);
+    return;
+  }
+
+  if (result?.output) {
+    const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
+
+    let footerParts: string[] = [];
+    footerParts.push(`⏱️ ${((result.durationMs || 1000) / 1000).toFixed(1)}s`);
+    if (result.usage) {
+      const inCount = result.usage.input || 0;
+      const outCount = result.usage.output || 0;
+      const cachedCount = result.usage.cached || 0;
+      const thinkingCount = result.usage.thinking || 0;
+      if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}`);
+      if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}`);
+      const totalTokens = inCount + outCount;
+      if (totalTokens > 0) {
+        let tokenStr = `🪙 ${formatTokenCount(totalTokens)} tokens`;
+        const { totalCost, currency } = calculateCost(modelUsed, inCount, outCount, cachedCount, thinkingCount);
+        if (totalCost > 0) {
+          const sym = currency === 'CNY' ? '¥' : '$';
+          const costStr = totalCost < 0.0001 ? '<0.0001' : totalCost.toFixed(5);
+          tokenStr += ` (${sym}${costStr})`;
+        }
+        footerParts.push(tokenStr);
+      }
+    }
+    const footerText = footerParts.join(' · ');
+
+    const cleanOutput = stripWholeMessageCodeFence(result.output);
+    const rawOutputLen = cleanOutput.length;
+
+    let fullMarkdown: string;
+    let replyMarkup: unknown;
+    let isCollapsible = false;
+    let pageCount = 1;
+
+      if (cleanOutput.trim().length > 250) {
+      if (cleanOutput.length > PAGE_THRESHOLD) {
+        // Long answer → paginate while keeping per-page <details> fold.
+        const pages = splitIntoPages(cleanOutput);
+        pageCount = pages.length;
+        inlinePages.set(resultId, pages);
+        const header = `**💬 问题：** ${displayPrompt}`;
+        const pageMarkdowns = pages.map((page) => {
+          const summaryTitle = `💡 展开本页 AI 回答 (${modelUsed} · ${page.length} 字)`;
+          const details = `<details><summary>${summaryTitle}</summary>\n\n${page}\n\n</details>`;
+          const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : '';
+          return `${header}\n\n${details}${footer}`;
+        });
+        fullMarkdown = pageMarkdowns[0];
+        const baseButtons: { text: string; callback_data: string }[] = [
+          { text: '◀️ 上一页', callback_data: 'inline_noop' },
+          { text: `1/${pageCount}`, callback_data: 'inline_noop' },
+          { text: '下一页 ▶️', callback_data: `inline_page:${resultId}:1` },
+        ];
+        replyMarkup = {
+          inline_keyboard: [
+            baseButtons.filter((b) => !(b.text === '◀️ 上一页')),
+            [{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }],
+          ],
+        };
+      } else {
+        // Medium answer → single collapsible fold (existing behavior)
+        const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
+        const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
+        isCollapsible = true;
+        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+        replyMarkup = {
+          inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+        };
+      }
+    } else {
+      // Short answer → plain text
+      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+      replyMarkup = {
+        inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+      };
+    }
+
+    logger.info(`[InlineResult] Submitting final flush edit: userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
+
+    const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup);
+    if (success) {
+      logger.info(`[InlineResult] Successfully flushed final inline message: inline_message_id=${inlineMessageId} userId=${fromId}`);
+    }
+  } else {
+    const displayPrompt = prompt.length > 200 ? prompt.slice(0, 200) + '...' : prompt;
+    const failText = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n⚠️ <b>生成回答失败</b>\n模型未返回有效的文本输出，请重试。`;
+    await ctx.api.raw.editMessageText({
+      inline_message_id: inlineMessageId,
+      text: failText,
+      parse_mode: 'HTML',
+    } as any).catch(() => {});
+  }
+}
+
+async function finalizeImageResult(
+  ctx: Context,
+  resultId: string,
+  inlineMessageId: string,
+  fromId: number,
+  prompt: string,
+  result: AgyRunResult | null,
+  modelUsed: string,
+): Promise<void> {
+  const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
+
+  if (!result?.conversationId) {
+    await ctx.api.raw.editMessageText({
+      inline_message_id: inlineMessageId,
+      text: `<b>🎨 图像生成失败</b>\n模型未返回会话信息，请重试。`,
+      parse_mode: 'HTML',
+    } as any).catch(() => {});
+    return;
+  }
+
+  const images = await findNewImageArtifacts(result.conversationId, Date.now() - (result.durationMs || 60_000));
+  if (images.length === 0) {
+    const output = (result.output || '').trim();
+    await ctx.api.raw.editMessageText({
+      inline_message_id: inlineMessageId,
+      rich_message: {
+        markdown: `**🎨 图像生成结果**\n\n**💬 提示词：** ${displayPrompt}\n\n${output || '模型未生成图片文件。'}`,
+      },
+      reply_markup: {
+        inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+      },
+    } as any).catch(() => {});
+    return;
+  }
+
+  const imagePath = images[images.length - 1];
+  let sent = false;
+  try {
+    await ctx.api.sendPhoto(fromId, new InputFile(imagePath), {
+      caption: `🎨 图片生成完成\n\n**提示词：** ${displayPrompt}\n_模型: ${modelUsed}_`,
+      parse_mode: 'HTML',
+    });
+    sent = true;
+  } catch (e) {
+    logger.error(`[InlineResult] Failed to send image to private chat: ${e}`);
+  }
+
+  const finalText = sent
+    ? `**🖼️ 图片已生成并发送到你的私聊！**\n\n**💬 提示词：** ${displayPrompt}\n_模型: ${modelUsed} · 文件: ${path.basename(imagePath)}_`
+    : `**🖼️ 图片已生成**\n\n**💬 提示词：** ${displayPrompt}\n\n_⚠️ 未能发送到私聊（请先给机器人发消息开启私聊）_\n\n_模型: ${modelUsed} · 文件: ${path.basename(imagePath)}_`;
+
+  await ctx.api.raw.editMessageText({
+    inline_message_id: inlineMessageId,
+    rich_message: { markdown: finalText },
+    reply_markup: {
+      inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+    },
+  } as any).catch(() => {});
 }
 
 function escapeHtmlText(str: string): string {

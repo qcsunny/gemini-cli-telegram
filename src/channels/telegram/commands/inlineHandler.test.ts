@@ -53,6 +53,37 @@ describe('parseInlineModelAndPrompt', () => {
     expect(res2.prompt).toBe('怎么写算法');
     expect(res2.projectUsed).toEqual(mockProjects[1]);
   });
+
+  it('should parse task prefixes and wrap prompt with instruction', () => {
+    const res = parseInlineModelAndPrompt('/translate 你好世界', 'Gemini 3.5 Flash');
+    expect(res.task).toBe('translate');
+    expect(res.prompt).toContain('翻译成中文');
+    expect(res.prompt).toContain('你好世界');
+  });
+
+  it('should parse combined model + task prefixes in any order', () => {
+    const res1 = parseInlineModelAndPrompt('/flash /summarize 量子计算', 'Gemini 3.5 Flash');
+    expect(res1.model).toBe('Gemini 3.6 Flash (High)');
+    expect(res1.task).toBe('summarize');
+    expect(res1.prompt).toContain('总结');
+    expect(res1.prompt).toContain('量子计算');
+
+    const res2 = parseInlineModelAndPrompt('/fix /pro 这个报错', 'Gemini 3.5 Flash');
+    expect(res2.model).toBe('Web2API: Gemini 3.1 Pro');
+    expect(res2.task).toBe('fix');
+  });
+
+  it('should mark /img as image task without wrapping prompt', () => {
+    const res = parseInlineModelAndPrompt('/img 一只猫', 'Gemini 3.5 Flash');
+    expect(res.task).toBe('image');
+    expect(res.prompt).toBe('一只猫');
+  });
+
+  it('should keep unknown prefix in prompt', () => {
+    const res = parseInlineModelAndPrompt('/unknown 什么情况', 'Gemini 3.5 Flash');
+    expect(res.task).toBeUndefined();
+    expect(res.prompt).toBe('/unknown 什么情况');
+  });
 });
 
 describe('registerInlineHandler', () => {
@@ -61,10 +92,12 @@ describe('registerInlineHandler', () => {
   let defaultOptions: SessionOptions;
   let inlineQueryHandler: ((ctx: any) => Promise<void>) | null = null;
   let chosenInlineResultHandler: ((ctx: any) => Promise<void>) | null = null;
+  let callbackQueryHandler: ((ctx: any) => Promise<void>) | null = null;
 
   beforeEach(() => {
     inlineQueryHandler = null;
     chosenInlineResultHandler = null;
+    callbackQueryHandler = null;
     mockBot = {
       on: vi.fn((event: string, handler: any) => {
         if (event === 'inline_query') {
@@ -72,6 +105,9 @@ describe('registerInlineHandler', () => {
         }
         if (event === 'chosen_inline_result') {
           chosenInlineResultHandler = handler;
+        }
+        if (event === 'callback_query:data') {
+          callbackQueryHandler = handler;
         }
       }),
     };
@@ -241,5 +277,74 @@ describe('registerInlineHandler', () => {
 
     await chosenInlineResultHandler!(mockChosenCtx);
     expect(mockChosenCtx.api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it('should handle regenerate callback and re-run answer', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '什么是量子计算？' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResultId = callArg.find((r: any) => r.id.startsWith('ai-')).id;
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: aiResultId,
+        from: { id: 12345 },
+        query: '什么是量子计算？',
+        inline_message_id: 'test_inline_msg_id_123',
+      },
+      api: {
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+
+    await chosenInlineResultHandler!(mockChosenCtx);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    const regenCtx = {
+      callbackQuery: {
+        data: `inline_regenerate:${aiResultId}`,
+        inline_message_id: 'test_inline_msg_id_123',
+      },
+      answerCallbackQuery: vi.fn().mockResolvedValue(true),
+      api: {
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+
+    await callbackQueryHandler!(regenCtx);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(regenCtx.answerCallbackQuery).toHaveBeenCalled();
+    expect(regenCtx.api.raw.editMessageText).toHaveBeenCalled();
+  });
+
+  it('should answer callback query with alert for inline_thinking', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      callbackQuery: {
+        data: 'inline_thinking',
+        inline_message_id: 'test_inline_msg_id_123',
+      },
+      answerCallbackQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await callbackQueryHandler!(mockCtx);
+
+    expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ show_alert: true }),
+    );
   });
 });
