@@ -5,6 +5,7 @@ dist/
 config.json
 *.log
 *.pid
+.exchange-rate-cache.json
 projects.json
 agy-conversations.json
 *.sqlite*
