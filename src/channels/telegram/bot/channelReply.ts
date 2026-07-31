@@ -234,6 +234,7 @@ export function buildChannelReply(
   chatId: number,
   parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'RichText',
   session?: DaemonSession,
+  replyToMessageId?: number,
 ): ChannelReply {
   const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
   let localDraftsDisabled = false;
@@ -341,15 +342,17 @@ export function buildChannelReply(
                 : `${originalText.content}${originalText.thought ? `\n\n# 思考过程\n${originalText.thought}` : ''}`;
               const fileName = `response_${Date.now()}.md`;
               const preview = mdContent.slice(0, 200).replace(/\n/g, ' ');
-              const caption = `📄 内容过长，已自动导出为 Markdown 文件\n\n${preview}...`;
-              const file = new InputFile(Buffer.from(mdContent, 'utf-8'), fileName);
+              const replyParams = replyToMessageId ? { message_id: replyToMessageId } : undefined;
               const msg = await ctx.replyWithDocument(file, {
                 caption,
                 message_thread_id: messageThreadId,
+                reply_parameters: replyParams,
               });
               messageCache.set(msg.message_id, safeMarkdown);
               return msg.message_id;
             }
+
+            const replyParams = replyToMessageId ? { message_id: replyToMessageId } : undefined;
 
             if (parts.length === 1) {
               // Single part: send as before
@@ -357,6 +360,7 @@ export function buildChannelReply(
               const richMessage = buildRichMessagePayload(parts[0]);
               const res = await ctx.api.sendRichMessage(chatId, richMessage, {
                 message_thread_id: messageThreadId,
+                reply_parameters: replyParams,
               });
               messageCache.set(res.message_id, safeMarkdown);
               return res.message_id;
@@ -373,6 +377,7 @@ export function buildChannelReply(
               const richMessage = buildRichMessagePayload(partBlocks);
               const res = await ctx.api.sendRichMessage(chatId, richMessage, {
                 message_thread_id: messageThreadId,
+                reply_parameters: pIdx === 0 ? replyParams : undefined,
               });
               lastMsgId = res.message_id;
               messageCache.set(lastMsgId, safeMarkdown);

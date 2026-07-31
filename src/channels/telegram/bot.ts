@@ -131,6 +131,7 @@ async function withSession(
   ctx: Context,
   defaultOptions: SessionOptions,
   handler: (session: DaemonSession, channelReply: ChannelReply) => Promise<void>,
+  replyToMessageId?: number,
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
@@ -194,7 +195,7 @@ async function withSession(
   }, TYPING_TTL_MS);
 
   const parseMode = session.settings?.telegram?.parseMode || 'RichText';
-  const reply = buildChannelReply(ctx, chatId, parseMode, session);
+  const reply = buildChannelReply(ctx, chatId, parseMode, session, replyToMessageId);
 
 
   try {
@@ -772,7 +773,19 @@ export class TelegramBot {
         }
       }
 
-      await this.processUserMessage(ctx, { text });
+      // Extract quoted text (劃词局部引用) or reply_to_message text for Context Enrichment
+      const quoteText = ctx.message.quote?.text;
+      const replyMsgText = ctx.message.reply_to_message?.text ?? ctx.message.reply_to_message?.caption;
+      const refText = quoteText ?? replyMsgText;
+
+      let promptText = text;
+      if (refText && refText.trim()) {
+        const cleanRef = refText.trim().slice(0, 1500);
+        promptText = `> [引用上下文]: ${cleanRef.replace(/\n/g, '\n> ')}\n\n${text}`;
+        logger.info(`[ReplyContext] Augmented prompt with quoted/reply text (len=${cleanRef.length}) for chatId=${chatId}`);
+      }
+
+      await this.processUserMessage(ctx, { text: promptText }, ctx.message.message_id);
     });
 
     this.bot.on('message:photo', async (ctx) => {
@@ -803,6 +816,7 @@ export class TelegramBot {
   private async processUserMessage(
     ctx: Context,
     input: MultimodalInput,
+    replyToMessageId?: number,
   ): Promise<void> {
     await withSession(
       this.sessionManager,
@@ -819,6 +833,7 @@ export class TelegramBot {
         // Handle autopilot / self-reply until
         await this.handleAutopilot(session, channelReply, ctx);
       },
+      replyToMessageId,
     );
   }
 
