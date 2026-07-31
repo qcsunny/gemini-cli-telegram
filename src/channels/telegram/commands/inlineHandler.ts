@@ -5,6 +5,7 @@ import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { buildFinalBlocks } from '../formatter/blocks.js';
 import { formatTokenCount, markdownToIR, renderIRToHtml } from '../formatter/core.js';
+import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { calculateCost } from '../../../utils/pricing.js';
@@ -505,13 +506,14 @@ export function registerInlineHandler(
         const footerText = footerParts.join(' · ');
 
         // Auto wrap long outputs (> 250 chars) into Telegram 10.2 Native Collapsible Details Block to prevent chat flooding
-        let bodyMarkdown = result.output;
-        const rawOutputLen = result.output.length;
+        const cleanOutput = stripWholeMessageCodeFence(result.output);
+        let bodyMarkdown = cleanOutput;
+        const rawOutputLen = cleanOutput.length;
         let isCollapsible = false;
 
-        if (result.output.trim().length > 250) {
+        if (cleanOutput.trim().length > 250) {
           const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
-          bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${result.output}\n\n</details>`;
+          bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
           isCollapsible = true;
         }
 

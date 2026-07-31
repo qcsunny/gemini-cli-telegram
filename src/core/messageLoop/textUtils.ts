@@ -2,13 +2,17 @@ import { extractThoughtAndContent } from '../../agy/agyCli.js';
 
 export function stripWholeMessageCodeFence(text: string): string {
   const trimmed = text.trim();
-  const fenceMatch = /^```([a-zA-Z0-9_-]*)\n([\s\S]*?)\n```$/.exec(trimmed);
+  // Match code fences wrapping the entire output (allowing any common text/markdown language tag or no tag)
+  const fenceMatch = /^```([a-zA-Z0-9_+-]*)\s*\n([\s\S]*?)\n```$/s.exec(trimmed);
   if (!fenceMatch) return text;
   const lang = (fenceMatch[1] || '').toLowerCase();
-  if (lang && lang !== 'markdown' && lang !== 'md') return text;
+  // Allow empty lang tag, or markdown/md/text/plaintext/none
+  const allowedLangs = new Set(['', 'markdown', 'md', 'text', 'plaintext', 'none', 'txt']);
+  if (lang && !allowedLangs.has(lang)) return text;
   const inner = fenceMatch[2];
-  if (/^```/m.test(inner.trim())) return text;
-  return inner;
+  // If the inner content contains nested fences (e.g. real code snippets), don't strip if lang is empty and it might break code
+  if (lang === '' && /^```/m.test(inner.trim())) return text;
+  return inner.trim();
 }
 
 export function normalizeCodeFences(text: string): string {
