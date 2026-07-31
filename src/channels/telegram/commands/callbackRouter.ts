@@ -24,7 +24,15 @@ export function registerCallbackRouter(
   sessionManager: SessionManager,
   defaultOptions: SessionOptions,
 ): void {
-  bot.on('callback_query:data', async (ctx) => {
+  bot.on('callback_query:data', async (ctx, next) => {
+    // Inline-message callbacks (chosen_inline_result edits) have no chat —
+    // they belong to the inline handler. Hand off without answering so the
+    // inline handler owns the callback_query lifecycle (answer + edit).
+    if (ctx.callbackQuery.inline_message_id) {
+      await next();
+      return;
+    }
+
     // Answer immediately to dismiss Telegram UI loading state
     ctx.answerCallbackQuery().catch(() => {});
 
