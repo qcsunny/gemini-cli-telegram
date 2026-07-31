@@ -25,7 +25,7 @@ interface PendingResult {
 }
 
 const pendingResults = new Map<string, PendingResult>();
-const userControllers = new Map<number, AbortController>();
+const userControllers = new Map<string, AbortController>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
 
 const cleanupTimer = setInterval(() => {
@@ -33,15 +33,13 @@ const cleanupTimer = setInterval(() => {
   for (const [key, val] of pendingResults) {
     if (val.createdAt < cutoff) pendingResults.delete(key);
   }
-  const activeUsers = new Set<string>();
-  for (const key of pendingResults.keys()) {
-    const parts = key.split('-');
-    if (parts.length >= 3) activeUsers.add(parts[2]);
+  for (const [key, val] of fullInlineOutputs) {
+    if (val.createdAt < cutoff) fullInlineOutputs.delete(key);
   }
-  for (const [userId, ctrl] of userControllers) {
-    if (!activeUsers.has(String(userId))) {
+  for (const [resultId, ctrl] of userControllers) {
+    if (!pendingResults.has(resultId)) {
       try { ctrl.abort(); } catch {}
-      userControllers.delete(userId);
+      userControllers.delete(resultId);
     }
   }
 }, 60_000);
@@ -316,11 +314,11 @@ export function registerInlineHandler(
       return;
     }
 
-    userControllers.get(chosen.from.id)?.abort();
+    userControllers.get(chosen.result_id)?.abort();
     const ctrl = new AbortController();
-    userControllers.set(chosen.from.id, ctrl);
+    userControllers.set(chosen.result_id, ctrl);
 
-    logger.info(`[ChosenInline] userId=${chosen.from.id} model=${pending.model} — starting model`);
+    logger.info(`[ChosenInline] userId=${chosen.from.id} resultId=${chosen.result_id} model=${pending.model} — starting model`);
 
     const startTime = Date.now();
     let lastEditTime = 0;
@@ -422,7 +420,7 @@ export function registerInlineHandler(
       logger.warn(`[InlineResult] Failed to edit message: ${e}`);
     } finally {
       pendingResults.delete(chosen.result_id);
-      userControllers.delete(chosen.from.id);
+      userControllers.delete(chosen.result_id);
     }
   });
 }
