@@ -117,7 +117,7 @@ const DEFAULT_RATES: PricingInfo = { inputRate: 1.50, outputRate: 9.00, cacheMul
  * - Estimate: CJK characters count * 1.5 + English words count * 1.3.
  * - Return at least 1 token if input text is non-empty.
  */
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   if (!text || !text.trim()) {
     return 0;
   }

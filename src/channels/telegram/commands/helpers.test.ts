@@ -85,7 +85,73 @@ describe('extractTitleFromMarkdown', () => {
     expect(extractTitleFromMarkdown(md)).toBe('bold and italic text');
   });
 
+  it('should fallback to first line if no header exists', () => {
+    expect(extractTitleFromMarkdown('just plain text')).toBe('just plain text');
+  });
+
   it('should return empty for empty input', () => {
     expect(extractTitleFromMarkdown('')).toBe('');
+  });
+});
+
+describe('escapeHtml', () => {
+  it('should escape HTML special characters', async () => {
+    const { escapeHtml } = await import('../ui.js');
+    expect(escapeHtml('<b>bold</b> & "quoted"')).toBe('&lt;b&gt;bold&lt;/b&gt; &amp; "quoted"');
+  });
+
+  it('should return empty string for empty input', async () => {
+    const { escapeHtml } = await import('../ui.js');
+    expect(escapeHtml('')).toBe('');
+  });
+
+  it('should leave safe strings unchanged', async () => {
+    const { escapeHtml } = await import('../ui.js');
+    expect(escapeHtml('hello world')).toBe('hello world');
+  });
+});
+
+describe('truncate', () => {
+  it('should truncate long text with ellipsis', async () => {
+    const { truncate } = await import('../ui.js');
+    expect(truncate('hello world', 5)).toBe('hell…');
+  });
+
+  it('should not truncate short text', async () => {
+    const { truncate } = await import('../ui.js');
+    expect(truncate('hello', 10)).toBe('hello');
+  });
+});
+
+describe('formatWelcome & formatHelp & formatSessionStats', () => {
+  it('should format welcome and help messages correctly', async () => {
+    const { formatWelcome, formatHelp, formatSessionStats } = await import('../ui.js');
+    expect(formatWelcome('Alice')).toContain('Alice');
+    expect(formatWelcome()).toContain('Gemini CLI');
+    expect(formatHelp()).toContain('/model');
+    const stats = formatSessionStats({
+      sessionId: 'session-abc-123',
+      model: 'Gemini 3.5 Flash',
+      turnCount: 42,
+      project: { id: 'proj-1', name: 'My Project', path: '/home/project' },
+      createdAt: new Date(),
+      activeSessions: 3,
+    });
+    expect(stats).toContain('Gemini 3.5 Flash');
+    expect(stats).toContain('42');
+  });
+});
+
+describe('rateLimiter', () => {
+  it('should detect 429 and manage backoff state', async () => {
+    const { is429Error, get429RetryAfter, record429Backoff, reset429Backoff, draftBackoffUntil } = await import('../bot/rateLimiter.js');
+    draftBackoffUntil.clear();
+    expect(is429Error(null)).toBe(false);
+    expect(is429Error({ error_code: 429 })).toBe(true);
+    expect(get429RetryAfter({ parameters: { retry_after: 15 } })).toBe(15);
+    record429Backoff(1, 10);
+    expect(draftBackoffUntil.has(1)).toBe(true);
+    reset429Backoff(1);
+    expect(draftBackoffUntil.has(1)).toBe(false);
   });
 });
