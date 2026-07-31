@@ -240,13 +240,14 @@ export interface FallbackRunResult {
   isFallback: boolean;
 }
 
-async function runModelWithFallbackChain(
+export async function runModelWithFallbackChain(
   prompt: string,
   initialModel: string,
   defaultOptions: SessionOptions,
   signal?: AbortSignal,
   customCwd?: string,
   onChunk?: (chunk: string) => void,
+  onModelStart?: (modelName: string) => void,
 ): Promise<FallbackRunResult> {
   const skipModels = new Set<string>();
   const chain = buildTierAwareChain(initialModel, skipModels);
@@ -257,6 +258,7 @@ async function runModelWithFallbackChain(
       const timeout = setTimeout(() => timeoutCtrl.abort(), MODEL_TIMEOUT_MS);
       try {
         logger.info(`[InlineQuery] Attempting model="${modelToUse}" (${attempt}/2) for initial="${initialModel}"`);
+        if (onModelStart) onModelStart(modelToUse);
         const result = await runAgyPrint({
           prompt,
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
@@ -460,11 +462,18 @@ export function registerInlineHandler(
     const streamQueue = new InlineStreamQueue(ctx.api, chosen.inline_message_id);
 
     let accumulatedText = '';
+    let activeModelName = pending.model;
+
+    const onModelStart = (modelName: string) => {
+      accumulatedText = '';
+      activeModelName = modelName;
+    };
+
     const onChunk = (chunk: string) => {
       accumulatedText += chunk;
       if (accumulatedText.trim().length > 0) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
-        const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
+        const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${activeModelName})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
         streamQueue.enqueueStream(streamMarkdown);
       }
     };
@@ -477,6 +486,7 @@ export function registerInlineHandler(
         ctrl.signal,
         pending.projectPath,
         onChunk,
+        onModelStart,
       );
       
       if (result?.output) {
