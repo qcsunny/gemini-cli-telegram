@@ -15,7 +15,7 @@ export interface InlineHandlerOptions {
   allowedUsers?: number[];
 }
 
-const MODEL_TIMEOUT_MS = 60_000;
+const MODEL_TIMEOUT_MS = 120_000;
 const RESULTS_TTL = 120_000;
 
 interface PendingResult {
