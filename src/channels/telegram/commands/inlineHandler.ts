@@ -380,8 +380,14 @@ export function registerInlineHandler(
         const footerText = footerParts.join(' · ');
         const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
 
-        // Pass 100% full markdown without artificial slicing (Rich Message supports up to 32,768 chars)
-        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${fallbackNote})：**\n\n${result.output}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+        // Auto wrap long outputs (> 250 chars) into Telegram 10.2 Native Collapsible Details Block to prevent chat flooding
+        let bodyMarkdown = result.output;
+        if (result.output.trim().length > 250) {
+          const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${result.output.trim().length} 字)`;
+          bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${result.output}\n\n</details>`;
+        }
+
+        const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
 
         // Official Telegram 10.2 InputRichMessageContent (rich_message)
         await ctx.api.raw.editMessageText({
