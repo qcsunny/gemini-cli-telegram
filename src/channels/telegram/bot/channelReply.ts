@@ -207,6 +207,18 @@ const draftIds = new Map<number, number>();
 const activeDraftIds = new Set<number>();
 
 /**
+ * Force-release any active draft for a chatId. Called from messageLoop's `finally`
+ * block to prevent permanent activeDraftIds leaks on error/cancel paths (BUG-02).
+ */
+export function forceReleaseDraft(chatId: number): void {
+  const draftId = draftIds.get(chatId);
+  if (draftId !== undefined) {
+    activeDraftIds.delete(draftId);
+    draftIds.delete(chatId);
+  }
+}
+
+/**
  * Build a ChannelReply that bridges the core message loop to Telegram's API.
  *
  * This is the central adapter that translates abstract send/edit operations
@@ -341,10 +353,8 @@ export function buildChannelReply(
                 ? originalText
                 : `${originalText.content}${originalText.thought ? `\n\n# 思考过程\n${originalText.thought}` : ''}`;
               const fileName = `response_${Date.now()}.md`;
-              const preview = mdContent.slice(0, 200).replace(/\n/g, ' ');
               const replyParams = replyToMessageId ? { message_id: replyToMessageId } : undefined;
-              const msg = await ctx.replyWithDocument(file, {
-                caption,
+              const msg = await ctx.replyWithDocument(new InputFile(Buffer.from(mdContent, 'utf-8'), fileName), {
                 message_thread_id: messageThreadId,
                 reply_parameters: replyParams,
               });
