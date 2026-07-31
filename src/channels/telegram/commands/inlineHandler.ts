@@ -338,7 +338,9 @@ export function registerInlineHandler(
           rich_message: {
             markdown: streamMarkdown,
           },
-        } as any).catch(() => {});
+        } as any).catch((err: any) => {
+          logger.warn(`[InlineStream] Stream edit failed: inline_message_id=${chosen.inline_message_id} chunkLen=${accumulatedText.length} err=${err?.message || err}`);
+        });
       }
     };
 
@@ -382,22 +384,31 @@ export function registerInlineHandler(
 
         // Auto wrap long outputs (> 250 chars) into Telegram 10.2 Native Collapsible Details Block to prevent chat flooding
         let bodyMarkdown = result.output;
+        const rawOutputLen = result.output.length;
+        let isCollapsible = false;
+
         if (result.output.trim().length > 250) {
-          const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${result.output.trim().length} 字)`;
+          const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
           bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${result.output}\n\n</details>`;
+          isCollapsible = true;
         }
 
         const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
 
-        // Official Telegram 10.2 InputRichMessageContent (rich_message)
-        await ctx.api.raw.editMessageText({
-          inline_message_id: chosen.inline_message_id,
-          rich_message: {
-            markdown: fullMarkdown,
-          },
-        } as any);
+        logger.info(`[InlineResult] Submitting editMessageText: userId=${chosen.from.id} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
 
-        logger.info(`[InlineResult] Edited with 10.2 Native Rich Message: userId=${chosen.from.id} model=${pending.model} outputLen=${result.output.length}`);
+        // Official Telegram 10.2 InputRichMessageContent (rich_message)
+        try {
+          await ctx.api.raw.editMessageText({
+            inline_message_id: chosen.inline_message_id,
+            rich_message: {
+              markdown: fullMarkdown,
+            },
+          } as any);
+          logger.info(`[InlineResult] Successfully edited inline message: inline_message_id=${chosen.inline_message_id} userId=${chosen.from.id}`);
+        } catch (editErr: any) {
+          logger.error(`[InlineResult] Failed to edit inline message: inline_message_id=${chosen.inline_message_id} err=${editErr?.message || editErr}`, editErr);
+        }
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
         const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;
