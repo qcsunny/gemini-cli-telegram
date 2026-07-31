@@ -23,6 +23,7 @@ import {
 } from './core.js';
 import { mediaStore, nextMediaId, resetMediaStore } from './media.js';
 import type { MarkdownToken } from './core.js';
+import { logger } from '../../../utils/logger.js';
 
 // ── Rich Text Blocks (Bot API 10.2) ──
 
@@ -973,10 +974,10 @@ export function buildFooterBlocksFromHtml(html: string): RichBlock[] {
   const detailsMatch = html.match(/<details[^>]*>([\s\S]*?)<\/details>/i);
   if (detailsMatch) {
     let inner = detailsMatch[1];
+    const rawInnerLen = inner.length;
     inner = inner.replace(/<summary>[\s\S]*?<\/summary>/gi, '');
-    // Strip any stray <i>...</i> tags inside details (e.g. leftover stats text)
-    // since the native footer block carries stats separately.
     inner = inner.replace(/<i>[\s\S]*?<\/i>/gi, '');
+    logger.info(`[blocks] Parsed <details> block: rawInnerLen=${rawInnerLen} cleanedInnerLen=${inner.length}`);
     
     // Convert HTML tags to markdown syntax so markdownToRichBlocks produces RichTextBold/RichTextItalic etc.
     let md = inner
