@@ -59,15 +59,19 @@ vi.mock('./config/userConfig.js', () => ({
     maxHistoryMessages: 20,
     cacheTtlMs: 60_000,
     cacheMaxSize: 100,
+    retriesPerModel: 3,
+    modelRunHardTimeoutMs: 900_000,
+    modelRunInactivityMs: 600_000,
   })),
   getBackendUrl: vi.fn(() => 'http://localhost:12345'),
 }));
 
 vi.mock('./core/backendHealth.js', () => ({
   isBackendAvailable: vi.fn(() => true),
-  recordBackendFailure: vi.fn(),
-  recordBackendSuccess: vi.fn(),
-  resetBackendHealth: vi.fn(),
+  markBackendFailed: vi.fn(),
+  markBackendHealthy: vi.fn(),
+  clearBackendHealth: vi.fn(),
+  isConnectionError: vi.fn(() => false),
 }));
 
 vi.mock('./utils/messageCache.js', () => ({
@@ -96,13 +100,19 @@ vi.mock('./agy/conversationManager.js', () => ({
 }));
 
 vi.mock('./core/modelRegistry.js', async (importOriginal) => {
-  const actual = await importOriginal() as any;
-  return { ...actual, loadModelsConfig: vi.fn(() => ({ routing: {} })) };
+  return await importOriginal();
 });
 
 vi.mock('./agy/agyCli.js', async (importOriginal) => {
   const actual = await importOriginal() as any;
-  return { ...actual, runAgyPrint: vi.fn() };
+  return {
+    ...actual,
+    runAgyPrint: vi.fn().mockImplementation(async (opts: any) => {
+      opts?.onEvent?.({ type: 'text', content: 'Default mock text' });
+      opts?.onEvent?.({ type: 'done' });
+      return { output: 'Default mock text', conversationId: 'default-conv', exitCode: 0 };
+    }),
+  };
 });
 
 // ─── Imports (after all mocks declared) ──────────────────────────────────────
@@ -175,9 +185,6 @@ function makeFakeHttpRequest(sseData: string, abortAfterMs?: number) {
 
 describe('[Integration] Private chat: rich message full path', () => {
   beforeEach(() => {
-    // Clear call records but preserve mock implementations across tests.
-    // mockReset() would wipe the implementation and cause the mock to return
-    // undefined, which breaks tests that rely on the full processMessage flow.
     vi.mocked(runAgyPrint).mockClear();
   });
 
@@ -187,7 +194,9 @@ describe('[Integration] Private chat: rich message full path', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (opts: any) => {
       opts.onEvent?.({ type: 'thought', content: 'reasoning...' });
+      await new Promise((r) => setTimeout(r, 10));
       opts.onEvent?.({ type: 'text', content: 'Answer here.' });
+      await new Promise((r) => setTimeout(r, 10));
       opts.onEvent?.({ type: 'done' });
       return { output: '<thought>reasoning...</thought>Answer here.', conversationId: 'cv1', exitCode: 0 };
     });
@@ -207,11 +216,13 @@ describe('[Integration] Private chat: rich message full path', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (opts: any) => {
       opts.onEvent?.({ type: 'text', content: 'Short answer.' });
+      await new Promise((r) => setTimeout(r, 10));
       opts.onEvent?.({ type: 'done' });
       return { output: 'Short answer.', conversationId: 'cv2', exitCode: 0 };
     });
 
     await processMessage(session, { text: 'hi' }, reply, makeFormatter());
+
     expect(reply.sendRich).toHaveBeenCalled();
     const finalArg = (reply.sendRich as any).mock.calls[0][0];
     expect((finalArg.content ?? finalArg)).toContain('Short answer.');
@@ -248,6 +259,7 @@ describe('[Integration] Private chat: rich message full path', () => {
         return { output: '', stderr: '429 quota exceeded', conversationId: 'cv', exitCode: 1 };
       }
       opts.onEvent?.({ type: 'text', content: 'Fallback OK.' });
+      await new Promise((r) => setTimeout(r, 10));
       opts.onEvent?.({ type: 'done' });
       return { output: 'Fallback OK.', conversationId: 'cv-fb', exitCode: 0 };
     });

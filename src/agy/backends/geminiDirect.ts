@@ -103,6 +103,13 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
         try {
           const parsed = JSON.parse(dataStr);
 
+          // BUG-06: Check if API returned an error object inside valid JSON SSE payload
+          if (parsed?.error) {
+            const apiErrMsg = parsed.error.message || JSON.stringify(parsed.error);
+            logger.warn(`[runGeminiDirect] API returned error JSON in SSE stream: ${apiErrMsg}`);
+            throw new Error(`Gemini API error: ${apiErrMsg}`);
+          }
+
              // Extract usage metadata if returned
              const usage = parsed?.usageMetadata;
              if (usage) {
