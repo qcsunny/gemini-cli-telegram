@@ -327,7 +327,7 @@ export function registerInlineHandler(
     const onChunk = (chunk: string) => {
       accumulatedText += chunk;
       const now = Date.now();
-      if (now - lastEditTime >= 350 && accumulatedText.trim().length > 0) {
+      if (now - lastEditTime >= 1200 && accumulatedText.trim().length > 0) {
         lastEditTime = now;
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
         const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
@@ -395,17 +395,27 @@ export function registerInlineHandler(
 
         logger.info(`[InlineResult] Submitting editMessageText: userId=${chosen.from.id} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
 
-        // Official Telegram 10.2 InputRichMessageContent (rich_message)
-        try {
-          await ctx.api.raw.editMessageText({
-            inline_message_id: chosen.inline_message_id,
-            rich_message: {
-              markdown: fullMarkdown,
-            },
-          } as any);
-          logger.info(`[InlineResult] Successfully edited inline message: inline_message_id=${chosen.inline_message_id} userId=${chosen.from.id}`);
-        } catch (editErr: any) {
-          logger.error(`[InlineResult] Failed to edit inline message: inline_message_id=${chosen.inline_message_id} err=${editErr?.message || editErr}`, editErr);
+        // Official Telegram 10.2 InputRichMessageContent (rich_message) with retry loop for 429
+        let editSuccess = false;
+        for (let attempt = 0; attempt < 3 && !editSuccess; attempt++) {
+          try {
+            await ctx.api.raw.editMessageText({
+              inline_message_id: chosen.inline_message_id,
+              rich_message: {
+                markdown: fullMarkdown,
+              },
+            } as any);
+            editSuccess = true;
+            logger.info(`[InlineResult] Successfully edited inline message: inline_message_id=${chosen.inline_message_id} userId=${chosen.from.id}`);
+          } catch (editErr: any) {
+            const errMsg = editErr?.message || String(editErr);
+            const match429 = errMsg.match(/retry after (\d+)/i);
+            const retryAfter = match429 ? parseInt(match429[1], 10) + 1 : 3;
+            logger.warn(`[InlineResult] editMessageText attempt ${attempt + 1} failed: err=${errMsg}, retrying in ${retryAfter}s`);
+            if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, retryAfter * 1000));
+            }
+          }
         }
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
