@@ -45,6 +45,141 @@ const cleanupTimer = setInterval(() => {
 }, 60_000);
 cleanupTimer.unref();
 
+/**
+ * Serialized, adaptive throttling queue with exponential 429 backoff for Inline message editing.
+ */
+export class InlineStreamQueue {
+  private queue: Promise<void> = Promise.resolve();
+  private pendingMarkdown: string | null = null;
+  private isProcessing = false;
+  private nextAllowedTime = 0;
+  private currentThrottleMs = 500; // Start with fast 500ms adaptive throttle for smooth typing
+  private minThrottleMs = 500;
+  private maxThrottleMs = 4000;
+  private lastEditTime = 0;
+  private lastSentLen = 0;
+
+  constructor(
+    private api: any,
+    private inlineMessageId: string,
+  ) {}
+
+  /**
+   * Push a streaming chunk markdown update. Throttled & de-duplicated.
+   */
+  public enqueueStream(markdown: string): void {
+    this.pendingMarkdown = markdown;
+    this.scheduleProcess();
+  }
+
+  /**
+   * Push final completion markdown and flush until success with 429 backoff retry.
+   */
+  public async flushFinal(markdown: string): Promise<boolean> {
+    this.pendingMarkdown = markdown;
+    return new Promise<boolean>((resolve) => {
+      this.queue = this.queue.then(async () => {
+        const success = await this.executeEdit(true);
+        resolve(success);
+      });
+    });
+  }
+
+  private scheduleProcess(): void {
+    if (this.isProcessing) return;
+    this.queue = this.queue.then(async () => {
+      this.isProcessing = true;
+      try {
+        await this.processPending();
+      } finally {
+        this.isProcessing = false;
+      }
+    });
+  }
+
+  private async processPending(): Promise<void> {
+    if (!this.pendingMarkdown) return;
+
+    const now = Date.now();
+    const textDelta = Math.abs(this.pendingMarkdown.length - this.lastSentLen);
+    if (now < this.nextAllowedTime || (now - this.lastEditTime < this.currentThrottleMs && textDelta < 15)) {
+      const waitMs = Math.max(50, Math.min(this.currentThrottleMs, this.nextAllowedTime - now));
+      await new Promise((r) => setTimeout(r, waitMs));
+      if (this.pendingMarkdown && Math.abs(this.pendingMarkdown.length - this.lastSentLen) >= 5) {
+        await this.executeEdit(false);
+      }
+      return;
+    }
+
+    await this.executeEdit(false);
+  }
+
+  private async executeEdit(isFinal: boolean): Promise<boolean> {
+    if (!this.pendingMarkdown) return false;
+
+    const targetMarkdown = this.pendingMarkdown;
+    let attempts = 0;
+    const maxAttempts = isFinal ? 5 : 1;
+
+    while (attempts < maxAttempts) {
+      attempts++;
+      const now = Date.now();
+      if (now < this.nextAllowedTime) {
+        await new Promise((r) => setTimeout(r, this.nextAllowedTime - now));
+      }
+
+      try {
+        await this.api.raw.editMessageText({
+          inline_message_id: this.inlineMessageId,
+          rich_message: {
+            markdown: targetMarkdown,
+          },
+        } as any);
+
+        this.lastEditTime = Date.now();
+        this.lastSentLen = targetMarkdown.length;
+        if (targetMarkdown === this.pendingMarkdown) {
+          this.pendingMarkdown = null;
+        }
+
+        // Gradually recover throttle window towards minThrottleMs on clean success
+        this.currentThrottleMs = Math.max(this.minThrottleMs, Math.floor(this.currentThrottleMs * 0.85));
+        return true;
+      } catch (err: any) {
+        const errMsg = err?.message || String(err);
+        const match429 = errMsg.match(/retry after (\d+)/i);
+
+        if (match429) {
+          const retrySec = parseInt(match429[1], 10);
+          const backoffMs = (retrySec + 1) * 1000;
+          this.nextAllowedTime = Date.now() + backoffMs;
+
+          // Adaptively expand throttle window when 429 occurs
+          this.currentThrottleMs = Math.min(this.maxThrottleMs, Math.max(this.currentThrottleMs * 2, backoffMs));
+          logger.warn(`[InlineQueue] 429 Rate limited on inline_message_id=${this.inlineMessageId}: waiting ${retrySec}s, new throttleMs=${this.currentThrottleMs}`);
+
+          if (isFinal) {
+            await new Promise((r) => setTimeout(r, backoffMs));
+            continue;
+          } else {
+            break;
+          }
+        } else {
+          if (errMsg.includes('message is not modified')) {
+            this.lastSentLen = targetMarkdown.length;
+            if (targetMarkdown === this.pendingMarkdown) this.pendingMarkdown = null;
+            return true;
+          } else {
+            logger.warn(`[InlineQueue] Edit failed on inline_message_id=${this.inlineMessageId}: ${errMsg}`);
+          }
+          break;
+        }
+      }
+    }
+    return false;
+  }
+}
+
 const MODEL_PREFIX_MAP: Record<string, string> = {
   '/flash': 'Gemini 3.6 Flash (High)',
   '/pro': 'Web2API: Gemini 3.1 Pro',
@@ -320,25 +455,16 @@ export function registerInlineHandler(
 
     logger.info(`[ChosenInline] userId=${chosen.from.id} resultId=${chosen.result_id} model=${pending.model} — starting model`);
 
-    const startTime = Date.now();
-    let lastEditTime = 0;
-    let accumulatedText = '';
+    // Initialize serialized adaptive queue for this inline message
+    const streamQueue = new InlineStreamQueue(ctx.api, chosen.inline_message_id);
 
+    let accumulatedText = '';
     const onChunk = (chunk: string) => {
       accumulatedText += chunk;
-      const now = Date.now();
-      if (now - lastEditTime >= 1200 && accumulatedText.trim().length > 0) {
-        lastEditTime = now;
+      if (accumulatedText.trim().length > 0) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
         const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${pending.model})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
-        ctx.api.raw.editMessageText({
-          inline_message_id: chosen.inline_message_id,
-          rich_message: {
-            markdown: streamMarkdown,
-          },
-        } as any).catch((err: any) => {
-          logger.warn(`[InlineStream] Stream edit failed: inline_message_id=${chosen.inline_message_id} chunkLen=${accumulatedText.length} err=${err?.message || err}`);
-        });
+        streamQueue.enqueueStream(streamMarkdown);
       }
     };
 
@@ -351,13 +477,12 @@ export function registerInlineHandler(
         pending.projectPath,
         onChunk,
       );
-      const duration = result?.durationMs || (Date.now() - startTime);
-
+      
       if (result?.output) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
         
         let footerParts: string[] = [];
-        footerParts.push(`⏱️ ${(duration / 1000).toFixed(1)}s`);
+        footerParts.push(`⏱️ ${((result.durationMs || 1000) / 1000).toFixed(1)}s`);
         if (result.usage) {
           const inCount = result.usage.input || 0;
           const outCount = result.usage.output || 0;
@@ -378,7 +503,6 @@ export function registerInlineHandler(
           }
         }
         const footerText = footerParts.join(' · ');
-        const fallbackNote = isFallback ? ` · ⚠️ 选定的 ${pending.model} 暂时不可用，已自动降级` : '';
 
         // Auto wrap long outputs (> 250 chars) into Telegram 10.2 Native Collapsible Details Block to prevent chat flooding
         let bodyMarkdown = result.output;
@@ -393,38 +517,21 @@ export function registerInlineHandler(
 
         const fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
 
-        logger.info(`[InlineResult] Submitting editMessageText: userId=${chosen.from.id} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
+        logger.info(`[InlineResult] Submitting final flush edit: userId=${chosen.from.id} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
 
-        // Official Telegram 10.2 InputRichMessageContent (rich_message) with retry loop for 429
-        let editSuccess = false;
-        for (let attempt = 0; attempt < 3 && !editSuccess; attempt++) {
-          try {
-            await ctx.api.raw.editMessageText({
-              inline_message_id: chosen.inline_message_id,
-              rich_message: {
-                markdown: fullMarkdown,
-              },
-            } as any);
-            editSuccess = true;
-            logger.info(`[InlineResult] Successfully edited inline message: inline_message_id=${chosen.inline_message_id} userId=${chosen.from.id}`);
-          } catch (editErr: any) {
-            const errMsg = editErr?.message || String(editErr);
-            const match429 = errMsg.match(/retry after (\d+)/i);
-            const retryAfter = match429 ? parseInt(match429[1], 10) + 1 : 3;
-            logger.warn(`[InlineResult] editMessageText attempt ${attempt + 1} failed: err=${errMsg}, retrying in ${retryAfter}s`);
-            if (attempt < 2) {
-              await new Promise((r) => setTimeout(r, retryAfter * 1000));
-            }
-          }
+        // Guaranteed final flush via serialized queue
+        const success = await streamQueue.flushFinal(fullMarkdown);
+        if (success) {
+          logger.info(`[InlineResult] Successfully flushed final inline message: inline_message_id=${chosen.inline_message_id} userId=${chosen.from.id}`);
         }
       } else {
         const displayPrompt = pending.prompt.length > 200 ? pending.prompt.slice(0, 200) + '...' : pending.prompt;
-        const failText = `${ICONS.warning} <b>处理失败或超时</b>\n\n<b>模型：</b> ${escapeHtmlText(pending.model)}\n<b>问题：</b> ${escapeHtmlText(displayPrompt)}`;
+        const failText = `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n⚠️ <b>生成回答失败</b>\n模型未返回有效的文本输出，请重试。`;
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
           text: failText,
           parse_mode: 'HTML',
-        });
+        } as any).catch(() => {});
       }
     } catch (e) {
       logger.warn(`[InlineResult] Failed to edit message: ${e}`);
