@@ -13,6 +13,7 @@
  */
 
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
+import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
 import { ICONS, escapeHtml } from '../channels/telegram/ui.js';
 import { runAgyPrint, extractThoughtAndContent } from '../agy/agyCli.js';
@@ -58,11 +59,16 @@ export async function processMessage(
 
   // 1. Prepare prompt and resolve local multimedia file paths
   let finalPrompt = input.text || '';
+  let mediaExtraDirs: string[] = [];
   if (input.media && input.media.length > 0) {
     const mediaLines = input.media.map(item => {
       return `[本地关联文件 - 类型: ${item.type}, 物理路径: "${item.path}", 原始文件名: "${item.fileName || '未知'}"]`;
     });
     finalPrompt = `${mediaLines.join('\n')}\n\n${finalPrompt}`;
+    // Give the model tooling access to the directory holding each attachment
+    // so it can actually read the file (e.g. a PDF/文本附件) rather than just
+    // seeing the path string.
+    mediaExtraDirs = [...new Set(input.media.map((item) => path.dirname(item.path)))];
   }
 
   if (!finalPrompt.trim()) {
@@ -262,6 +268,7 @@ export async function processMessage(
             model: modelToUse,
             proxy: session.proxy,
             signal,
+            extraDirs: mediaExtraDirs,
             onActivity: () => { if (resetInactivity) resetInactivity(); },
             onSpawn: (pid) => { session.childPid = pid; },
             onEvent: (event) => {

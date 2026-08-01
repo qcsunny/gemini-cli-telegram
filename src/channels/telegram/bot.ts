@@ -941,15 +941,15 @@ export class TelegramBot {
       async (session, channelReply) => {
         tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
 
-        // Text/PDF documents are cached for later inline /pdf Q&A instead of
-        // being treated as an attachment for the current message.
+        // Text/PDF documents are cached for later inline /pdf Q&A AND still
+        // parsed directly by the model as an attachment for this message.
         if (mediaType === 'document') {
           const userId = ctx.from?.id;
-          if (!userId) return;
-          const cached = await cacheDocument(userId, tempFilePath, info.fileName || 'document');
-          if (cached) {
-            await ctx.reply(`${ICONS.sparkles} <b>文档已缓存</b>\n\n📄 <code>${escapeHtml(info.fileName || 'document')}</code>\n\n在任意聊天输入框使用 inline 即可对它提问：\n<code>@static32bot /pdf 你的问题</code>`);
-            return;
+          if (userId) {
+            const cached = await cacheDocument(userId, tempFilePath, info.fileName || 'document');
+            if (cached) {
+              await ctx.reply(`${ICONS.sparkles} <b>文档已缓存</b>\n\n📄 <code>${escapeHtml(info.fileName || 'document')}</code>\n\n可直接用 inline 对它提问，或等待下方回答（已同时交给 AI 解析）。`);
+            }
           }
         }
 
