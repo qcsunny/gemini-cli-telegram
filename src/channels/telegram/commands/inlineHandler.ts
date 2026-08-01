@@ -69,8 +69,6 @@ const inlinePages = new Map<string, InlinePage[]>();
 export const MAX_COMPARE_MODELS = 3;
 /** Max candidate models offered per page in the picker. */
 const COMPARE_MODELS_PER_PAGE = 4;
-/** Total candidate models offered for /v selection. */
-const MAX_COMPARE_CANDIDATES = 20;
 
 interface CompareContext {
   resultId: string;
@@ -630,7 +628,7 @@ export function registerInlineHandler(
       }
 
       if (regen.task === 'compare') {
-        const candidates = getEffectiveModelOrder().slice(0, MAX_COMPARE_CANDIDATES);
+        const candidates = getEffectiveModelOrder();
         const cmp: CompareContext = {
           resultId,
           inlineMessageId,
@@ -942,7 +940,10 @@ export function registerInlineHandler(
     const resultId = `ai-${Date.now()}-${fromId}`;
 
     if (task === 'compare') {
-      const candidates = getEffectiveModelOrder().slice(0, MAX_COMPARE_CANDIDATES);
+      let candidates = getEffectiveModelOrder();
+      if (family && suggestionCandidates.length > 0) {
+        candidates = suggestionCandidates;
+      }
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
       compareContexts.set(resultId, {
         resultId,
