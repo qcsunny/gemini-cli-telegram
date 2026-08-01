@@ -825,7 +825,7 @@ describe('registerInlineHandler', () => {
     };
     await chosenInlineResultHandler!(mockChosenCtx);
 
-    // Initial page should show first 4 models
+    // Initial page 0 cover mode should show default/page buttons
     await vi.waitFor(() => {
       expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -836,7 +836,7 @@ describe('registerInlineHandler', () => {
           reply_markup: expect.objectContaining({
             inline_keyboard: expect.arrayContaining([
               expect.arrayContaining([
-                expect.objectContaining({ text: expect.stringContaining('Claude Opus') }),
+                expect.objectContaining({ callback_data: expect.stringContaining('inline_cmp_default:') }),
               ]),
             ]),
           }),
@@ -866,10 +866,10 @@ describe('registerInlineHandler', () => {
       );
     });
 
-    // Pick page 2 keyboard should have prev button
+    // Pick page 1 keyboard should have home button and next button
     const page2Page = pickCtxBase.api.raw.editMessageText.mock.calls[0][0];
     const page2Buttons = page2Page.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
-    expect(page2Buttons.find((b) => b.text === '◀️ 上一页')).toBeDefined();
+    expect(page2Buttons.find((b) => b.text === '◀️ 首页')).toBeDefined();
     expect(page2Buttons.find((b) => b.text === '下一页 ▶️')).toBeDefined();
 
     // Click previous page
@@ -878,12 +878,12 @@ describe('registerInlineHandler', () => {
       callbackQuery: { ...pickCtxBase.callbackQuery, data: 'inline_cmp_page:' + resultId + ':0' },
     });
 
-    // Back to page 1, no prev button
+    // Back to page 0 cover mode, should show browse models button
     await vi.waitFor(() => {
       const backPage = pickCtxBase.api.raw.editMessageText.mock.calls.slice(-1)[0][0];
       const backButtons = backPage.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
       expect(backButtons.find((b) => b.text === '◀️ 上一页')).toBeUndefined();
-      expect(backButtons.find((b) => b.text === '下一页 ▶️')).toBeDefined();
+      expect(backButtons.find((b) => b.text.includes('浏览/选择模型'))).toBeDefined();
     });
   });
 
@@ -1023,7 +1023,7 @@ describe('registerInlineHandler', () => {
           reply_markup: expect.objectContaining({
             inline_keyboard: expect.arrayContaining([
               expect.arrayContaining([
-                expect.objectContaining({ text: expect.stringContaining('DeepSeek') }),
+                expect.objectContaining({ callback_data: expect.stringContaining('inline_cmp_default:') }),
               ]),
             ]),
           }),
@@ -1070,7 +1070,7 @@ describe('registerInlineHandler', () => {
           reply_markup: expect.objectContaining({
             inline_keyboard: expect.arrayContaining([
               expect.arrayContaining([
-                expect.objectContaining({ callback_data: expect.stringContaining('inline_cmp_pick:') }),
+                expect.objectContaining({ callback_data: expect.stringContaining('inline_cmp_default:') }),
               ]),
             ]),
           }),
@@ -1109,11 +1109,6 @@ describe('registerInlineHandler', () => {
     };
     await chosenInlineResultHandler!(mockChosenCtx);
 
-    // Grab the keyboard rows from the picker edit and click two model buttons.
-    const pickEdit = mockChosenCtx.api.raw.editMessageText.mock.calls[0][0];
-    const buttons = pickEdit.reply_markup.inline_keyboard.flat() as Array<{ callback_data: string }>;
-    const pickButtons = buttons.filter((b) => b.callback_data.startsWith('inline_cmp_pick:'));
-
     const pickCtxBase = {
       answerCallbackQuery: vi.fn().mockResolvedValue(true),
       api: {
@@ -1121,6 +1116,14 @@ describe('registerInlineHandler', () => {
       },
       callbackQuery: { inline_message_id: 'cmp_inline_msg', data: '' },
     };
+
+    // First switch from page 0 cover mode to page 1 list mode
+    await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: `inline_cmp_page:${resultId}:1` } });
+
+    // Grab the keyboard rows from the page 1 edit and click two model buttons.
+    const page1Edit = pickCtxBase.api.raw.editMessageText.mock.calls[0][0];
+    const buttons = page1Edit.reply_markup.inline_keyboard.flat() as Array<{ callback_data: string }>;
+    const pickButtons = buttons.filter((b) => b.callback_data.startsWith('inline_cmp_pick:'));
 
     await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: pickButtons[0].callback_data } });
     await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: pickButtons[1].callback_data } });

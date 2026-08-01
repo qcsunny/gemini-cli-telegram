@@ -533,29 +533,48 @@ function renderComparePicker(cmp: CompareContext): string {
   const displayPrompt = cmp.prompt.length > 300 ? cmp.prompt.slice(0, 300) + '...' : cmp.prompt;
   const picked = cmp.selectedIdx.map((idx, i) => `**${i + 1}.** ${cmp.candidates[idx]}`).join('\n');
   const pickedBlock = picked ? `\n✅ **已选模型：**\n${picked}\n` : '';
+
+  if (cmp.currentPage === 0) {
+    return `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${pickedBlock}_点击“▶️ 浏览/选择模型”展开全量模型清单，或点击“🚀 默认组对比”。_`;
+  }
+
   const countText = cmp.selectedIdx.length === 0
     ? '① 请选择第 1 个模型'
     : cmp.selectedIdx.length === 1
       ? '② 请选择第 2 个模型（或点“开始对比”）'
       : '③ 请选择第 3 个模型（可跳过，点“开始对比”）';
-  return `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${pickedBlock}\n${countText}\n\n_点击下方模型按钮选择，选满 2-${MAX_COMPARE_MODELS} 个后点“🚀 开始对比”。_`;
+  return `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${pickedBlock}${countText}\n\n_点击下方模型按钮选择，选满 2-${MAX_COMPARE_MODELS} 个后点“🚀 开始对比”。_`;
 }
 
 /** Builds the picker keyboard for a /v selection screen. */
 function buildCompareKeyboard(cmp: CompareContext): unknown {
   const rows: { text: string; callback_data: string }[][] = [];
-  let row: { text: string; callback_data: string }[] = [];
-
-  // Compute page range
-  const startIdx = cmp.currentPage * COMPARE_MODELS_PER_PAGE;
-  const endIdx = Math.min(startIdx + COMPARE_MODELS_PER_PAGE, cmp.candidates.length);
 
   // Add selected models display (compact, no buttons)
   if (cmp.selectedIdx.length > 0) {
     rows.push([{ text: `已选 ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}：${cmp.selectedIdx.map(i => cmp.candidates[i].slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
   }
 
-  // Add candidate model buttons (page-based)
+  if (cmp.currentPage === 0) {
+    // Cover mode: ZERO model buttons on page 0 for maximum privacy
+    rows.push([{ text: '🚀 默认组对比 (Opus + R1 + Gemini)', callback_data: `inline_cmp_default:${cmp.resultId}` }]);
+    rows.push([{ text: '▶️ 浏览/选择模型 (展开全量清单)', callback_data: `inline_cmp_page:${cmp.resultId}:1` }]);
+    if (cmp.selectedIdx.length >= 2) {
+      rows.push([{ text: '🚀 开始对比', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
+    }
+    if (cmp.selectedIdx.length > 0) {
+      rows.push([{ text: '♻️ 清空选择', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
+    }
+    return { inline_keyboard: rows };
+  }
+
+  // Model list pages (currentPage >= 1)
+  const listPageIndex = cmp.currentPage - 1;
+  const startIdx = listPageIndex * COMPARE_MODELS_PER_PAGE;
+  const endIdx = Math.min(startIdx + COMPARE_MODELS_PER_PAGE, cmp.candidates.length);
+  const totalListPages = Math.ceil(cmp.candidates.length / COMPARE_MODELS_PER_PAGE);
+
+  let row: { text: string; callback_data: string }[] = [];
   for (let i = startIdx; i < endIdx; i++) {
     if (cmp.selectedIdx.includes(i)) continue;
     const model = cmp.candidates[i];
@@ -568,19 +587,19 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
   }
   if (row.length > 0) rows.push(row);
 
-  // Add navigation buttons (only if more pages available)
-  const hasNextPage = endIdx < cmp.candidates.length;
-  const hasPrevPage = cmp.currentPage > 0;
-
-  if (hasPrevPage) {
-    rows.push([{ text: '◀️ 上一页', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage - 1}` }]);
+  // Pagination navigation bar
+  const navRow: { text: string; callback_data: string }[] = [];
+  if (listPageIndex > 0) {
+    navRow.push({ text: '◀️ 上一页', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage - 1}` });
+  } else {
+    navRow.push({ text: '◀️ 首页', callback_data: `inline_cmp_page:${cmp.resultId}:0` });
   }
-
-  if (hasNextPage) {
-    rows.push([{ text: '下一页 ▶️', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage + 1}` }]);
+  navRow.push({ text: `${listPageIndex + 1}/${totalListPages}`, callback_data: 'inline_noop' });
+  if (startIdx + COMPARE_MODELS_PER_PAGE < cmp.candidates.length) {
+    navRow.push({ text: '下一页 ▶️', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage + 1}` });
   }
+  rows.push(navRow);
 
-  // Add persistent actions (clear + start)
   rows.push([{ text: '♻️ 清空选择', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
   if (cmp.selectedIdx.length >= 2) {
     rows.push([{ text: '🚀 开始对比', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
@@ -781,6 +800,42 @@ export function registerInlineHandler(
         rich_message: { markdown: renderComparePicker(cmp) },
         reply_markup: buildCompareKeyboard(cmp),
       } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare page edit failed: ${e}`));
+      return;
+    }
+
+    if (data.startsWith('inline_cmp_default:')) {
+      const resultId = data.slice('inline_cmp_default:'.length);
+      const cmp = compareContexts.get(resultId);
+      if (!cmp) {
+        await ctx.answerCallbackQuery({ text: '❌ 会话已过期。', show_alert: true }).catch(() => {});
+        return;
+      }
+      cmp.selectedIdx = [0, 1, 2].filter(i => i < cmp.candidates.length);
+      if (cmp.selectedIdx.length < 2) {
+        cmp.selectedIdx = cmp.candidates.map((_, i) => i).slice(0, 3);
+      }
+      const models = cmp.selectedIdx.map((idx: number) => cmp.candidates[idx]);
+      await ctx.answerCallbackQuery({ text: '🚀 开始默认顶级组对比…' }).catch(() => {});
+      const ctrl = new AbortController();
+      userControllers.set(resultId, ctrl);
+      const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
+      try {
+        await runCompareGeneration(ctx, sessionManager, defaultOptions, {
+          resultId,
+          inlineMessageId,
+          fromId: cmp.fromId,
+          prompt: cmp.prompt,
+          projectPath: cmp.projectPath,
+          models,
+          ctrl,
+          streamQueue,
+        });
+      } catch (e) {
+        logger.warn(`[InlineResult] Compare default generation failed: ${e}`);
+      } finally {
+        userControllers.delete(resultId);
+        compareContexts.delete(resultId);
+      }
       return;
     }
 
