@@ -1449,9 +1449,9 @@ async function runInlineGeneration(
         // Long answer → paginate with collapsible fold
         const pages = splitIntoPages(cleanOutput);
         pageCount = pages.length;
-        const header = `**💬 问题：** ${displayPrompt}`;
+        const header = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**`;
         const pageItems: InlinePage[] = pages.map((page) => {
-          const summaryTitle = `💡 展开本页 AI 回答 (${modelUsed} · ${page.length} 字)`;
+          const summaryTitle = `💡 展开本页 AI 完整回答 (${page.length} 字)`;
           const details = `> [details] ${summaryTitle}\n` + page.split('\n').map(line => `> ${line}`).join('\n');
           const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : '';
           const fullMd = `${header}\n\n${details}${footer}`;
@@ -1475,10 +1475,10 @@ async function runInlineGeneration(
         };
       } else {
         // Medium answer → single collapsible fold
-        const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
+        const summaryTitle = `💡 点击展开 AI 完整回答 (${rawOutputLen} 字)`;
         const bodyMarkdown = `> [details] ${summaryTitle}\n` + cleanOutput.split('\n').map(line => `> ${line}`).join('\n');
         isCollapsible = true;
-        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
         const blocks = markdownToRichBlocks(fullMarkdown);
         finalBlocks = blocks.length > 0 ? blocks : undefined;
         replyMarkup = {
