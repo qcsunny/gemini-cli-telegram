@@ -9,7 +9,7 @@ import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir } from '../../../config/userConfig.js';
 import { formatTokenCount } from '../formatter/core.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
-import { buildTierAwareChain } from '../../../core/modelRegistry.js';
+import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { calculateCost } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
@@ -229,13 +229,6 @@ export class InlineStreamQueue {
   }
 }
 
-const MODEL_PREFIX_MAP: Record<string, string> = {
-  '/flash': 'Gemini 3.6 Flash (High)',
-  '/pro': 'Web2API: Gemini 3.1 Pro',
-  '/deepseek': 'DeepSeek: Flash',
-  '/opencode': 'OpenCode: DeepSeek V4 Flash Free',
-};
-
 export type InlineTask = 'translate' | 'summarize' | 'fix' | 'code' | 'image';
 
 const TASK_PREFIX_MAP: Record<string, InlineTask> = {
@@ -246,11 +239,62 @@ const TASK_PREFIX_MAP: Record<string, InlineTask> = {
   '/img': 'image',
 };
 
-const TASK_INSTRUCTION: Record<Exclude<InlineTask, 'image'>, string> = {
+export const IMAGE_TASK_INSTRUCTION =
+  '请使用 generate_image 工具为以下主题生成图片（可一次生成多张不同风格/构图的图片）。只调用工具生成图片，不要用文字描述图片：\n\n';
+
+/** Max photos a <tg-collage> / album can contain. */
+export const MAX_COLLAGE_IMAGES = 10;
+
+/** Max model-suggestion cards appended to inline query results. */
+export const MAX_MODEL_SUGGESTIONS = 5;
+
+/** Fallback model suggestions shown when no model keyword matched. */
+const FALLBACK_MODEL_SUGGESTIONS = [
+  'Gemini 3.6 Flash (High)',
+  'Web2API: Gemini 3.1 Pro',
+  'DeepSeek: Flash',
+  'Claude Sonnet 4.6 (Thinking)',
+  'OpenCode: DeepSeek V4 Flash Free',
+];
+
+const CHANNEL_PREFIX_RE = /^(Web2API|DeepSeek|OpenCode)\s*:\s*/i;
+
+/** Strips the channel prefix so "Web2API: Gemini 3.1 Pro" matches "gemini 3.1 pro". */
+function normalizeModelName(name: string): string {
+  return name.replace(CHANNEL_PREFIX_RE, '').toLowerCase();
+}
+
+/**
+ * Fuzzy-matches a query against available model names.
+ * Each query token that appears as a substring of a normalized model name scores +1.
+ * Returns up to `limit` models sorted by descending score.
+ */
+export function fuzzyMatchModels(query: string, models: string[], limit: number = MAX_MODEL_SUGGESTIONS): string[] {
+  const tokens = query
+    .toLowerCase()
+    .replace(CHANNEL_PREFIX_RE, '')
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 2);
+  if (tokens.length === 0) return [];
+
+  const scored = models
+    .map((model) => {
+      const norm = normalizeModelName(model);
+      const score = tokens.reduce((acc, tok) => acc + (norm.includes(tok) ? 1 : 0), 0);
+      return { model, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || a.model.localeCompare(b.model));
+
+  return scored.slice(0, limit).map((x) => x.model);
+}
+
+const TASK_INSTRUCTION: Record<InlineTask, string> = {
   translate: '请将以下内容翻译成中文，保持原意与格式：\n\n',
   summarize: '请用简洁的语言总结以下内容，列出要点：\n\n',
   fix: '请分析以下代码/报错信息并给出修复方案，附上修改后的代码：\n\n',
   code: '请给出实现以下需求的完整代码（含必要注释）：\n\n',
+  image: IMAGE_TASK_INSTRUCTION,
 };
 
 const THUMBNAIL_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72';
@@ -269,24 +313,43 @@ export function parseInlineModelAndPrompt(
 ): {
   model: string;
   prompt: string;
-  aliasUsed?: string;
+  family?: string;
   projectUsed?: ProjectInfo;
   task?: InlineTask;
 } {
   let text = rawQuery.trim();
   let selectedModel = defaultModel;
-  let aliasUsed: string | undefined;
+  let family: string | undefined;
   let projectUsed: ProjectInfo | undefined;
   let task: InlineTask | undefined;
 
   const parts = text.split(/\s+/);
-  while (parts.length > 0 && parts[0].startsWith('/')) {
-    const alias = parts[0].toLowerCase();
-    if (MODEL_PREFIX_MAP[alias]) {
-      selectedModel = MODEL_PREFIX_MAP[alias];
-      aliasUsed = alias;
+  while (parts.length > 0 && (parts[0].startsWith('/') || parts[0].startsWith('@'))) {
+    const token = parts[0];
+
+    // Project switch: /p2 or /p:2 (index or name fragment).
+    const projMatch = token.match(/^\/p:?(\d+|[^\s]+)/i);
+    if (projMatch) {
+      const target = projMatch[1];
+      const num = parseInt(target, 10);
+      if (!isNaN(num) && num >= 1 && num <= availableProjects.length) {
+        projectUsed = availableProjects[num - 1];
+      } else {
+        projectUsed = availableProjects.find((p) => p.name.toLowerCase().includes(target.toLowerCase()));
+      }
       parts.shift();
-    } else if (TASK_PREFIX_MAP[alias]) {
+      continue;
+    }
+
+    // Model family search: any @keyword fuzzy-matches model names.
+    if (token.startsWith('@')) {
+      family = token.slice(1).toLowerCase();
+      parts.shift();
+      continue;
+    }
+
+    const alias = token.toLowerCase();
+    if (TASK_PREFIX_MAP[alias]) {
       task = TASK_PREFIX_MAP[alias];
       parts.shift();
     } else {
@@ -295,20 +358,7 @@ export function parseInlineModelAndPrompt(
   }
   text = parts.join(' ').trim();
 
-  const pMatch = text.match(/@p:?(\d+|[^\s]+)/i);
-  if (pMatch) {
-    const target = pMatch[1];
-    text = text.replace(pMatch[0], '').replace(/\s+/g, ' ').trim();
-
-    const num = parseInt(target, 10);
-    if (!isNaN(num) && num >= 1 && num <= availableProjects.length) {
-      projectUsed = availableProjects[num - 1];
-    } else {
-      projectUsed = availableProjects.find((p) => p.name.toLowerCase().includes(target.toLowerCase()));
-    }
-  }
-
-  if (task && task !== 'image') {
+  if (task) {
     const instr = TASK_INSTRUCTION[task];
     text = text ? `${instr}${text}` : instr.trim();
   }
@@ -316,7 +366,7 @@ export function parseInlineModelAndPrompt(
   return {
     model: selectedModel,
     prompt: text,
-    aliasUsed,
+    family,
     projectUsed,
     task,
   };
@@ -549,13 +599,13 @@ export function registerInlineHandler(
     const sessionModel = activeSession?.config?.getModel();
     const activeModel = sessionModel || defaultOptions.model || '';
     const allProjects = sessionManager.getProjects();
-    const { model: modelToUse, prompt, aliasUsed, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
+    const { model: modelToUse, prompt, family, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
 
-    // Default to active session project if no explicit @p:N flag was provided
+    // Default to active session project if no explicit /pN flag was provided
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
     if (!prompt && task !== 'image') {
-      const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>@p${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
+      const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>/p${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
       const results = [
         {
           type: 'article' as const,
@@ -564,40 +614,40 @@ export function registerInlineHandler(
           description: `Type a question to ask AI (model: ${modelToUse})`,
           thumbnail_url: THUMBNAILS.bot,
           input_message_content: {
-            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Quick model switches:</b>\n• <code>/flash 提问</code> — Gemini 3.6 Flash\n• <code>/pro 提问</code> — Gemini 3.1 Pro\n• <code>/deepseek 提问</code> — DeepSeek Flash\n\n<b>Project switches (@pN):</b>\n${projectHelpList || '• 自动继承 Bot 当前绑定的项目'}`,
+            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Model switches (@keyword):</b>\n• <code>@flash 提问</code> — 列出所有 Flash 模型可选\n• <code>@pro 提问</code> — 列出所有 Pro 模型可选\n• <code>@deep 提问</code> — 列出所有 DeepSeek 模型可选\n• <code>@think 提问</code> — 列出所有 Thinking 模型可选\n\n<b>Project switches (/pN):</b>\n${projectHelpList || '• 自动继承 Bot 当前绑定的项目'}`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-flash',
-          title: '⚡ @static32bot /flash 提问',
-          description: 'Gemini 3.6 Flash — fastest responses',
+          title: '⚡ @static32bot @flash 提问',
+          description: 'List all Flash-family models',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `⚡ <b>Fast mode</b>\n\nUse <code>/flash</code> prefix for quick answers:\n<code>@static32bot /flash 什么是量子计算？</code>\n\nForces Gemini 3.6 Flash model for fast response.`,
+            message_text: `⚡ <b>Model search</b>\n\nUse any <code>@keyword</code> prefix to list matching models:\n<code>@static32bot @flash 什么是量子计算？</code>\n<code>@static32bot @think 分析这个</code>\n\nPick any matching model from the floating cards.`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-pro',
-          title: '🧠 @static32bot /pro 提问',
-          description: 'Gemini 3.1 Pro — deep reasoning',
+          title: '🧠 @static32bot @pro 提问',
+          description: 'List all Pro-family models',
           thumbnail_url: THUMBNAILS.thinking,
           input_message_content: {
-            message_text: `🧠 <b>Pro / Deep Reasoning</b>\n\nUse <code>/pro</code> prefix for complex analysis:\n<code>@static32bot /pro 请详细解释...</code>\n\nForces Gemini 3.1 Pro model for deep reasoning.`,
+            message_text: `🧠 <b>Pro family</b>\n\nUse <code>@pro</code> prefix to list all Pro models:\n<code>@static32bot @pro 请详细解释...</code>\n\nPick any Pro-family model from the floating cards.`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-deepseek',
-          title: '🔍 @static32bot /deepseek 提问',
-          description: 'DeepSeek Flash model',
+          title: '🔍 @static32bot @deep 提问',
+          description: 'List all DeepSeek models',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `🔍 <b>DeepSeek Model</b>\n\nUse <code>/deepseek</code> prefix:\n<code>@static32bot /deepseek 你的问题</code>\n\nForces DeepSeek Flash model.`,
+            message_text: `🔍 <b>DeepSeek family</b>\n\nUse <code>@deep</code> or <code>@deepseek</code> prefix:\n<code>@static32bot @deep 你的问题</code>\n\nPick any DeepSeek-family model from the floating cards.`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -608,7 +658,7 @@ export function registerInlineHandler(
           description: '/translate /summarize /fix /code /img 一键调用',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与模型前缀混用（如 <code>/flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）`,
+            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与搜索前缀混用（如 <code>@flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -619,8 +669,34 @@ export function registerInlineHandler(
 
     // Store prompt info (no model startup — zero latency)
     logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} task=${task || 'chat'} project="${projectUsed?.name || 'default'}" prompt="${prompt.slice(0, 40)}..."`);
+
+    // Model suggestion cards: when a family alias (@flash/@deep/@pro/...) was
+    // given, list every model in that family so the user can pick one from the
+    // floating cards. Otherwise fuzzy-match the query against all models; if no
+    // keyword matches, fall back to the fixed popular suggestions.
+    let suggestionCandidates: string[] = [];
+    if (task !== 'image') {
+      const availableModels = getEffectiveModelOrder();
+      if (family) {
+        // Match against the full lowercase name so "DeepSeek: Pro" still hits
+        // the "deepseek" family even though the channel prefix is stripped by
+        // normalizeModelName.
+        suggestionCandidates = availableModels.filter((m) => m.toLowerCase().includes(family));
+      } else {
+        suggestionCandidates = fuzzyMatchModels(prompt, availableModels, MAX_MODEL_SUGGESTIONS);
+        if (suggestionCandidates.length === 0) {
+          suggestionCandidates = FALLBACK_MODEL_SUGGESTIONS.filter((m) => availableModels.includes(m));
+        }
+      }
+      suggestionCandidates = suggestionCandidates.filter((m) => m !== modelToUse);
+      if (!family) suggestionCandidates = suggestionCandidates.slice(0, MAX_MODEL_SUGGESTIONS);
+    }
+
+    // When a family alias is used, the primary card defaults to the best model
+    // in that family (first in effective order).
+    const primaryModel = family && suggestionCandidates.length > 0 ? suggestionCandidates[0] : modelToUse;
     const resultId = `ai-${Date.now()}-${fromId}`;
-    pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now() });
+    pendingResults.set(resultId, { prompt, model: primaryModel, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now() });
 
     try {
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
@@ -632,18 +708,45 @@ export function registerInlineHandler(
         : task === 'code' ? '💻 **代码模式**'
         : undefined;
       const initTitle = task === 'image'
-        ? `🖼️ 点击生成图片 [${modelToUse}]`
-        : task === 'translate' ? `🌐 点击翻译 [${modelToUse}]`
-        : task === 'summarize' ? `📋 点击总结 [${modelToUse}]`
-        : task === 'fix' ? `🛠️ 点击修复 [${modelToUse}]`
-        : task === 'code' ? `💻 点击生成代码 [${modelToUse}]`
-        : `🤔 点击发送并开始思考 [${modelToUse}]`;
+        ? `🖼️ 点击生成图片 [${primaryModel}]`
+        : task === 'translate' ? `🌐 点击翻译 [${primaryModel}]`
+        : task === 'summarize' ? `📋 点击总结 [${primaryModel}]`
+        : task === 'fix' ? `🛠️ 点击修复 [${primaryModel}]`
+        : task === 'code' ? `💻 点击生成代码 [${primaryModel}]`
+        : `🤔 点击发送并开始思考 [${primaryModel}]`;
       let initMarkdown: string;
       if (task === 'image') {
         initMarkdown = `**🎨 图像生成模式**\n\n**💬 提示词：**\n> ${displayPrompt}\n\n*🚀 正在生成图片，完成后将自动原地更新。*`;
       } else {
-        const modelLine = `**🧠 目标模型：** \`${modelToUse}\`\n`;
+        const modelLine = `**🧠 目标模型：** \`${primaryModel}\`\n`;
         initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI 推理引擎已启动**\n\n${modelLine}**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`;
+      }
+
+      const suggestionCards: any[] = [];
+      {
+        const candidates = suggestionCandidates.filter((m) => m !== primaryModel);
+        const now = Date.now();
+        candidates.forEach((candidateModel, idx) => {
+          const candidateId = `m-${now}-${idx}`;
+          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now });
+          suggestionCards.push({
+            type: 'article' as const,
+            id: candidateId,
+            title: `🧠 用 ${candidateModel} 回答`,
+            description: `切换到模型 ${candidateModel}`,
+            thumbnail_url: THUMBNAILS.sparkles,
+            input_message_content: {
+              rich_message: {
+                markdown: `**🧠 模型切换：** \`${candidateModel}\`\n\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`,
+              },
+            } as any,
+            reply_markup: {
+              inline_keyboard: [[
+                { text: `${ICONS.loading} 生成中...`, callback_data: 'inline_thinking' }
+              ]],
+            },
+          });
+        });
       }
 
       const results = [
@@ -670,15 +773,16 @@ export function registerInlineHandler(
         {
           type: 'article' as const,
           id: `prompt-${Date.now()}`,
-          title: `💬 发送提问卡片 (${aliasUsed || '默认模型'})`,
-          description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
+          title: `💬 发送提问卡片 (${family ? '@' + family : '默认模型'})`,
+          description: `模型: ${primaryModel} | "${prompt.slice(0, 40)}..."`,
           thumbnail_url: THUMBNAILS.chat,
           input_message_content: {
             rich_message: {
-              markdown: `**💬 AI 提问卡片**\n\n**模型：** \`${modelToUse}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`,
+              markdown: `**💬 AI 提问卡片**\n\n**模型：** \`${primaryModel}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`,
             },
           } as any,
         },
+        ...suggestionCards,
       ];
 
       await ctx.answerInlineQuery(results, { cache_time: 0 });
@@ -934,52 +1038,81 @@ async function finalizeImageResult(
     return;
   }
 
-  const imagePath = images[images.length - 1];
+  // Chunk into collages of MAX_COLLAGE_IMAGES so >10 photos still render.
+  const chunks: string[][] = [];
+  for (let i = 0; i < images.length; i += MAX_COLLAGE_IMAGES) {
+    chunks.push(images.slice(i, i + MAX_COLLAGE_IMAGES));
+  }
+  const imageCount = images.length;
 
   // Inline messages can only reference media via a URL or an existing
-  // file_id (no local upload). Upload the file through a transient rich-message
-  // relay to the user's private chat to obtain a file_id, then delete the relay
-  // message so the image only ever appears in-place in the inline message.
-  let fileId: string | null = null;
+  // file_id (no local upload). Upload every generated image through a transient
+  // rich-message relay to the user's private chat to obtain file_ids, then
+  // delete the relay message so the images only ever appear in-place in the
+  // inline message.
+  const fileIds: string[] = [];
   let relayMessageId: number | null = null;
   try {
-    const relayMediaId = `img${Date.now().toString(36)}`;
+    const relayMarkdown = chunks
+      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![生成的图片](tg://photo?id=r${ci}_${i})`).join('\n')}\n</tg-collage>`)
+      .join('\n\n');
+    const relayMedia = chunks.flatMap((chunk, ci) =>
+      chunk.map((imgPath, i) => ({ id: `r${ci}_${i}`, media: { type: 'photo' as const, media: new InputFile(imgPath) } })),
+    );
     const sentMsg = await ctx.api.sendRichMessage(fromId, {
-      markdown: `![生成的图片](tg://photo?id=${relayMediaId})\n\n*上传中转中...*`,
-      media: [{ id: relayMediaId, media: { type: 'photo', media: new InputFile(imagePath) } }],
+      markdown: `${relayMarkdown}\n\n*上传中转中...*`,
+      media: relayMedia,
     });
     relayMessageId = sentMsg?.message_id ?? null;
-    const photoBlock = (sentMsg?.rich_message?.blocks as Array<Record<string, any>> | undefined)?.find((b) => b?.['type'] === 'photo');
-    const sizes: Array<{ file_id: string; file_size?: number }> = photoBlock?.['photo'] ?? [];
-    const largest = sizes.slice().sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
-    fileId = largest?.file_id || null;
-    logger.info(`[InlineResult] Uploaded image via rich-message relay, file_id=${fileId ? fileId.slice(0, 24) + '...' : 'NONE'}`);
+    // Collect photo blocks recursively (they may be nested inside a collage block).
+    const collectPhotos = (blocks: Array<Record<string, any>> | undefined, out: Array<Record<string, any>>) => {
+      for (const b of blocks ?? []) {
+        if (b?.['type'] === 'photo') out.push(b);
+        else if (Array.isArray(b?.['blocks'])) collectPhotos(b['blocks'], out);
+      }
+    };
+    const photoBlocks: Array<Record<string, any>> = [];
+    collectPhotos(sentMsg?.rich_message?.blocks as Array<Record<string, any>> | undefined, photoBlocks);
+    for (const block of photoBlocks) {
+      const sizes: Array<{ file_id: string; file_size?: number }> = block?.['photo'] ?? [];
+      const largest = sizes.slice().sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
+      if (largest?.file_id) fileIds.push(largest.file_id);
+    }
+    logger.info(`[InlineResult] Uploaded ${fileIds.length}/${imageCount} image(s) via rich-message relay`);
   } catch (e) {
-    logger.error(`[InlineResult] Failed to relay-upload image: ${e}`);
+    logger.error(`[InlineResult] Failed to relay-upload images: ${e}`);
   } finally {
-    // Remove the transient relay copy so the image is only shown in the inline message.
+    // Remove the transient relay copy so the images are only shown in the inline message.
     if (relayMessageId != null) {
       await ctx.api.deleteMessage(fromId, relayMessageId).catch(() => {});
     }
   }
 
-  const caption = `**💬 提示词：** ${displayPrompt}\n\n_模型: ${modelUsed}_`;
+  const caption = `**💬 提示词：** ${displayPrompt}\n\n_模型: ${modelUsed} · 共 ${images.length} 张_`;
   const regenButton = {
     inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
   };
 
-  if (fileId) {
-    // Render the image in-place AND rich text via rich_message: the markdown
-    // references the attached photo through tg://photo?id=, with the actual
+  if (fileIds.length > 0) {
+    // Render all images in-place as collages via rich_message: the markdown
+    // references each attached photo through tg://photo?id=, with the actual
     // media supplied in the media array. editMessageMedia cannot carry
     // rich_message, so editMessageText is the correct transport here.
-    const mediaId = `img${Date.now().toString(36)}`;
-    const richMarkdown = `![生成的图片](tg://photo?id=${mediaId})\n\n${caption}\n\n_🖼️ 图片已生成，可点击 🔄 重新生成。_`;
+    const chunks: string[][] = [];
+    for (let i = 0; i < fileIds.length; i += MAX_COLLAGE_IMAGES) {
+      chunks.push(fileIds.slice(i, i + MAX_COLLAGE_IMAGES));
+    }
+    const richMarkdown = `${chunks
+      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![生成的图片](tg://photo?id=med${ci}_${i})`).join('\n')}\n</tg-collage>`)
+      .join('\n\n')}\n\n${caption}\n\n_🖼️ 图片已生成，可点击 🔄 重新生成。_`;
+    const media = chunks.flatMap((chunk, ci) =>
+      chunk.map((fileId, i) => ({ id: `med${ci}_${i}`, media: { type: 'photo', media: fileId } })),
+    );
     await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
       rich_message: {
         markdown: richMarkdown,
-        media: [{ id: mediaId, media: { type: 'photo', media: fileId } }],
+        media,
       },
       reply_markup: regenButton,
     } as any).catch((e: Error) => {
@@ -994,8 +1127,9 @@ async function finalizeImageResult(
     return;
   }
 
-  // No file_id (relay upload failed): describe the image as text.
-  const finalText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 未能上传渲染（请先给机器人发消息开启私聊）_\n\n_文件: ${path.basename(imagePath)}_`;
+  // No file_id (relay upload failed): describe the images as text.
+  const filesText = images.map((p) => path.basename(p)).join(', ');
+  const finalText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 未能上传渲染（请先给机器人发消息开启私聊）_\n\n_文件: ${filesText}_`;
   await ctx.api.raw.editMessageText({
     inline_message_id: inlineMessageId,
     rich_message: { markdown: finalText },
