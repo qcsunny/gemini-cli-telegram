@@ -736,8 +736,12 @@ export class TelegramBot {
         const userId = ctx.from?.id;
         const callbackData = ctx.callbackQuery?.data;
 
-        // Allow read-only inline page flipping for everyone (0 compute cost, pure display)
-        if (callbackData && (callbackData.startsWith('inline_page:') || callbackData === 'inline_noop' || callbackData === 'inline_thinking')) {
+        // Allow read-only inline page flipping for everyone (final result pagination only)
+        if (callbackData && (
+          callbackData.startsWith('inline_page:') ||
+          callbackData === 'inline_noop' ||
+          callbackData === 'inline_thinking'
+        )) {
           await next();
           return;
         }
