@@ -744,6 +744,13 @@ export class TelegramBot {
 
         if (!userId || !allowedSet.has(userId)) {
           logger.warn(`Unauthorized access attempt from user ${userId}`);
+          if (ctx.callbackQuery) {
+            await ctx.answerCallbackQuery({
+              text: '⚠️ 未授权访问：您的 Telegram ID 未在许可白名单中。',
+              show_alert: true,
+            }).catch(() => {});
+            return;
+          }
           if (ctx.chat) {
             await ctx.reply(
               `${ICONS.error} Unauthorized. Your user ID is not in the allowed list.`,
