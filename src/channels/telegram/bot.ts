@@ -28,6 +28,7 @@ import * as http from 'http';
 import { SessionManager } from '../../core/session.js';
 import { processMessage } from '../../core/messageLoop.js';
 import { createTelegramSendMedia } from './outbound.js';
+import { isPrivateImageRequest, handlePrivateImageRequest } from './commands/privateImageHandler.js';
 import type {
   ChannelReply,
   SessionOptions,
@@ -757,8 +758,11 @@ export class TelegramBot {
   private setupMessageHandler(): void {
     this.bot.on('message:text', async (ctx) => {
       const text = ctx.message.text;
+      if (isPrivateImageRequest(text)) {
+        await handlePrivateImageRequest(ctx, this.sessionManager, this.defaultOptions);
+        return;
+      }
       if (text.startsWith('/')) return;
-
       // Send a welcome message for first-time users
       const chatId = ctx.chat?.id;
       if (chatId) {

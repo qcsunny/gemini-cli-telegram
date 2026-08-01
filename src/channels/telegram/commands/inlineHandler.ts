@@ -406,7 +406,7 @@ function splitIntoPages(text: string, pageChars: number = PAGE_CHARS): string[] 
   return pages;
 }
 
-async function findNewImageArtifacts(conversationId: string, turnStartTime: number): Promise<string[]> {
+export async function findNewImageArtifacts(conversationId: string, turnStartTime: number): Promise<string[]> {
   if (!conversationId) return [];
   const artifactDir = path.join(getAgyDataDir(), 'brain', conversationId);
   const images: string[] = [];
@@ -963,7 +963,7 @@ async function finalizeImageResult(
     }
   }
 
-  const caption = `**💬 提示词：** ${displayPrompt}\n_模型: ${modelUsed}_`;
+  const caption = `**💬 提示词：** ${displayPrompt}\n\n_模型: ${modelUsed}_`;
   const regenButton = {
     inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
   };
