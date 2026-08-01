@@ -831,12 +831,12 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({
           inline_message_id: 'cmp_inline_msg',
           rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('第 1/5 页'),
+            markdown: expect.stringContaining('⚖️ 多模型对比'),
           }),
           reply_markup: expect.objectContaining({
             inline_keyboard: expect.arrayContaining([
               expect.arrayContaining([
-                expect.objectContaining({ text: expect.stringContaining('Gemini 3.6 Flash (High)') }),
+                expect.objectContaining({ text: expect.stringContaining('Claude Opus') }),
               ]),
             ]),
           }),
@@ -857,7 +857,7 @@ describe('registerInlineHandler', () => {
       },
       callbackQuery: { inline_message_id: 'cmp_inline_msg', data: '' },
     };
-    await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: pickButtons[0].callback_data } });
+    await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: `inline_cmp_page:${resultId}:1` } });
 
     // Page 2 should show different models
     await vi.waitFor(() => {
@@ -865,7 +865,7 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({
           inline_message_id: 'cmp_inline_msg',
           rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('第 2/5 页'),
+            markdown: expect.stringContaining('① 请选择第 1 个模型'),
           }),
         }),
       );
