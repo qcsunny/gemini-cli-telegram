@@ -949,7 +949,7 @@ async function runInlineGeneration(
         const pages = splitIntoPages(cleanOutput);
         pageCount = pages.length;
         inlinePages.set(resultId, pages);
-        const header = `**💬 问题：** ${displayPrompt}`;
+        const header = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**`;
         const pageMarkdowns = pages.map((page) => {
           const summaryTitle = `💡 展开本页 AI 回答 (${modelUsed} · ${page.length} 字)`;
           const details = `<details><summary>${summaryTitle}</summary>\n\n${page}\n\n</details>`;
@@ -973,14 +973,14 @@ async function runInlineGeneration(
         const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
         const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
         isCollapsible = true;
-        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
         replyMarkup = {
           inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
         };
       }
     } else {
       // Short answer → plain text
-      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
       replyMarkup = {
         inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
       };
