@@ -7,7 +7,9 @@ import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir } from '../../../config/userConfig.js';
-import { formatTokenCount, findSafeCutPoint, markdownToRichBlocks, splitRichBlocks, type RichBlock } from '../formatter.js';
+import { formatTokenCount, findSafeCutPoint } from '../formatter/core.js';
+import { markdownToRichBlocks, splitRichBlocks } from '../formatter/blocks.js';
+import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -1387,7 +1389,7 @@ async function runCompareGeneration(
 
   // First page + pagination keyboard + regenerate.
   const footerText = `${allSucceeded ? '对比完成' : '部分完成'}：${doneStr}${failNote}`;
-  const firstPage = `${pages[0]}\n\n_${footerText}_`;
+  const firstPage = `${pageItems[0].markdown}\n\n_${footerText}_`;
   const replyMarkup = {
     inline_keyboard: [
       [
