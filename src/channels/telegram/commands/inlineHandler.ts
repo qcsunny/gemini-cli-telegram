@@ -7,7 +7,7 @@ import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir } from '../../../config/userConfig.js';
-import { formatTokenCount, findSafeCutPoint } from '../formatter/core.js';
+import { formatTokenCount, findSafeCutPoint, markdownToRichBlocks, splitRichBlocks, type RichBlock } from '../formatter.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -47,8 +47,13 @@ interface RegenerateContext {
 
 const regenerateContexts = new Map<string, RegenerateContext>();
 
+export interface InlinePage {
+  markdown?: string;
+  blocks?: RichBlock[];
+}
+
 /** Paginated pages of a finished answer, keyed by resultId. */
-const inlinePages = new Map<string, string[]>();
+const inlinePages = new Map<string, InlinePage[]>();
 
 /** Max models user can pick for a /v multi-model comparison. */
 export const MAX_COMPARE_MODELS = 3;
@@ -661,10 +666,13 @@ export function registerInlineHandler(
         await ctx.answerCallbackQuery({ text: '❌ 分页已过期。', show_alert: true }).catch(() => {});
         return;
       }
-      await ctx.answerCallbackQuery().catch(() => {});
+      const targetPage = pages[pageIdx];
+      const richMessagePayload = targetPage.blocks && targetPage.blocks.length > 0
+        ? { blocks: targetPage.blocks }
+        : { markdown: targetPage.markdown || '' };
       await ctx.api.raw.editMessageText({
         inline_message_id: inlineMessageId,
-        rich_message: { markdown: pages[pageIdx] },
+        rich_message: richMessagePayload,
         reply_markup: {
           inline_keyboard: [
             [
@@ -1211,15 +1219,17 @@ async function runInlineGeneration(
         // Long answer → paginate while keeping per-page <details> fold.
         const pages = splitIntoPages(cleanOutput);
         pageCount = pages.length;
-        inlinePages.set(resultId, pages);
         const header = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**`;
-        const pageMarkdowns = pages.map((page) => {
+        const pageItems: InlinePage[] = pages.map((page) => {
           const summaryTitle = `💡 展开本页 AI 回答 (${modelUsed} · ${page.length} 字)`;
           const details = `<details><summary>${summaryTitle}</summary>\n\n${page}\n\n</details>`;
           const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : '';
-          return `${header}\n\n${details}${footer}`;
+          const fullMd = `${header}\n\n${details}${footer}`;
+          const blocks = markdownToRichBlocks(fullMd);
+          return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
         });
-        fullMarkdown = pageMarkdowns[0];
+        inlinePages.set(resultId, pageItems);
+        fullMarkdown = pageItems[0].markdown || '';
         const baseButtons: { text: string; callback_data: string }[] = [
           { text: '◀️ 上一页', callback_data: 'inline_noop' },
           { text: `1/${pageCount}`, callback_data: 'inline_noop' },
@@ -1359,15 +1369,17 @@ async function runCompareGeneration(
 
   // Build paginated comparison: one page per successfully answered model.
   const header = `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n`;
-  const pages = doneModels.map((s, i) => {
+  const pageItems: InlinePage[] = doneModels.map((s, i) => {
     const clean = stripWholeMessageCodeFence(s.output || '');
     const num = ['①', '②', '③'][i] ?? `${i + 1}.`;
     const modelLine = `**${num} ${s.model}**\n\n`;
     const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
-    return `${header}${modelLine}${clean}${footer}`;
+    const fullMd = `${header}${modelLine}${clean}${footer}`;
+    const blocks = markdownToRichBlocks(fullMd);
+    return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
   });
-  inlinePages.set(resultId, pages);
-  const pageCount = pages.length;
+  inlinePages.set(resultId, pageItems);
+  const pageCount = pageItems.length;
 
   const allSucceeded = failedModels.length === 0;
   const doneStr = doneModels.map((s) => s.model).join('、');
