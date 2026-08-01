@@ -208,6 +208,11 @@ describe('registerInlineHandler', () => {
               markdown: expect.any(String),
             }),
           }),
+          // Inline keyboard is required for Telegram to return inline_message_id
+          // on chosen_inline_result (regression guard for 1056263).
+          reply_markup: expect.objectContaining({
+            inline_keyboard: expect.any(Array),
+          }),
         }),
         expect.objectContaining({
           id: expect.stringMatching(/^prompt-/),
