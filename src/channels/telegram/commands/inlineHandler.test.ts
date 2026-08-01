@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
 import { registerInlineHandler, parseInlineModelAndPrompt } from './inlineHandler.js';
+import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 
@@ -21,6 +22,17 @@ vi.mock('../../../agy/agyCli.js', () => ({
     };
   }),
 }));
+
+vi.mock('node:fs/promises', () => ({
+  readdir: vi.fn().mockResolvedValue(['generated-image.png', '.system_generated']),
+  stat: vi.fn().mockResolvedValue({ isFile: () => true, mtimeMs: Date.now() }),
+}));
+
+// Only override getAgyDataDir; keep all other userConfig exports intact.
+vi.mock('../../../config/userConfig.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../../config/userConfig.js')>();
+  return { ...mod, getAgyDataDir: vi.fn().mockReturnValue('/tmp/agy-data') };
+});
 
 // Mock blocks formatter
 vi.mock('../formatter/blocks.js', () => ({
@@ -345,6 +357,63 @@ describe('registerInlineHandler', () => {
 
     expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ show_alert: true }),
+    );
+  });
+
+  it('should render generated image in-place via editMessageMedia', async () => {
+    // Return a conversationId so image artifact scanning runs
+    vi.mocked(runAgyPrint).mockImplementation(async (opts: any) => {
+      if (opts?.onChunk) opts.onChunk('');
+      return { output: '生成完成', conversationId: 'test-conv-123', exitCode: 0 };
+    });
+
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/img 一只猫' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResultId = callArg.find((r: any) => r.id.startsWith('ai-')).id;
+    expect(callArg.find((r: any) => r.id.startsWith('ai-')).title).toContain('点击生成图片');
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: aiResultId,
+        from: { id: 12345 },
+        query: '/img 一只猫',
+        inline_message_id: 'test_inline_msg_id_123',
+      },
+      api: {
+        sendPhoto: vi.fn().mockResolvedValue({
+          photo: [
+            { file_id: 'photo_small', file_size: 100 },
+            { file_id: 'photo_large', file_size: 5000 },
+          ],
+        }),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+          editMessageMedia: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+
+    await chosenInlineResultHandler!(mockChosenCtx);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(mockChosenCtx.api.sendPhoto).toHaveBeenCalled();
+    expect(mockChosenCtx.api.raw.editMessageMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inline_message_id: 'test_inline_msg_id_123',
+        media: expect.objectContaining({
+          type: 'photo',
+          media: 'photo_large',
+        }),
+      }),
     );
   });
 });
