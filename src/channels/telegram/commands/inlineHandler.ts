@@ -50,6 +50,30 @@ const regenerateContexts = new Map<string, RegenerateContext>();
 /** Paginated pages of a finished answer, keyed by resultId. */
 const inlinePages = new Map<string, string[]>();
 
+/** Max models user can pick for a /v multi-model comparison. */
+export const MAX_COMPARE_MODELS = 3;
+/** Max candidate models offered for /v selection. */
+const MAX_COMPARE_CANDIDATES = 8;
+
+interface CompareContext {
+  resultId: string;
+  inlineMessageId: string;
+  fromId: number;
+  prompt: string;
+  projectPath?: string;
+  /** Ordered candidate model list offered to the user. */
+  candidates: string[];
+  /** Indices into `candidates` that the user has selected so far. */
+  selectedIdx: number[];
+  createdAt: number;
+}
+
+/** In-progress /v multi-model comparison state, keyed by resultId. */
+const compareContexts = new Map<string, CompareContext>();
+
+/** Number of model comparisons offered per row in the picker keyboard. */
+const COMPARE_MODELS_PER_ROW = 2;
+
 const ACTION_TTL = 30 * 60_000;
 
 /** Touch the lastActiveTime of a pending result to keep it alive while streaming. */
@@ -82,6 +106,11 @@ const cleanupTimer = setInterval(() => {
     if (val.createdAt < actionCutoff) {
       regenerateContexts.delete(key);
       inlinePages.delete(key);
+    }
+  }
+  for (const [key, val] of compareContexts) {
+    if (val.createdAt < actionCutoff) {
+      compareContexts.delete(key);
     }
   }
 }, 60_000);
@@ -231,13 +260,12 @@ export class InlineStreamQueue {
   }
 }
 
-export type InlineTask = 'translate' | 'summarize' | 'fix' | 'code' | 'image';
+export type InlineTask = 'translate' | 'summarize' | 'image' | 'compare';
 const TASK_PREFIX_MAP: Record<string, InlineTask> = {
   '/translate': 'translate',
   '/summarize': 'summarize',
-  '/fix': 'fix',
-  '/code': 'code',
   '/img': 'image',
+  '/v': 'compare',
 };
 
 export const IMAGE_TASK_INSTRUCTION =
@@ -293,9 +321,8 @@ export function fuzzyMatchModels(query: string, models: string[], limit: number 
 const TASK_INSTRUCTION: Record<InlineTask, string> = {
   translate: '请将以下内容翻译成中文，保持原意与格式：\n\n',
   summarize: '请用简洁的语言总结以下内容，列出要点：\n\n',
-  fix: '请分析以下代码/报错信息并给出修复方案，附上修改后的代码：\n\n',
-  code: '请给出实现以下需求的完整代码（含必要注释）：\n\n',
   image: IMAGE_TASK_INSTRUCTION,
+  compare: '',
 };
 
 const THUMBNAIL_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72';
@@ -484,6 +511,43 @@ export async function findNewImageArtifacts(conversationId: string, turnStartTim
   return images.sort((a, b) => a.localeCompare(b));
 }
 
+/** Renders the compare picker (selection screen) markdown for a /v result. */
+function renderComparePicker(cmp: CompareContext): string {
+  const displayPrompt = cmp.prompt.length > 300 ? cmp.prompt.slice(0, 300) + '...' : cmp.prompt;
+  const picked = cmp.selectedIdx.map((idx, i) => `**${i + 1}.** ${cmp.candidates[idx]}`).join('\n');
+  const pickedBlock = picked ? `\n✅ **已选模型：**\n${picked}\n` : '';
+  const countText = cmp.selectedIdx.length === 0
+    ? '① 请选择第 1 个模型'
+    : cmp.selectedIdx.length === 1
+      ? '② 请选择第 2 个模型（或点“开始对比”）'
+      : '③ 请选择第 3 个模型（可跳过，点“开始对比”）';
+  return `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${pickedBlock}\n${countText}\n\n_点击下方模型按钮选择，选满 2-${MAX_COMPARE_MODELS} 个后点“🚀 开始对比”。_`;
+}
+
+/** Builds the picker keyboard for a /v selection screen. */
+function buildCompareKeyboard(cmp: CompareContext): unknown {
+  const rows: { text: string; callback_data: string }[][] = [];
+  let row: { text: string; callback_data: string }[] = [];
+  cmp.candidates.forEach((model, idx) => {
+    if (cmp.selectedIdx.includes(idx)) return;
+    row.push({ text: model.length > 22 ? model.slice(0, 22) + '…' : model, callback_data: `inline_cmp_pick:${cmp.resultId}:${idx}` });
+    if (row.length >= COMPARE_MODELS_PER_ROW) {
+      rows.push(row);
+      row = [];
+    }
+  });
+  if (row.length > 0) rows.push(row);
+  if (cmp.selectedIdx.length >= 2) {
+    rows.push([{ text: '🚀 开始对比', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
+  }
+  if (cmp.selectedIdx.length > 0) {
+    rows.push([{ text: '♻️ 清空选择', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
+  }
+  return { inline_keyboard: rows };
+}
+
+
+
 export function registerInlineHandler(
   bot: Bot,
   sessionManager: SessionManager,
@@ -522,6 +586,29 @@ export function registerInlineHandler(
         await ctx.answerCallbackQuery({ text: '❌ 会话已过期，请重新发起提问。', show_alert: true }).catch(() => {});
         return;
       }
+
+      if (regen.task === 'compare') {
+        const candidates = getEffectiveModelOrder().slice(0, MAX_COMPARE_CANDIDATES);
+        const cmp: CompareContext = {
+          resultId,
+          inlineMessageId,
+          fromId: regen.fromId,
+          prompt: regen.prompt,
+          projectPath: regen.projectPath,
+          candidates,
+          selectedIdx: [],
+          createdAt: Date.now(),
+        };
+        compareContexts.set(resultId, cmp);
+        await ctx.answerCallbackQuery({ text: '⚖️ 请重新选择对比模型', show_alert: false }).catch(() => {});
+        await ctx.api.raw.editMessageText({
+          inline_message_id: inlineMessageId,
+          rich_message: { markdown: renderComparePicker(cmp) },
+          reply_markup: buildCompareKeyboard(cmp),
+        } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare regenerate edit failed: ${e}`));
+        return;
+      }
+
       await ctx.answerCallbackQuery({ text: '🔄 正在重新生成回答，请稍候...' }).catch(() => {});
       const ctrl = new AbortController();
       userControllers.set(resultId, ctrl);
@@ -586,6 +673,81 @@ export function registerInlineHandler(
           ],
         },
       } as any).catch((e: Error) => logger.warn(`[InlineResult] Page edit failed: ${e}`));
+      return;
+    }
+
+    if (data.startsWith('inline_cmp_pick:')) {
+      const [resultId, idxStr] = data.slice('inline_cmp_pick:'.length).split(':');
+      const idx = parseInt(idxStr, 10);
+      const cmp = compareContexts.get(resultId);
+      if (!cmp || Number.isNaN(idx) || idx < 0 || idx >= cmp.candidates.length) {
+        await ctx.answerCallbackQuery({ text: '❌ 选择已过期，请重新发起 /v 提问。', show_alert: true }).catch(() => {});
+        return;
+      }
+      if (cmp.selectedIdx.includes(idx)) {
+        await ctx.answerCallbackQuery().catch(() => {});
+        return;
+      }
+      if (cmp.selectedIdx.length >= MAX_COMPARE_MODELS) {
+        await ctx.answerCallbackQuery({ text: `⚠️ 最多选 ${MAX_COMPARE_MODELS} 个模型，点击“🚀 开始对比”执行。`, show_alert: true }).catch(() => {});
+        return;
+      }
+      cmp.selectedIdx.push(idx);
+      await ctx.answerCallbackQuery({ text: `✅ 已选择 ${cmp.candidates[idx]}`, show_alert: true }).catch(() => {});
+      await ctx.api.raw.editMessageText({
+        inline_message_id: inlineMessageId,
+        rich_message: { markdown: renderComparePicker(cmp) },
+        reply_markup: buildCompareKeyboard(cmp),
+      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare pick edit failed: ${e}`));
+      return;
+    }
+
+    if (data.startsWith('inline_cmp_reset:')) {
+      const resultId = data.slice('inline_cmp_reset:'.length);
+      const cmp = compareContexts.get(resultId);
+      if (!cmp) {
+        await ctx.answerCallbackQuery({ text: '❌ 会话已过期。', show_alert: true }).catch(() => {});
+        return;
+      }
+      cmp.selectedIdx = [];
+      await ctx.answerCallbackQuery().catch(() => {});
+      await ctx.api.raw.editMessageText({
+        inline_message_id: inlineMessageId,
+        rich_message: { markdown: renderComparePicker(cmp) },
+        reply_markup: buildCompareKeyboard(cmp),
+      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare reset edit failed: ${e}`));
+      return;
+    }
+
+    if (data.startsWith('inline_cmp_start:')) {
+      const resultId = data.slice('inline_cmp_start:'.length);
+      const cmp = compareContexts.get(resultId);
+      if (!cmp || cmp.selectedIdx.length < 2) {
+        await ctx.answerCallbackQuery({ text: '❌ 至少选择 2 个模型才能对比。', show_alert: true }).catch(() => {});
+        return;
+      }
+      const models = cmp.selectedIdx.map((idx) => cmp.candidates[idx]);
+      await ctx.answerCallbackQuery({ text: '⚖️ 开始多模型对比…' }).catch(() => {});
+      const ctrl = new AbortController();
+      userControllers.set(resultId, ctrl);
+      const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
+      try {
+        await runCompareGeneration(ctx, sessionManager, defaultOptions, {
+          resultId,
+          inlineMessageId,
+          fromId: cmp.fromId,
+          prompt: cmp.prompt,
+          projectPath: cmp.projectPath,
+          models,
+          ctrl,
+          streamQueue,
+        });
+      } catch (e) {
+        logger.warn(`[InlineResult] Compare generation failed: ${e}`);
+      } finally {
+        userControllers.delete(resultId);
+        compareContexts.delete(resultId);
+      }
       return;
     }
   });
@@ -672,11 +834,11 @@ export function registerInlineHandler(
         {
           type: 'article' as const,
           id: 'help-task',
-          title: '🎯 任务型前缀：翻译 / 总结 / 修复 / 代码 / 图片',
-          description: '/translate /summarize /fix /code /img 一键调用',
+          title: '🎯 任务型前缀：翻译 / 总结 / 图片 / 对比',
+          description: '/translate /summarize /img /v 一键调用',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与搜索前缀混用（如 <code>@flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）`,
+            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与搜索前缀混用（如 <code>@flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）\n⚖️ <code>/v 问题</code> — 多模型对比（逐步点选 2-3 个模型）`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -714,6 +876,40 @@ export function registerInlineHandler(
     // The user picks a card and that model answers the prompt directly.
     const familyMode = !!family && suggestionCandidates.length > 0;
     const resultId = `ai-${Date.now()}-${fromId}`;
+
+    if (task === 'compare') {
+      const candidates = getEffectiveModelOrder().slice(0, MAX_COMPARE_CANDIDATES);
+      const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
+      compareContexts.set(resultId, {
+        resultId,
+        inlineMessageId: '',
+        fromId,
+        prompt,
+        projectPath: targetProjectPath,
+        candidates,
+        selectedIdx: [],
+        createdAt: Date.now(),
+      });
+      const results = [{
+        type: 'article' as const,
+        id: resultId,
+        title: '⚖️ 点击选择模型对比',
+        description: `选择 2-${MAX_COMPARE_MODELS} 个模型并行对比相同问题`,
+        thumbnail_url: THUMBNAILS.sparkles,
+        input_message_content: {
+          rich_message: {
+            markdown: `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n_点击后选择 ${MAX_COMPARE_MODELS} 个以内的模型进行并行对比。_`,
+          },
+        } as any,
+        reply_markup: {
+          inline_keyboard: [[{ text: '⏹ 停止', callback_data: `inline_stop:${resultId}` }]],
+        },
+      }];
+      logger.info(`[InlineQuery] Compare mode: sending picker card for "${prompt.slice(0, 40)}..."`);
+      await ctx.answerInlineQuery(results, { cache_time: 0 });
+      return;
+    }
+
     if (!familyMode) {
       pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now() });
     }
@@ -724,8 +920,7 @@ export function registerInlineHandler(
         ? '🖼️ **图像生成模式**'
         : task === 'translate' ? '🌐 **翻译模式**'
         : task === 'summarize' ? '📋 **总结模式**'
-        : task === 'fix' ? '🛠️ **修复模式**'
-        : task === 'code' ? '💻 **代码模式**'
+        : task === 'compare' ? '⚖️ **多模型对比模式**'
         : undefined;
 
       if (familyMode) {
@@ -764,8 +959,7 @@ export function registerInlineHandler(
         ? `🖼️ 点击生成图片 [${modelToUse}]`
         : task === 'translate' ? `🌐 点击翻译 [${modelToUse}]`
         : task === 'summarize' ? `📋 点击总结 [${modelToUse}]`
-        : task === 'fix' ? `🛠️ 点击修复 [${modelToUse}]`
-        : task === 'code' ? `💻 点击生成代码 [${modelToUse}]`
+        : task === 'compare' ? '⚖️ 点击选择模型对比'
         : `🤔 点击发送并开始思考 [${modelToUse}]`;
       let initMarkdown: string;
       if (task === 'image') {
@@ -852,6 +1046,18 @@ export function registerInlineHandler(
 
     if (!chosen?.inline_message_id) {
       logger.warn(`[ChosenInline] Missing inline_message_id for result_id=${chosen?.result_id}`);
+      return;
+    }
+
+    const cmp = compareContexts.get(chosen.result_id);
+    if (cmp) {
+      cmp.inlineMessageId = chosen.inline_message_id;
+      logger.info(`[ChosenInline] Compare mode selected: userId=${chosen.from.id} resultId=${chosen.result_id} candidates=${cmp.candidates.length}`);
+      await ctx.api.raw.editMessageText({
+        inline_message_id: chosen.inline_message_id,
+        rich_message: { markdown: renderComparePicker(cmp) },
+        reply_markup: buildCompareKeyboard(cmp),
+      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare picker initial edit failed: ${e}`));
       return;
     }
 
@@ -1057,6 +1263,140 @@ async function runInlineGeneration(
       text: failText,
       parse_mode: 'HTML',
     } as any).catch(() => {});
+  }
+}
+
+interface CompareGenerationContext {
+  resultId: string;
+  inlineMessageId: string;
+  fromId: number;
+  prompt: string;
+  projectPath?: string;
+  models: string[];
+  ctrl: AbortController;
+  streamQueue: InlineStreamQueue;
+}
+
+/**
+ * Runs a /v multi-model comparison: all selected models answer the same
+ * prompt in parallel (each with its own fresh conversation), streaming a
+ * per-model progress card, then flushing a paginated comparison (one page
+ * per model) that reuses the standard inline_page machinery.
+ */
+async function runCompareGeneration(
+  ctx: Context,
+  sessionManager: SessionManager,
+  defaultOptions: SessionOptions,
+  gctx: CompareGenerationContext,
+): Promise<void> {
+  const { resultId, inlineMessageId, fromId, prompt, projectPath, models, ctrl, streamQueue } = gctx;
+  const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
+
+  const statuses: { model: string; done: boolean; output?: string; error?: string }[] = models.map((m) => ({ model: m, done: false }));
+  let startedAt = Date.now();
+
+  const renderStatus = (): string => {
+    const lines = statuses.map((s, i) => {
+      const num = ['①', '②', '③'][i] ?? `${i + 1}.`;
+      if (s.error) return `${num} \`${s.model}\`\n❌ 生成失败`;
+      if (s.done) return `${num} \`${s.model}\`\n✅ 完成`;
+      return `${num} \`${s.model}\`\n⏳ 思考中...`;
+    }).join('\n\n');
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    return `**⚖️ 多模型对比中...**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${lines}\n\n_⏱️ ${elapsed}s 已运行，回答完成后将自动原地更新。_`;
+  };
+
+  // Parallel execution, one runModelWithFallbackChain per model.
+  const runs = models.map(async (model, i) => {
+    let out = '';
+    const onChunk = (chunk: string) => {
+      out += chunk;
+      touchPendingResult(resultId);
+      // Update the progress card only when a model finishes (set in onModelStart? no — use this flag).
+      void out;
+    };
+    const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
+      prompt,
+      model,
+      defaultOptions,
+      ctrl.signal,
+      projectPath,
+      onChunk,
+    );
+    if (result?.output) {
+      statuses[i] = { model: `${modelUsed}${isFallback ? '（降级）' : ''}`, done: true, output: result.output };
+    } else {
+      statuses[i] = { model, done: true, error: ctrl.signal.aborted ? '已停止' : '无输出' };
+    }
+    streamQueue.enqueueStream(renderStatus());
+  });
+
+  try {
+    // Initial progress card so the user sees parallel execution start.
+    streamQueue.enqueueStream(renderStatus());
+    await Promise.all(runs);
+  } catch (e) {
+    logger.warn(`[InlineResult] Compare generation error: ${e}`);
+  }
+
+  const doneModels = statuses.filter((s) => s.output);
+  const failedModels = statuses.filter((s) => !s.output);
+
+  if (doneModels.length === 0) {
+    const wasStopped = ctrl.signal.aborted;
+    const failText = wasStopped
+      ? `**💬 提问：** ${displayPrompt}\n\n⏹ **已停止对比**\n任务被手动停止。`
+      : `**💬 提问：** ${displayPrompt}\n\n⚠️ **对比失败**\n所有模型均未返回有效输出，请重试。`;
+    await ctx.api.raw.editMessageText({
+      inline_message_id: inlineMessageId,
+      rich_message: { markdown: failText },
+    } as any).catch(() => {});
+    return;
+  }
+
+  // Build paginated comparison: one page per successfully answered model.
+  const header = `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n`;
+  const pages = doneModels.map((s, i) => {
+    const clean = stripWholeMessageCodeFence(s.output || '');
+    const num = ['①', '②', '③'][i] ?? `${i + 1}.`;
+    const modelLine = `**${num} ${s.model}**\n\n`;
+    const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
+    return `${header}${modelLine}${clean}${footer}`;
+  });
+  inlinePages.set(resultId, pages);
+  const pageCount = pages.length;
+
+  const allSucceeded = failedModels.length === 0;
+  const doneStr = doneModels.map((s) => s.model).join('、');
+  const failNote = failedModels.length > 0 ? `\n\n_⚠️ 生成失败：${failedModels.map((s) => s.model).join('、')}_` : '';
+
+  // First page + pagination keyboard + regenerate.
+  const footerText = `${allSucceeded ? '对比完成' : '部分完成'}：${doneStr}${failNote}`;
+  const firstPage = `${pages[0]}\n\n_${footerText}_`;
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        { text: '◀️ 上一页', callback_data: 'inline_noop' },
+        { text: `1/${pageCount}`, callback_data: 'inline_noop' },
+        { text: '下一页 ▶️', callback_data: `inline_page:${resultId}:1` },
+      ].filter((b) => b.text !== '◀️ 上一页'),
+      [{ text: '🔄 重新对比', callback_data: `inline_regenerate:${resultId}` }],
+    ],
+  };
+
+  regenerateContexts.set(resultId, {
+    prompt,
+    model: models[0],
+    projectPath,
+    fromId,
+    inlineMessageId,
+    task: 'compare',
+    createdAt: Date.now(),
+  });
+
+  const success = await streamQueue.flushFinal(firstPage, replyMarkup);
+  if (success) {
+    logger.info(`[InlineResult] Compare flushed ${doneModels.length}/${models.length} models: ${doneStr}`);
   }
 }
 
