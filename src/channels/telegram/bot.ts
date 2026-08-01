@@ -709,6 +709,17 @@ export class TelegramBot {
     //
     // After these guards, the message handler (setupMessageHandler) runs.
 
+    // RAW callback_query interceptor — fires BEFORE any middleware/auth.
+    // Used to diagnose whether Telegram delivers callbacks from non-started users.
+    this.bot.on('callback_query', async (ctx, next) => {
+      const cq = ctx.callbackQuery;
+      logger.info(
+        `[RAW_CALLBACK] userId=${ctx.from?.id} data="${cq.data ?? '(none)'}" ` +
+        `inline_message_id=${cq.inline_message_id ?? '(none)'} chat_instance=${cq.chat_instance}`
+      );
+      await next();
+    });
+
     // Diagnostic logging middleware to track update latency
     this.bot.use(async (ctx, next) => {
       const start = Date.now();

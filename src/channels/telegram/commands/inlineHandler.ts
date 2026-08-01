@@ -1438,13 +1438,15 @@ async function runInlineGeneration(
 
       if (cleanOutput.trim().length > 250) {
       if (cleanOutput.length > PAGE_THRESHOLD) {
-        // Long answer → paginate
+        // Long answer → paginate with collapsible fold
         const pages = splitIntoPages(cleanOutput);
         pageCount = pages.length;
-        const header = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**`;
+        const header = `**💬 问题：** ${displayPrompt}`;
         const pageItems: InlinePage[] = pages.map((page) => {
+          const summaryTitle = `💡 展开本页 AI 回答 (${modelUsed} · ${page.length} 字)`;
+          const details = `<details><summary>${summaryTitle}</summary>\n\n${page}\n\n</details>`;
           const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : '';
-          const fullMd = `${header}\n\n${page}${footer}`;
+          const fullMd = `${header}\n\n${details}${footer}`;
           const blocks = markdownToRichBlocks(fullMd);
           return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
         });
@@ -1462,8 +1464,11 @@ async function runInlineGeneration(
           ],
         };
       } else {
-        // Standard answer → direct display
-        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+        // Medium answer → single collapsible fold
+        const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
+        const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
+        isCollapsible = true;
+        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
         replyMarkup = {
           inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
         };
@@ -1475,6 +1480,7 @@ async function runInlineGeneration(
         inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
       };
     }
+
 
     logger.info(`[InlineResult] Submitting final flush edit: userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
 
@@ -1590,11 +1596,14 @@ async function runCompareGeneration(
     const clean = stripWholeMessageCodeFence(s.output || '');
     const num = ['①', '②', '③'][i] ?? `${i + 1}.`;
     const modelLine = `**${num} ${s.model}**\n\n`;
+    const summaryTitle = `💡 点击展开 ${s.model.split(' ')[0] || s.model} 的完整回答 (${s.model})`;
+    const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${clean}\n\n</details>`;
     const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
-    const fullMd = `${header}${modelLine}${clean}${footer}`;
+    const fullMd = `${header}${modelLine}${bodyMarkdown}${footer}`;
     const blocks = markdownToRichBlocks(fullMd);
     return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
   });
+
   setInlinePages(resultId, pageItems);
   const pageCount = pageItems.length;
 
