@@ -49,6 +49,14 @@ interface RegenerateContext {
 
 const regenerateContexts = new Map<string, RegenerateContext>();
 
+/** In-progress /v multi-model comparison state, keyed by resultId. */
+const compareContexts = new Map<string, CompareContext>();
+
+/** Check whether a resultId belongs to a multi-model comparison task. */
+export function isCompareInlineResult(resultId: string): boolean {
+  return compareContexts.has(resultId) || regenerateContexts.get(resultId)?.task === 'compare';
+}
+
 export interface InlinePage {
   markdown?: string;
   blocks?: RichBlock[];
@@ -59,8 +67,10 @@ const inlinePages = new Map<string, InlinePage[]>();
 
 /** Max models user can pick for a /v multi-model comparison. */
 export const MAX_COMPARE_MODELS = 3;
-/** Max candidate models offered for /v selection. */
-const MAX_COMPARE_CANDIDATES = 8;
+/** Max candidate models offered per page in the picker. */
+const COMPARE_MODELS_PER_PAGE = 4;
+/** Total candidate models offered for /v selection. */
+const MAX_COMPARE_CANDIDATES = 20;
 
 interface CompareContext {
   resultId: string;
@@ -70,16 +80,12 @@ interface CompareContext {
   projectPath?: string;
   /** Ordered candidate model list offered to the user. */
   candidates: string[];
+  /** Current page index (0-based) of candidate selection. */
+  currentPage: number;
   /** Indices into `candidates` that the user has selected so far. */
   selectedIdx: number[];
   createdAt: number;
 }
-
-/** In-progress /v multi-model comparison state, keyed by resultId. */
-const compareContexts = new Map<string, CompareContext>();
-
-/** Number of model comparisons offered per row in the picker keyboard. */
-const COMPARE_MODELS_PER_ROW = 2;
 
 const ACTION_TTL = 30 * 60_000;
 
@@ -538,21 +544,47 @@ function renderComparePicker(cmp: CompareContext): string {
 function buildCompareKeyboard(cmp: CompareContext): unknown {
   const rows: { text: string; callback_data: string }[][] = [];
   let row: { text: string; callback_data: string }[] = [];
-  cmp.candidates.forEach((model, idx) => {
-    if (cmp.selectedIdx.includes(idx)) return;
-    row.push({ text: model.length > 22 ? model.slice(0, 22) + '…' : model, callback_data: `inline_cmp_pick:${cmp.resultId}:${idx}` });
-    if (row.length >= COMPARE_MODELS_PER_ROW) {
+
+  // Compute page range
+  const startIdx = cmp.currentPage * COMPARE_MODELS_PER_PAGE;
+  const endIdx = Math.min(startIdx + COMPARE_MODELS_PER_PAGE, cmp.candidates.length);
+
+  // Add selected models display (compact, no buttons)
+  if (cmp.selectedIdx.length > 0) {
+    rows.push([{ text: `已选 ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}：${cmp.selectedIdx.map(i => cmp.candidates[i].slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
+  }
+
+  // Add candidate model buttons (page-based)
+  for (let i = startIdx; i < endIdx; i++) {
+    if (cmp.selectedIdx.includes(i)) continue;
+    const model = cmp.candidates[i];
+    const display = model.length > 20 ? model.slice(0, 20) + '…' : model;
+    row.push({ text: display, callback_data: `inline_cmp_pick:${cmp.resultId}:${i}` });
+    if (row.length >= 2) {
       rows.push(row);
       row = [];
     }
-  });
+  }
   if (row.length > 0) rows.push(row);
+
+  // Add navigation buttons (only if more pages available)
+  const hasNextPage = endIdx < cmp.candidates.length;
+  const hasPrevPage = cmp.currentPage > 0;
+
+  if (hasPrevPage) {
+    rows.push([{ text: '◀️ 上一页', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage - 1}` }]);
+  }
+
+  if (hasNextPage) {
+    rows.push([{ text: '下一页 ▶️', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage + 1}` }]);
+  }
+
+  // Add persistent actions (clear + start)
+  rows.push([{ text: '♻️ 清空选择', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
   if (cmp.selectedIdx.length >= 2) {
     rows.push([{ text: '🚀 开始对比', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
   }
-  if (cmp.selectedIdx.length > 0) {
-    rows.push([{ text: '♻️ 清空选择', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
-  }
+
   return { inline_keyboard: rows };
 }
 
@@ -606,6 +638,7 @@ export function registerInlineHandler(
           prompt: regen.prompt,
           projectPath: regen.projectPath,
           candidates,
+          currentPage: 0,
           selectedIdx: [],
           createdAt: Date.now(),
         };
@@ -732,6 +765,24 @@ export function registerInlineHandler(
       return;
     }
 
+    if (data.startsWith('inline_cmp_page:')) {
+      const [resultId, pageStr] = data.slice('inline_cmp_page:'.length).split(':');
+      const pageIdx = parseInt(pageStr, 10);
+      const cmp = compareContexts.get(resultId);
+      if (!cmp || Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= Math.ceil(cmp.candidates.length / COMPARE_MODELS_PER_PAGE)) {
+        await ctx.answerCallbackQuery({ text: '❌ 页码已过期。', show_alert: true }).catch(() => {});
+        return;
+      }
+      cmp.currentPage = pageIdx;
+      await ctx.answerCallbackQuery().catch(() => {});
+      await ctx.api.raw.editMessageText({
+        inline_message_id: inlineMessageId,
+        rich_message: { markdown: renderComparePicker(cmp) },
+        reply_markup: buildCompareKeyboard(cmp),
+      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare page edit failed: ${e}`));
+      return;
+    }
+
     if (data.startsWith('inline_cmp_start:')) {
       const resultId = data.slice('inline_cmp_start:'.length);
       const cmp = compareContexts.get(resultId);
@@ -739,7 +790,7 @@ export function registerInlineHandler(
         await ctx.answerCallbackQuery({ text: '❌ 至少选择 2 个模型才能对比。', show_alert: true }).catch(() => {});
         return;
       }
-      const models = cmp.selectedIdx.map((idx) => cmp.candidates[idx]);
+      const models = cmp.selectedIdx.map((idx: number) => cmp.candidates[idx]);
       await ctx.answerCallbackQuery({ text: '⚖️ 开始多模型对比…' }).catch(() => {});
       const ctrl = new AbortController();
       userControllers.set(resultId, ctrl);
@@ -900,6 +951,7 @@ export function registerInlineHandler(
         prompt,
         projectPath: targetProjectPath,
         candidates,
+        currentPage: 0,
         selectedIdx: [],
         createdAt: Date.now(),
       });
@@ -1375,8 +1427,10 @@ async function runCompareGeneration(
     const clean = stripWholeMessageCodeFence(s.output || '');
     const num = ['①', '②', '③'][i] ?? `${i + 1}.`;
     const modelLine = `**${num} ${s.model}**\n\n`;
+    const summaryTitle = `💡 点击展开 ${s.model.split(' ')[0] || s.model} 的完整回答 (${s.model})`;
+    const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${clean}\n\n</details>`;
     const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
-    const fullMd = `${header}${modelLine}${clean}${footer}`;
+    const fullMd = `${header}${modelLine}${bodyMarkdown}${footer}`;
     const blocks = markdownToRichBlocks(fullMd);
     return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
   });

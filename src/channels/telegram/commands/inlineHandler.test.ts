@@ -797,6 +797,171 @@ describe('registerInlineHandler', () => {
     });
   });
 
+  it('should render compare picker with pagination and dynamic buttons', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/v 对比一下方案' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+    const resultId = inlineCtx.answerInlineQuery.mock.calls[0][0][0].id;
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: resultId,
+        from: { id: 12345 },
+        query: '/v 对比一下方案',
+        inline_message_id: 'cmp_inline_msg',
+      },
+      api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+    await chosenInlineResultHandler!(mockChosenCtx);
+
+    // Initial page should show first 4 models
+    await vi.waitFor(() => {
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'cmp_inline_msg',
+          rich_message: expect.objectContaining({
+            markdown: expect.stringContaining('第 1/5 页'),
+          }),
+          reply_markup: expect.objectContaining({
+            inline_keyboard: expect.arrayContaining([
+              expect.arrayContaining([
+                expect.objectContaining({ text: expect.stringContaining('Gemini 3.6 Flash (High)') }),
+              ]),
+            ]),
+          }),
+        }),
+      );
+    });
+
+    // Grab the keyboard from initial page
+    const initialPage = mockChosenCtx.api.raw.editMessageText.mock.calls[0][0];
+    const initialButtons = initialPage.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
+    const pickButtons = initialButtons.filter((b) => b.callback_data.startsWith('inline_cmp_pick:'));
+
+    // Click pick button (should go to page 2)
+    const pickCtxBase = {
+      answerCallbackQuery: vi.fn().mockResolvedValue(true),
+      api: {
+        raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+      },
+      callbackQuery: { inline_message_id: 'cmp_inline_msg', data: '' },
+    };
+    await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: pickButtons[0].callback_data } });
+
+    // Page 2 should show different models
+    await vi.waitFor(() => {
+      expect(pickCtxBase.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'cmp_inline_msg',
+          rich_message: expect.objectContaining({
+            markdown: expect.stringContaining('第 2/5 页'),
+          }),
+        }),
+      );
+    });
+
+    // Pick page 2 keyboard should have prev button
+    const page2Page = pickCtxBase.api.raw.editMessageText.mock.calls[0][0];
+    const page2Buttons = page2Page.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
+    expect(page2Buttons.find((b) => b.text === '◀️ 上一页')).toBeDefined();
+    expect(page2Buttons.find((b) => b.text === '下一页 ▶️')).toBeDefined();
+
+    // Click previous page
+    await callbackQueryHandler!({
+      ...pickCtxBase,
+      callbackQuery: { ...pickCtxBase.callbackQuery, data: 'inline_cmp_page:' + resultId + ':0' },
+    });
+
+    // Back to page 1, no prev button
+    await vi.waitFor(() => {
+      const backPage = pickCtxBase.api.raw.editMessageText.mock.calls.slice(-1)[0][0];
+      const backButtons = backPage.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
+      expect(backButtons.find((b) => b.text === '◀️ 上一页')).toBeUndefined();
+      expect(backButtons.find((b) => b.text === '下一页 ▶️')).toBeDefined();
+    });
+  });
+
+  it('should allow selecting models across pages', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/v 对比一下方案' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+    const resultId = inlineCtx.answerInlineQuery.mock.calls[0][0][0].id;
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: resultId,
+        from: { id: 12345 },
+        query: '/v 对比一下方案',
+        inline_message_id: 'cmp_inline_msg',
+      },
+      api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+    await chosenInlineResultHandler!(mockChosenCtx);
+
+    // Pick button on page 1
+    const pickCtxBase = {
+      answerCallbackQuery: vi.fn().mockResolvedValue(true),
+      api: {
+        raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+      },
+      callbackQuery: { inline_message_id: 'cmp_inline_msg', data: '' },
+    };
+    await callbackQueryHandler!({
+      ...pickCtxBase,
+      callbackQuery: { ...pickCtxBase.callbackQuery, data: `inline_cmp_pick:${resultId}:0` },
+    });
+
+    // Select 2 models
+    await callbackQueryHandler!({
+      ...pickCtxBase,
+      callbackQuery: { ...pickCtxBase.callbackQuery, data: `inline_cmp_pick:${resultId}:1` },
+    });
+
+    // Go to page 2 and pick another model
+    await callbackQueryHandler!({
+      ...pickCtxBase,
+      callbackQuery: { ...pickCtxBase.callbackQuery, data: 'inline_cmp_page:' + resultId + ':1' },
+    });
+    await callbackQueryHandler!({
+      ...pickCtxBase,
+      callbackQuery: { ...pickCtxBase.callbackQuery, data: `inline_cmp_pick:${resultId}:4` },
+    });
+
+    // Start button should be available
+    await vi.waitFor(() => {
+      expect(pickCtxBase.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'cmp_inline_msg',
+          rich_message: expect.objectContaining({
+            markdown: expect.stringContaining('🚀 开始对比'),
+          }),
+        }),
+      );
+    });
+  });
+
   it('should mark /v as compare task with empty instruction', () => {
     const res = parseInlineModelAndPrompt('/v 这个方案如何', 'Gemini 3.6 Flash (Medium)');
     expect(res.task).toBe('compare');
@@ -943,4 +1108,3 @@ describe('registerInlineHandler', () => {
       );
     });
   });
-});
