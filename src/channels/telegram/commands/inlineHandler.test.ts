@@ -981,6 +981,13 @@ describe('registerInlineHandler', () => {
     });
   });
 
+  it('should parse multiple @family tags and filter candidates for /v @deepseek @pro', async () => {
+    const res = parseInlineModelAndPrompt('/v @deepseek @pro 对比这两个族系', 'Gemini 3.6 Flash (Medium)');
+    expect(res.task).toBe('compare');
+    expect(res.families).toEqual(['deepseek', 'pro']);
+    expect(res.prompt).toBe('对比这两个族系');
+  });
+
   it('should filter candidate models when /v @family search is used', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
