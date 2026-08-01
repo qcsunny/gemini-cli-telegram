@@ -794,9 +794,25 @@ export function registerInlineHandler(
     if (data.startsWith('inline_cmp_page:')) {
       const [resultId, pageStr] = data.slice('inline_cmp_page:'.length).split(':');
       const pageIdx = parseInt(pageStr, 10);
-      const cmp = compareContexts.get(resultId);
-      if (!cmp || Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= Math.ceil(cmp.candidates.length / COMPARE_MODELS_PER_PAGE)) {
-        await ctx.answerCallbackQuery({ text: '❌ 页码已过期。', show_alert: true }).catch(() => {});
+      let cmp = compareContexts.get(resultId);
+      // Auto-rebuild if bot restarted and context was lost in memory
+      if (!cmp) {
+        const candidates = getEffectiveModelOrder();
+        cmp = {
+          resultId,
+          inlineMessageId: inlineMessageId!,
+          fromId: ctx.from?.id ?? 0,
+          prompt: '',
+          projectPath: undefined,
+          candidates,
+          currentPage: 0,
+          selectedIdx: [],
+          createdAt: Date.now(),
+        };
+        compareContexts.set(resultId, cmp);
+      }
+      if (Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= Math.ceil(cmp.candidates.length / COMPARE_MODELS_PER_PAGE)) {
+        await ctx.answerCallbackQuery({ text: '❌ 页码超出范围。', show_alert: true }).catch(() => {});
         return;
       }
       cmp.currentPage = pageIdx;
@@ -811,16 +827,29 @@ export function registerInlineHandler(
 
     if (data.startsWith('inline_cmp_default:')) {
       const resultId = data.slice('inline_cmp_default:'.length);
-      const cmp = compareContexts.get(resultId);
+      let cmp = compareContexts.get(resultId);
+      // Auto-rebuild if bot restarted and context was lost in memory
       if (!cmp) {
-        await ctx.answerCallbackQuery({ text: '❌ 会话已过期。', show_alert: true }).catch(() => {});
-        return;
+        const candidates = getEffectiveModelOrder();
+        cmp = {
+          resultId,
+          inlineMessageId: inlineMessageId!,
+          fromId: ctx.from?.id ?? 0,
+          prompt: '',
+          projectPath: undefined,
+          candidates,
+          currentPage: 0,
+          selectedIdx: [],
+          createdAt: Date.now(),
+        };
+        compareContexts.set(resultId, cmp);
       }
-      cmp.selectedIdx = [0, 1, 2].filter(i => i < cmp.candidates.length);
-      if (cmp.selectedIdx.length < 2) {
-        cmp.selectedIdx = cmp.candidates.map((_, i) => i).slice(0, 3);
+      const activeCmp = cmp!;
+      activeCmp.selectedIdx = [0, 1, 2].filter(i => i < activeCmp.candidates.length);
+      if (activeCmp.selectedIdx.length < 2) {
+        activeCmp.selectedIdx = activeCmp.candidates.map((_, i) => i).slice(0, 3);
       }
-      const models = cmp.selectedIdx.map((idx: number) => cmp.candidates[idx]);
+      const models = activeCmp.selectedIdx.map((idx: number) => activeCmp.candidates[idx]);
       await ctx.answerCallbackQuery({ text: '🚀 开始默认顶级组对比…' }).catch(() => {});
       const ctrl = new AbortController();
       userControllers.set(resultId, ctrl);
@@ -829,9 +858,9 @@ export function registerInlineHandler(
         await runCompareGeneration(ctx, sessionManager, defaultOptions, {
           resultId,
           inlineMessageId,
-          fromId: cmp.fromId,
-          prompt: cmp.prompt,
-          projectPath: cmp.projectPath,
+          fromId: activeCmp.fromId,
+          prompt: activeCmp.prompt,
+          projectPath: activeCmp.projectPath,
           models,
           ctrl,
           streamQueue,
