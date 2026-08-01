@@ -844,12 +844,7 @@ describe('registerInlineHandler', () => {
       );
     });
 
-    // Grab the keyboard from initial page
-    const initialPage = mockChosenCtx.api.raw.editMessageText.mock.calls[0][0];
-    const initialButtons = initialPage.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
-    const pickButtons = initialButtons.filter((b) => b.callback_data.startsWith('inline_cmp_pick:'));
-
-    // Click pick button (should go to page 2)
+    // Click page 2 button
     const pickCtxBase = {
       answerCallbackQuery: vi.fn().mockResolvedValue(true),
       api: {
