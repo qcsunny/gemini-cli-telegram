@@ -670,7 +670,7 @@ export function registerInlineHandler(
     // Store prompt info (no model startup — zero latency)
     logger.info(`[InlineQuery] userId=${fromId} model=${modelToUse} task=${task || 'chat'} project="${projectUsed?.name || 'default'}" prompt="${prompt.slice(0, 40)}..."`);
 
-    // Model suggestion cards: when a family alias (@flash/@deep/@pro/...) was
+    // Model suggestion cards: when a family keyword (@think/@flash/...) was
     // given, list every model in that family so the user can pick one from the
     // floating cards. Otherwise fuzzy-match the query against all models; if no
     // keyword matches, fall back to the fixed popular suggestions.
@@ -692,11 +692,13 @@ export function registerInlineHandler(
       if (!family) suggestionCandidates = suggestionCandidates.slice(0, MAX_MODEL_SUGGESTIONS);
     }
 
-    // When a family alias is used, the primary card defaults to the best model
-    // in that family (first in effective order).
-    const primaryModel = family && suggestionCandidates.length > 0 ? suggestionCandidates[0] : modelToUse;
+    // Family mode: show ONLY one card per matching model (no primary/ask card).
+    // The user picks a card and that model answers the prompt directly.
+    const familyMode = !!family && suggestionCandidates.length > 0;
     const resultId = `ai-${Date.now()}-${fromId}`;
-    pendingResults.set(resultId, { prompt, model: primaryModel, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now() });
+    if (!familyMode) {
+      pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now() });
+    }
 
     try {
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
@@ -707,24 +709,57 @@ export function registerInlineHandler(
         : task === 'fix' ? '🛠️ **修复模式**'
         : task === 'code' ? '💻 **代码模式**'
         : undefined;
+
+      if (familyMode) {
+        const now = Date.now();
+        const results = suggestionCandidates.map((candidateModel, idx) => {
+          const candidateId = `m-${now}-${idx}`;
+          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now });
+          return {
+            type: 'article' as const,
+            id: candidateId,
+            title: `🧠 ${candidateModel}`,
+            description: `点击后用 ${candidateModel} 回答`,
+            thumbnail_url: THUMBNAILS.sparkles,
+            input_message_content: {
+              rich_message: {
+                markdown: `${taskLabel ? taskLabel + '\n\n' : ''}**🧠 目标模型：** \`${candidateModel}\`\n\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`,
+              },
+            } as any,
+            // An inline keyboard is REQUIRED for Telegram to return
+            // inline_message_id on chosen_inline_result, which is the handle used
+            // to stream/update the message in-place (BUGFIX: removed 1056263).
+            reply_markup: {
+              inline_keyboard: [[
+                { text: `${ICONS.loading} 生成中...`, callback_data: 'inline_thinking' }
+              ]],
+            },
+          };
+        });
+
+        logger.info(`[InlineQuery] Family mode "${family}": sending ${results.length} model card(s) ids=${results.map((r) => r.id).join(',')}`);
+        await ctx.answerInlineQuery(results, { cache_time: 0 });
+        return;
+      }
+
       const initTitle = task === 'image'
-        ? `🖼️ 点击生成图片 [${primaryModel}]`
-        : task === 'translate' ? `🌐 点击翻译 [${primaryModel}]`
-        : task === 'summarize' ? `📋 点击总结 [${primaryModel}]`
-        : task === 'fix' ? `🛠️ 点击修复 [${primaryModel}]`
-        : task === 'code' ? `💻 点击生成代码 [${primaryModel}]`
-        : `🤔 点击发送并开始思考 [${primaryModel}]`;
+        ? `🖼️ 点击生成图片 [${modelToUse}]`
+        : task === 'translate' ? `🌐 点击翻译 [${modelToUse}]`
+        : task === 'summarize' ? `📋 点击总结 [${modelToUse}]`
+        : task === 'fix' ? `🛠️ 点击修复 [${modelToUse}]`
+        : task === 'code' ? `💻 点击生成代码 [${modelToUse}]`
+        : `🤔 点击发送并开始思考 [${modelToUse}]`;
       let initMarkdown: string;
       if (task === 'image') {
         initMarkdown = `**🎨 图像生成模式**\n\n**💬 提示词：**\n> ${displayPrompt}\n\n*🚀 正在生成图片，完成后将自动原地更新。*`;
       } else {
-        const modelLine = `**🧠 目标模型：** \`${primaryModel}\`\n`;
+        const modelLine = `**🧠 目标模型：** \`${modelToUse}\`\n`;
         initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI 推理引擎已启动**\n\n${modelLine}**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`;
       }
 
       const suggestionCards: any[] = [];
       {
-        const candidates = suggestionCandidates.filter((m) => m !== primaryModel);
+        const candidates = suggestionCandidates.filter((m) => m !== modelToUse);
         const now = Date.now();
         candidates.forEach((candidateModel, idx) => {
           const candidateId = `m-${now}-${idx}`;
@@ -773,18 +808,19 @@ export function registerInlineHandler(
         {
           type: 'article' as const,
           id: `prompt-${Date.now()}`,
-          title: `💬 发送提问卡片 (${family ? '@' + family : '默认模型'})`,
-          description: `模型: ${primaryModel} | "${prompt.slice(0, 40)}..."`,
+          title: `💬 发送提问卡片 (默认模型)`,
+          description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
           thumbnail_url: THUMBNAILS.chat,
           input_message_content: {
             rich_message: {
-              markdown: `**💬 AI 提问卡片**\n\n**模型：** \`${primaryModel}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`,
+              markdown: `**💬 AI 提问卡片**\n\n**模型：** \`${modelToUse}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`,
             },
           } as any,
         },
         ...suggestionCards,
       ];
 
+      logger.info(`[InlineQuery] Sending ${results.length} result(s) family="${family || ''}" primary="${modelToUse}" suggestions=${suggestionCandidates.length} ids=${results.map((r) => (r as any).id).join(',')}`);
       await ctx.answerInlineQuery(results, { cache_time: 0 });
     } catch (e) {
       logger.error(`Error answering inline query: ${e}`);
