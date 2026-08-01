@@ -7,13 +7,13 @@ import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir } from '../../../config/userConfig.js';
-import { formatTokenCount, findSafeCutPoint } from '../formatter/core.js';
+import { findSafeCutPoint } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
-import { calculateCost } from '../../../utils/pricing.js';
+import { formatFooterMarker, type TokenUsage } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
 
 export interface InlineHandlerOptions {
@@ -196,6 +196,7 @@ export class InlineStreamQueue {
   private queue: Promise<void> = Promise.resolve();
   private pendingMarkdown: string | null = null;
   private pendingReplyMarkup: unknown = null;
+  private pendingBlocks: RichBlock[] | null = null;
   private isProcessing = false;
   private nextAllowedTime = 0;
   private currentThrottleMs = 500; // Start with fast 500ms adaptive throttle for smooth typing
@@ -222,10 +223,12 @@ export class InlineStreamQueue {
   /**
    * Push final completion markdown and flush until success with 429 backoff retry.
    * @param replyMarkup optional inline keyboard attached to the final edit (e.g. regenerate / pagination buttons).
+   * @param blocks optional native 10.2 blocks for rich message rendering.
    */
-  public async flushFinal(markdown: string, replyMarkup?: unknown): Promise<boolean> {
+  public async flushFinal(markdown: string, replyMarkup?: unknown, blocks?: RichBlock[]): Promise<boolean> {
     this.pendingMarkdown = markdown;
     if (replyMarkup !== undefined) this.pendingReplyMarkup = replyMarkup;
+    if (blocks !== undefined) this.pendingBlocks = blocks;
     return new Promise<boolean>((resolve) => {
       this.queue = this.queue.then(async () => {
         const success = await this.executeEdit(true);
@@ -233,6 +236,7 @@ export class InlineStreamQueue {
       });
     });
   }
+
 
   private scheduleProcess(): void {
     if (this.isProcessing) return;
@@ -280,9 +284,9 @@ export class InlineStreamQueue {
       try {
         const editPayload: Record<string, unknown> = {
           inline_message_id: this.inlineMessageId,
-          rich_message: {
-            markdown: targetMarkdown,
-          },
+          rich_message: this.pendingBlocks && this.pendingBlocks.length > 0
+            ? { blocks: this.pendingBlocks }
+            : { markdown: targetMarkdown },
         };
         if (this.pendingReplyMarkup !== null) {
           editPayload['reply_markup'] = this.pendingReplyMarkup;
@@ -293,11 +297,13 @@ export class InlineStreamQueue {
         this.lastSentLen = targetMarkdown.length;
         if (targetMarkdown === this.pendingMarkdown) {
           this.pendingMarkdown = null;
+          this.pendingBlocks = null;
         }
 
         // Gradually recover throttle window towards minThrottleMs on clean success
         this.currentThrottleMs = Math.max(this.minThrottleMs, Math.floor(this.currentThrottleMs * 0.85));
         return true;
+
       } catch (err: any) {
         const errMsg = err?.message || String(err);
         const match429 = errMsg.match(/retry after (\d+)/i);
@@ -1405,38 +1411,26 @@ async function runInlineGeneration(
   if (result?.output) {
     const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
 
-    let footerParts: string[] = [];
-    footerParts.push(`⏱️ ${((result.durationMs || 1000) / 1000).toFixed(1)}s`);
-    if (result.usage) {
-      const inCount = result.usage.input || 0;
-      const outCount = result.usage.output || 0;
-      const cachedCount = result.usage.cached || 0;
-      const thinkingCount = result.usage.thinking || 0;
-      if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}`);
-      if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}`);
-      const totalTokens = inCount + outCount;
-      if (totalTokens > 0) {
-        let tokenStr = `🪙 ${formatTokenCount(totalTokens)} tokens`;
-        const { totalCost, currency } = calculateCost(modelUsed, inCount, outCount, cachedCount, thinkingCount);
-        if (totalCost > 0) {
-          const sym = currency === 'CNY' ? '¥' : '$';
-          const costStr = totalCost < 0.0001 ? '<0.0001' : totalCost.toFixed(5);
-          tokenStr += ` (${sym}${costStr})`;
-        }
-        footerParts.push(tokenStr);
-      }
-    }
-    const footerText = footerParts.join(' · ');
-
     const cleanOutput = stripWholeMessageCodeFence(result.output);
     const rawOutputLen = cleanOutput.length;
+    const timeStr = result.durationMs ? `${(result.durationMs / 1000).toFixed(1)}s` : '';
+    const modelWithTime = modelUsed + (timeStr ? ` · ${timeStr}` : '') + (isFallback ? ' (已自动降级)' : '');
+
+    // Use formatFooterMarker to generate native tg://btn_info_footer anchor string
+    const footerMarker = formatFooterMarker(
+      modelWithTime,
+      prompt,
+      cleanOutput,
+      result.usage ?? undefined
+    );
 
     let fullMarkdown: string;
     let replyMarkup: unknown;
     let isCollapsible = false;
     let pageCount = 1;
+    let finalBlocks: RichBlock[] | undefined = undefined;
 
-      if (cleanOutput.trim().length > 250) {
+    if (cleanOutput.trim().length > 250) {
       if (cleanOutput.length > PAGE_THRESHOLD) {
         // Long answer → paginate with collapsible fold
         const pages = splitIntoPages(cleanOutput);
@@ -1445,18 +1439,25 @@ async function runInlineGeneration(
         const pageItems: InlinePage[] = pages.map((page) => {
           const summaryTitle = `💡 展开本页 AI 回答 (${modelUsed} · ${page.length} 字)`;
           const details = `<details><summary>${summaryTitle}</summary>\n\n${page}\n\n</details>`;
-          const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : '';
-          const fullMd = `${header}\n\n${details}${footer}`;
+          const pageFooterMarker = formatFooterMarker(
+            modelWithTime,
+            prompt,
+            page,
+            result.usage ?? undefined
+          );
+          const fullMd = `${header}\n\n${details}\n\n${pageFooterMarker}`;
           const blocks = markdownToRichBlocks(fullMd);
           return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
         });
         setInlinePages(resultId, pageItems);
         fullMarkdown = pageItems[0].markdown || '';
+        finalBlocks = pageItems[0].blocks;
         const baseButtons: { text: string; callback_data: string }[] = [
           { text: '◀️ 上一页', callback_data: 'inline_noop' },
           { text: `1/${pageCount}`, callback_data: 'inline_noop' },
           { text: '下一页 ▶️', callback_data: `inline_page:${resultId}:1` },
         ];
+
         replyMarkup = {
           inline_keyboard: [
             baseButtons.filter((b) => !(b.text === '◀️ 上一页')),
@@ -1468,23 +1469,26 @@ async function runInlineGeneration(
         const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
         const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
         isCollapsible = true;
-        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}\n\n${footerMarker}`;
+        const blocks = markdownToRichBlocks(fullMarkdown);
+        finalBlocks = blocks.length > 0 ? blocks : undefined;
         replyMarkup = {
           inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
         };
       }
     } else {
       // Short answer → plain text
-      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${isFallback ? ' · 已自动降级' : ''})：**\n\n${cleanOutput}\n\n${footerMarker}`;
+      const blocks = markdownToRichBlocks(fullMarkdown);
+      finalBlocks = blocks.length > 0 ? blocks : undefined;
       replyMarkup = {
         inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
       };
     }
 
-
     logger.info(`[InlineResult] Submitting final flush edit: userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
 
-    const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup);
+    const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup, finalBlocks);
     if (success) {
       logger.info(`[InlineResult] Successfully flushed final inline message: inline_message_id=${inlineMessageId} userId=${fromId}`);
     }
@@ -1528,7 +1532,13 @@ async function runCompareGeneration(
   const { resultId, inlineMessageId, fromId, prompt, projectPath, models, ctrl, streamQueue } = gctx;
   const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
 
-  const statuses: { model: string; done: boolean; output?: string; error?: string }[] = models.map((m) => ({ model: m, done: false }));
+  const statuses: {
+    model: string;
+    done: boolean;
+    output?: string;
+    error?: string;
+    usage?: TokenUsage;
+  }[] = models.map((m) => ({ model: m, done: false }));
   let startedAt = Date.now();
 
   const renderStatus = (): string => {
@@ -1548,7 +1558,6 @@ async function runCompareGeneration(
     const onChunk = (chunk: string) => {
       out += chunk;
       touchPendingResult(resultId);
-      // Update the progress card only when a model finishes (set in onModelStart? no — use this flag).
       void out;
     };
     const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
@@ -1560,7 +1569,12 @@ async function runCompareGeneration(
       onChunk,
     );
     if (result?.output) {
-      statuses[i] = { model: `${modelUsed}${isFallback ? '（降级）' : ''}`, done: true, output: result.output };
+      statuses[i] = {
+        model: `${modelUsed}${isFallback ? '（降级）' : ''}`,
+        done: true,
+        output: result.output,
+        usage: result.usage ?? undefined,
+      };
     } else {
       statuses[i] = { model, done: true, error: ctrl.signal.aborted ? '已停止' : '无输出' };
     }
@@ -1598,8 +1612,13 @@ async function runCompareGeneration(
     const modelLine = `**${num} ${s.model}**\n\n`;
     const summaryTitle = `💡 点击展开 ${s.model.split(' ')[0] || s.model} 的完整回答 (${s.model})`;
     const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${clean}\n\n</details>`;
-    const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
-    const fullMd = `${header}${modelLine}${bodyMarkdown}${footer}`;
+    const footerMarker = formatFooterMarker(
+      s.model,
+      prompt,
+      clean,
+      s.usage
+    );
+    const fullMd = `${header}${modelLine}${bodyMarkdown}\n\n${footerMarker}`;
     const blocks = markdownToRichBlocks(fullMd);
     return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
   });
@@ -1635,7 +1654,7 @@ async function runCompareGeneration(
     createdAt: Date.now(),
   });
 
-  const success = await streamQueue.flushFinal(firstPage, replyMarkup);
+  const success = await streamQueue.flushFinal(firstPage, replyMarkup, pageItems[0].blocks);
   if (success) {
     logger.info(`[InlineResult] Compare flushed ${doneModels.length}/${models.length} models: ${doneStr}`);
   }

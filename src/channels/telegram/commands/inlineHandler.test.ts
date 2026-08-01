@@ -1144,7 +1144,7 @@ describe('registerInlineHandler', () => {
       expect(pickCtxBase.api.raw.editMessageText).toHaveBeenCalledWith(
         expect.objectContaining({
           rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('⚖️ 多模型对比'),
+            blocks: expect.any(Array),
           }),
           reply_markup: expect.objectContaining({
             inline_keyboard: expect.arrayContaining([
