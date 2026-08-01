@@ -105,6 +105,8 @@ export class InlineStreamQueue {
   constructor(
     private api: any,
     private inlineMessageId: string,
+    /** Time scaling factor for backoff/throttle waits. Tests inject a tiny value. */
+    private waitScale = 1,
   ) {}
 
   /**
@@ -149,7 +151,7 @@ export class InlineStreamQueue {
     const textDelta = Math.abs(this.pendingMarkdown.length - this.lastSentLen);
     if (now < this.nextAllowedTime || (now - this.lastEditTime < this.currentThrottleMs && textDelta < 15)) {
       const waitMs = Math.max(50, Math.min(this.currentThrottleMs, this.nextAllowedTime - now));
-      await new Promise((r) => setTimeout(r, waitMs));
+      await new Promise((r) => setTimeout(r, waitMs * this.waitScale));
       if (this.pendingMarkdown && Math.abs(this.pendingMarkdown.length - this.lastSentLen) >= 5) {
         await this.executeEdit(false);
       }
@@ -170,7 +172,7 @@ export class InlineStreamQueue {
       attempts++;
       const now = Date.now();
       if (now < this.nextAllowedTime) {
-        await new Promise((r) => setTimeout(r, this.nextAllowedTime - now));
+        await new Promise((r) => setTimeout(r, (this.nextAllowedTime - now) * this.waitScale));
       }
 
       try {
@@ -200,7 +202,7 @@ export class InlineStreamQueue {
 
         if (match429) {
           const retrySec = parseInt(match429[1], 10);
-          const backoffMs = (retrySec + 1) * 1000;
+          const backoffMs = (retrySec + 1) * 1000 * this.waitScale;
           this.nextAllowedTime = Date.now() + backoffMs;
 
           // Adaptively expand throttle window when 429 occurs

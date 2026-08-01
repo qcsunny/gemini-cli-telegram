@@ -51,7 +51,7 @@ function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming
 const draftThrottleTimestamps = new Map<number, number>();
 const DRAFT_THROTTLE_MS = 250;
 
-async function throttleDraft(chatId: number): Promise<void> {
+async function throttleDraft(chatId: number, draftThrottleMs: number): Promise<void> {
   const now = Date.now();
   const backoffUntil = draftBackoffUntil.get(chatId) ?? 0;
   if (now < backoffUntil) {
@@ -61,8 +61,8 @@ async function throttleDraft(chatId: number): Promise<void> {
   } else {
     const last = draftThrottleTimestamps.get(chatId) ?? 0;
     const elapsed = now - last;
-    if (elapsed < DRAFT_THROTTLE_MS) {
-      await new Promise(r => setTimeout(r, DRAFT_THROTTLE_MS - elapsed));
+    if (elapsed < draftThrottleMs) {
+      await new Promise(r => setTimeout(r, draftThrottleMs - elapsed));
     }
   }
   draftThrottleTimestamps.set(chatId, Date.now());
@@ -247,8 +247,10 @@ export function buildChannelReply(
   parseMode: 'HTML' | 'MarkdownV2' | 'RichText' = 'RichText',
   session?: DaemonSession,
   replyToMessageId?: number,
+  options?: { draftThrottleMs?: number },
 ): ChannelReply {
   const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
+  const draftThrottleMs = options?.draftThrottleMs ?? DRAFT_THROTTLE_MS;
   let localDraftsDisabled = false;
   let localConsecutiveDraftFailures = 0;
 
@@ -472,7 +474,7 @@ export function buildChannelReply(
       const cacheMarkdown = getCacheMarkdown(originalText);
 
       // Throttle to avoid 429 on rapid stream updates
-      await throttleDraft(chatId);
+      await throttleDraft(chatId, draftThrottleMs);
 
       // Option A (10.2): Native structured blocks with native `thinking` placeholder
       // while streaming (draft-only). Body blocks are streamed once content arrives.
@@ -543,7 +545,7 @@ export function buildChannelReply(
       const cacheMarkdown = getCacheMarkdown(originalText);
 
       // Throttle to avoid 429 on rapid stream updates
-      await throttleDraft(chatId);
+      await throttleDraft(chatId, draftThrottleMs);
 
       // Try Option A (10.2): Native editRichMessage / editMessageText for visible message bubbles
       try {
@@ -631,7 +633,7 @@ export function buildChannelReply(
         draftIds.set(chatId, targetDraftId);
 
         // Throttle draft calls
-        await throttleDraft(chatId);
+        await throttleDraft(chatId, draftThrottleMs);
 
         if (!validateBlocksPayload(blocks)) {
           logger.warn(`[BLOCK VALIDATION] sendRichDraftBlocks payload failed validation`);
