@@ -35,8 +35,14 @@ const level = process.env['LOG_LEVEL'] || 'info';
  * (userConfig → logger → userConfig would cause CONFIG_DIR to be undefined).
  */
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-export const ERROR_LOG_PATH = path.join(PROJECT_ROOT, 'error.log');
-export const DAEMON_LOG_PATH = path.join(PROJECT_ROOT, 'daemon.log');
+
+/**
+ * Log paths. Overridable via env vars so tests never touch the live daemon
+ * logs (deleting a real log file while the daemon holds an fd on it silently
+ * orphans the daemon's writes to a deleted inode).
+ */
+export const ERROR_LOG_PATH = process.env['TEST_ERROR_LOG_PATH'] || path.join(PROJECT_ROOT, 'error.log');
+export const DAEMON_LOG_PATH = process.env['TEST_DAEMON_LOG_PATH'] || path.join(PROJECT_ROOT, 'daemon.log');
 
 /**
  * Simple stream wrapper: only passes info(30) and warn(40) to destination, skips error(50+).

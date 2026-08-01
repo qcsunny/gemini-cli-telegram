@@ -52,19 +52,23 @@ vi.mock('./agy/messageStore.js', () => ({
   getHistory: vi.fn((_map: Map<string, any[]>) => []),
 }));
 
-vi.mock('./config/userConfig.js', () => ({
-  loadUserConfig: vi.fn(() => ({ deepseekApiKey: 'test-key' })),
-  getTuningConfig: vi.fn(() => ({
-    debounceIntervalMs: 0,
-    maxHistoryMessages: 20,
-    cacheTtlMs: 60_000,
-    cacheMaxSize: 100,
-    retriesPerModel: 3,
-    modelRunHardTimeoutMs: 900_000,
-    modelRunInactivityMs: 600_000,
-  })),
-  getBackendUrl: vi.fn(() => 'http://localhost:12345'),
-}));
+vi.mock('./config/userConfig.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./config/userConfig.js')>();
+  return {
+    ...mod,
+    loadUserConfig: vi.fn(() => ({ deepseekApiKey: 'test-key' })),
+    getTuningConfig: vi.fn(() => ({
+      debounceIntervalMs: 0,
+      maxHistoryMessages: 20,
+      cacheTtlMs: 60_000,
+      cacheMaxSize: 100,
+      retriesPerModel: 3,
+      modelRunHardTimeoutMs: 900_000,
+      modelRunInactivityMs: 600_000,
+    })),
+    getBackendUrl: vi.fn(() => 'http://localhost:12345'),
+  };
+});
 
 vi.mock('./core/backendHealth.js', () => ({
   isBackendAvailable: vi.fn(() => true),

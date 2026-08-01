@@ -109,6 +109,18 @@ describe('parseInlineModelAndPrompt', () => {
     expect(res.projectUsed).toBeUndefined();
     expect(res.prompt).toBe('怎么写算法');
   });
+
+  it('should parse /pdf as pdf task', () => {
+    const res = parseInlineModelAndPrompt('/pdf 这份文档讲了什么', 'Gemini 3.5 Flash');
+    expect(res.task).toBe('pdf');
+    expect(res.prompt).toBe('这份文档讲了什么');
+  });
+
+  it('should allow empty prompt for /pdf (default to summary)', () => {
+    const res = parseInlineModelAndPrompt('/pdf', 'Gemini 3.5 Flash');
+    expect(res.task).toBe('pdf');
+    expect(res.prompt).toBe('');
+  });
 });
 
 describe('fuzzyMatchModels', () => {
@@ -282,7 +294,106 @@ describe('registerInlineHandler', () => {
     );
   });
 
-  it('should edit placeholder with AI answer when inline result is chosen', async () => {
+  it('should use a stop button on the initial placeholder card', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '什么是量子计算？' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResult = callArg.find((r: any) => r.id.startsWith('ai-'));
+    expect(aiResult.reply_markup.inline_keyboard[0][0]).toEqual({
+      text: '⏹ 停止',
+      callback_data: `inline_stop:${aiResult.id}`,
+    });
+  });
+
+  it('should abort the running controller on inline_stop callback', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    // Hold the generation open so the controller stays registered when we
+    // press the stop button (the default mock resolves synchronously).
+    let releaseGeneration!: () => void;
+    const generationGate = new Promise<void>((resolve) => { releaseGeneration = resolve; });
+    const originalImpl = (runAgyPrint as any).getMockImplementation();
+    (runAgyPrint as any).mockImplementation(async (opts: any) => {
+      if (opts?.onChunk) opts.onChunk('流式内容');
+      await generationGate;
+      if (opts?.signal?.aborted) {
+        const err: any = new Error('Aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      return { output: '这是最终回答。' };
+    });
+
+    try {
+      const inlineCtx = {
+        from: { id: 12345 },
+        inlineQuery: { query: '什么是量子计算？' },
+        answerInlineQuery: vi.fn().mockResolvedValue(true),
+      };
+      await inlineQueryHandler!(inlineCtx);
+
+      const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+      const aiResultId = callArg.find((r: any) => r.id.startsWith('ai-')).id;
+
+      const mockChosenCtx = {
+        me: { username: 'testbot' },
+        chosenInlineResult: {
+          result_id: aiResultId,
+          from: { id: 12345 },
+          query: '什么是量子计算？',
+          inline_message_id: 'test_inline_msg_id_123',
+        },
+        api: {
+          raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+        },
+      };
+      const chosenPromise = chosenInlineResultHandler!(mockChosenCtx);
+      await vi.waitFor(() => {
+        expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalled();
+      });
+
+      const stopCtx = {
+        callbackQuery: {
+          data: `inline_stop:${aiResultId}`,
+          inline_message_id: 'test_inline_msg_id_123',
+        },
+        answerCallbackQuery: vi.fn().mockResolvedValue(true),
+        api: {
+          raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+        },
+      };
+
+      await callbackQueryHandler!(stopCtx);
+
+      // Release the gate so the aborted generation can finish unwinding.
+      releaseGeneration();
+      await chosenPromise;
+
+      expect(stopCtx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('停止') }),
+      );
+      // The stopped generation edits its own message (via the chosen ctx).
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'test_inline_msg_id_123',
+          text: expect.stringContaining('已停止生成'),
+        }),
+      );
+    } finally {
+      (runAgyPrint as any).mockImplementation(originalImpl);
+      releaseGeneration();
+    }
+  });
+
+  it('should handle regenerate callback and re-run answer', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
     // Trigger inline query first to populate pendingResults
@@ -544,6 +655,58 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({ model: chosenModel }),
       );
     });
+  });
+
+  it('should allow two model cards to run concurrently with independent results', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+    (runAgyPrint as any).mockClear();
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '@think 分析一下' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const mCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    const cardA = mCards[0];
+    const cardB = mCards[1];
+
+    const chosenFor = (resultId: string, inlineMessageId: string) => ({
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: resultId,
+        from: { id: 12345 },
+        query: '@think 分析一下',
+        inline_message_id: inlineMessageId,
+      },
+      api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
+        raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+      },
+    });
+
+    // Choose both cards without awaiting: they must run in parallel.
+    const ctxA = chosenFor(cardA.id, 'inline_msg_A');
+    const ctxB = chosenFor(cardB.id, 'inline_msg_B');
+    const pA = chosenInlineResultHandler!(ctxA);
+    const pB = chosenInlineResultHandler!(ctxB);
+    await Promise.all([pA, pB]);
+
+    await vi.waitFor(() => {
+      expect(runAgyPrint).toHaveBeenCalledTimes(2);
+    });
+
+    const modelA = cardA.title.replace('🧠 ', '');
+    const modelB = cardB.title.replace('🧠 ', '');
+    const calls = (runAgyPrint as any).mock.calls.map((c: any[]) => c[0].model);
+    expect(calls).toContain(modelA);
+    expect(calls).toContain(modelB);
+
+    // Each card edited its own inline message.
+    expect(ctxA.api.raw.editMessageText).toHaveBeenCalled();
+    expect(ctxB.api.raw.editMessageText).toHaveBeenCalled();
   });
 
   it('should not append suggestion cards for image task', async () => {
