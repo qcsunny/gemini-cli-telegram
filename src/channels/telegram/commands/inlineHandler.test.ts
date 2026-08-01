@@ -251,7 +251,7 @@ describe('registerInlineHandler', () => {
 
     const mockCtx = {
       from: { id: 12345 },
-      inlineQuery: { query: '@flash 什么是量子计算？' },
+      inlineQuery: { query: '什么是量子计算？' },
       answerInlineQuery: vi.fn().mockResolvedValue(true),
     };
 
@@ -443,7 +443,7 @@ describe('registerInlineHandler', () => {
     expect(suggestionCards[0].reply_markup.inline_keyboard).toBeDefined();
   });
 
-  it('should list all family models when @flash family alias is used', async () => {
+  it('should list all family models as m-cards (no primary/ai card) when @flash family keyword is used', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
     const mockCtx = {
@@ -455,12 +455,12 @@ describe('registerInlineHandler', () => {
     await inlineQueryHandler!(mockCtx);
 
     const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
-    const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
-    expect(suggestionCards.length).toBeGreaterThan(0);
-    // All flash-family models share the "flash" keyword (channel prefix stripped).
-    const primaryCard = callArg.find((r: any) => r.id.startsWith('ai-'));
-    expect(primaryCard.title).toContain('Flash');
-    for (const card of suggestionCards) {
+    // Family mode: ONLY m- model cards, no ai- primary card, no prompt- card.
+    const modelCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    expect(modelCards.length).toBeGreaterThan(0);
+    expect(callArg.filter((r: any) => r.id.startsWith('ai-'))).toHaveLength(0);
+    expect(callArg.filter((r: any) => r.id.startsWith('prompt-'))).toHaveLength(0);
+    for (const card of modelCards) {
       expect(card.title).toMatch(/Flash|flash/i);
     }
   });
@@ -501,6 +501,46 @@ describe('registerInlineHandler', () => {
     for (const card of suggestionCards) {
       expect(card.title).toMatch(/Thinking|thinking/i);
     }
+  });
+
+  it('should run with the selected family model when an m-card is chosen', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '@think 分析一下' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const mCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    const chosenModel = mCards[1].title.replace('🧠 ', '');
+    const mResultId = mCards[1].id;
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: mResultId,
+        from: { id: 12345 },
+        query: '@think 分析一下',
+        inline_message_id: 'test_inline_msg_id_456',
+      },
+      api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+
+    await chosenInlineResultHandler!(mockChosenCtx);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    // runAgyPrint must have been called with the model from the chosen card.
+    expect(runAgyPrint).toHaveBeenCalledWith(
+      expect.objectContaining({ model: chosenModel }),
+    );
   });
 
   it('should not append suggestion cards for image task', async () => {
