@@ -15,6 +15,8 @@ import {
   parseInlineModelAndPrompt,
   runModelWithFallbackChain,
   findNewImageArtifacts,
+  IMAGE_TASK_INSTRUCTION,
+  MAX_COLLAGE_IMAGES,
 } from './inlineHandler.js';
 
 const IMG_RE = /^\s*\/img(?:@\w+)?(?:\s+(.*))?$/s;
@@ -56,6 +58,7 @@ export async function handlePrivateImageRequest(
 
   const parsed = parseInlineModelAndPrompt(rawPrompt, defaultModel, availableProjects);
   const targetProjectPath = parsed.projectUsed?.path ?? session?.currentProject?.path ?? defaultOptions.cwd;
+  const imagePrompt = `${IMAGE_TASK_INSTRUCTION}${parsed.prompt}`;
 
   logger.info(`[PrivateImage] chatId=${chatId} model=${parsed.model} prompt="${parsed.prompt.slice(0, 40)}..." project="${parsed.projectUsed?.name || 'default'}"`);
 
@@ -63,7 +66,7 @@ export async function handlePrivateImageRequest(
 
   try {
     const { result, modelUsed } = await runModelWithFallbackChain(
-      parsed.prompt,
+      imagePrompt,
       parsed.model,
       defaultOptions,
       undefined,
@@ -82,17 +85,30 @@ export async function handlePrivateImageRequest(
       return true;
     }
 
-    const imagePath = images[images.length - 1];
+    // Chunk into collages of MAX_COLLAGE_IMAGES so more than 10 photos still
+    // render (each chunk becomes its own <tg-collage> block in one message).
+    const chunks: string[][] = [];
+    for (let i = 0; i < images.length; i += MAX_COLLAGE_IMAGES) {
+      chunks.push(images.slice(i, i + MAX_COLLAGE_IMAGES));
+    }
     const displayPrompt = parsed.prompt.length > 300 ? parsed.prompt.slice(0, 300) + '...' : parsed.prompt;
-    const caption = `**🎨 图片生成完成**\n\n**💬 提示词：** ${displayPrompt}\n\n_模型: ${modelUsed}_`;
-    const mediaId = `img${Date.now().toString(36)}`;
-    const markdown = `![生成的图片](tg://photo?id=${mediaId})\n\n${caption}`;
+    const caption = `**🎨 图片生成完成**\n\n**💬 提示词：** ${displayPrompt}\n\n_模型: ${modelUsed} · 共 ${images.length} 张_`;
+    // Each collage references its photos via tg://photo?id=, with matching media.
+    const collageMarkdown = chunks
+      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![生成的图片](tg://photo?id=c${ci}_${i})`).join('\n')}\n</tg-collage>`)
+      .join('\n\n');
+    const media = chunks.flatMap((chunk, ci) =>
+      chunk.map((imgPath, i) => ({
+        id: `c${ci}_${i}`,
+        media: { type: 'photo' as const, media: new InputFile(imgPath) },
+      })),
+    );
 
     await ctx.api.sendRichMessage(chatId, {
-      markdown,
-      media: [{ id: mediaId, media: { type: 'photo', media: new InputFile(imagePath) } }],
+      markdown: `${collageMarkdown}\n\n${caption}`,
+      media,
     });
-    logger.info(`[PrivateImage] Sent generated image to chatId=${chatId} file=${imagePath}`);
+    logger.info(`[PrivateImage] Sent ${images.length} generated image(s) in ${chunks.length} collage(s) to chatId=${chatId}`);
     return true;
   } catch (e) {
     logger.error(`[PrivateImage] Failed to generate image for chatId=${chatId}: ${e}`);

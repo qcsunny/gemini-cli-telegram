@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels } from './inlineHandler.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
@@ -46,22 +46,26 @@ vi.mock('../formatter/blocks.js', () => ({
 }));
 
 describe('parseInlineModelAndPrompt', () => {
-  it('should parse model prefix correctly', () => {
-    const res = parseInlineModelAndPrompt('/flash 什么是量子计算', 'Gemini 3.5 Flash (Medium)');
-    expect(res.model).toBe('Gemini 3.6 Flash (High)');
+  it('should parse any @keyword as family search', () => {
+    const res = parseInlineModelAndPrompt('@flash 什么是量子计算', 'Gemini 3.5 Flash (Medium)');
+    expect(res.family).toBe('flash');
+    expect(res.model).toBe('Gemini 3.5 Flash (Medium)');
     expect(res.prompt).toBe('什么是量子计算');
-    expect(res.aliasUsed).toBe('/flash');
+
+    const res2 = parseInlineModelAndPrompt('@think 分析一下', 'Gemini 3.5 Flash');
+    expect(res2.family).toBe('think');
+    expect(res2.prompt).toBe('分析一下');
   });
 
-  it('should parse @p:N and @pN project index and strip flag from prompt', () => {
+  it('should parse /p:N and /pN project index and strip flag from prompt', () => {
     const mockProjects: any = [{ name: 'Project A', path: '/path/a' }, { name: 'Project B', path: '/path/b' }];
-    const res1 = parseInlineModelAndPrompt('/pro @p:1 怎么重构代码', 'Gemini 3.5 Flash', mockProjects);
-    expect(res1.model).toBe('Web2API: Gemini 3.1 Pro');
+    const res1 = parseInlineModelAndPrompt('@pro /p:1 怎么重构代码', 'Gemini 3.5 Flash', mockProjects);
+    expect(res1.family).toBe('pro');
     expect(res1.prompt).toBe('怎么重构代码');
     expect(res1.projectUsed).toEqual(mockProjects[0]);
 
-    const res2 = parseInlineModelAndPrompt('/pro @p2 怎么写算法', 'Gemini 3.5 Flash', mockProjects);
-    expect(res2.model).toBe('Web2API: Gemini 3.1 Pro');
+    const res2 = parseInlineModelAndPrompt('@pro /p2 怎么写算法', 'Gemini 3.5 Flash', mockProjects);
+    expect(res2.family).toBe('pro');
     expect(res2.prompt).toBe('怎么写算法');
     expect(res2.projectUsed).toEqual(mockProjects[1]);
   });
@@ -73,28 +77,83 @@ describe('parseInlineModelAndPrompt', () => {
     expect(res.prompt).toContain('你好世界');
   });
 
-  it('should parse combined model + task prefixes in any order', () => {
-    const res1 = parseInlineModelAndPrompt('/flash /summarize 量子计算', 'Gemini 3.5 Flash');
-    expect(res1.model).toBe('Gemini 3.6 Flash (High)');
+  it('should parse combined family + task prefixes in any order', () => {
+    const res1 = parseInlineModelAndPrompt('@flash /summarize 量子计算', 'Gemini 3.5 Flash');
+    expect(res1.family).toBe('flash');
     expect(res1.task).toBe('summarize');
     expect(res1.prompt).toContain('总结');
     expect(res1.prompt).toContain('量子计算');
 
-    const res2 = parseInlineModelAndPrompt('/fix /pro 这个报错', 'Gemini 3.5 Flash');
-    expect(res2.model).toBe('Web2API: Gemini 3.1 Pro');
+    const res2 = parseInlineModelAndPrompt('/fix @pro 这个报错', 'Gemini 3.5 Flash');
+    expect(res2.family).toBe('pro');
     expect(res2.task).toBe('fix');
   });
 
-  it('should mark /img as image task without wrapping prompt', () => {
+  it('should mark /img as image task and wrap prompt with image instruction', () => {
     const res = parseInlineModelAndPrompt('/img 一只猫', 'Gemini 3.5 Flash');
     expect(res.task).toBe('image');
-    expect(res.prompt).toBe('一只猫');
+    expect(res.prompt).toContain('generate_image');
+    expect(res.prompt).toContain('一只猫');
   });
 
   it('should keep unknown prefix in prompt', () => {
     const res = parseInlineModelAndPrompt('/unknown 什么情况', 'Gemini 3.5 Flash');
     expect(res.task).toBeUndefined();
+    expect(res.family).toBeUndefined();
     expect(res.prompt).toBe('/unknown 什么情况');
+  });
+
+  it('should treat @p as a family search since project uses /p now', () => {
+    const res = parseInlineModelAndPrompt('@p2 怎么写算法', 'Gemini 3.5 Flash', [{ id: 'a', name: 'Project A', path: '/a' }, { id: 'b', name: 'Project B', path: '/b' }]);
+    expect(res.family).toBe('p2');
+    expect(res.projectUsed).toBeUndefined();
+    expect(res.prompt).toBe('怎么写算法');
+  });
+});
+
+describe('fuzzyMatchModels', () => {
+  const models = [
+    'Gemini 3.6 Flash (High)',
+    'Web2API: Gemini 3.1 Pro',
+    'DeepSeek: Flash',
+    'Claude Opus 4.6 (Thinking)',
+    'Claude Sonnet 4.6 (Thinking)',
+    'OpenCode: Nemotron 3 Ultra Free',
+    'GPT-OSS 120B (Medium)',
+    'OpenCode: DeepSeek V4 Flash Free',
+  ];
+
+  it('should match sonnet to Claude Sonnet model', () => {
+    const res = fuzzyMatchModels('用 sonnet 解释一下', models, 5);
+    expect(res).toContain('Claude Sonnet 4.6 (Thinking)');
+    expect(res[0]).toBe('Claude Sonnet 4.6 (Thinking)');
+  });
+
+  it('should match nemo to OpenCode Nemotron', () => {
+    const res = fuzzyMatchModels('nemo 写代码', models, 5);
+    expect(res[0]).toBe('OpenCode: Nemotron 3 Ultra Free');
+  });
+
+  it('should match gpt to GPT-OSS 120B', () => {
+    const res = fuzzyMatchModels('gpt 简述', models, 5);
+    expect(res[0]).toBe('GPT-OSS 120B (Medium)');
+  });
+
+  it('should match flash with channel-prefixed models too', () => {
+    const res = fuzzyMatchModels('/flash 提问', models, 5);
+    expect(res).toContain('Gemini 3.6 Flash (High)');
+    expect(res).toContain('DeepSeek: Flash');
+    expect(res).toContain('OpenCode: DeepSeek V4 Flash Free');
+  });
+
+  it('should respect limit and drop no-match tokens', () => {
+    const res = fuzzyMatchModels('量子计算 没有模型', models, 2);
+    expect(res.length).toBe(0);
+  });
+
+  it('should return empty for empty query', () => {
+    expect(fuzzyMatchModels('', models, 5)).toEqual([]);
+    expect(fuzzyMatchModels('   ', models, 5)).toEqual([]);
   });
 });
 
@@ -192,7 +251,7 @@ describe('registerInlineHandler', () => {
 
     const mockCtx = {
       from: { id: 12345 },
-      inlineQuery: { query: '/flash 什么是量子计算？' },
+      inlineQuery: { query: '@flash 什么是量子计算？' },
       answerInlineQuery: vi.fn().mockResolvedValue(true),
     };
 
@@ -363,6 +422,101 @@ describe('registerInlineHandler', () => {
     expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith(
       expect.objectContaining({ show_alert: true }),
     );
+  });
+
+  it('should append model suggestion cards for fuzzy-matched queries', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '用 sonnet 解释一下量子计算' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
+    const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    expect(suggestionCards.length).toBeGreaterThan(0);
+    expect(suggestionCards[0].title).toContain('用');
+    expect(suggestionCards[0].title).toContain('回答');
+    expect(suggestionCards[0].reply_markup.inline_keyboard).toBeDefined();
+  });
+
+  it('should list all family models when @flash family alias is used', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '@flash 什么是量子计算？' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
+    const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    expect(suggestionCards.length).toBeGreaterThan(0);
+    // All flash-family models share the "flash" keyword (channel prefix stripped).
+    const primaryCard = callArg.find((r: any) => r.id.startsWith('ai-'));
+    expect(primaryCard.title).toContain('Flash');
+    for (const card of suggestionCards) {
+      expect(card.title).toMatch(/Flash|flash/i);
+    }
+  });
+
+  it('should list deepseek family models when @deep keyword is used', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '@deep 你好' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
+    const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    expect(suggestionCards.length).toBeGreaterThan(0);
+    for (const card of suggestionCards) {
+      expect(card.title).toMatch(/DeepSeek|deepseek/i);
+    }
+  });
+
+  it('should list thinking models when @think keyword is used', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '@think 分析一下' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
+    const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    expect(suggestionCards.length).toBeGreaterThan(0);
+    for (const card of suggestionCards) {
+      expect(card.title).toMatch(/Thinking|thinking/i);
+    }
+  });
+
+  it('should not append suggestion cards for image task', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/img 一只猫' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
+    const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
+    expect(suggestionCards.length).toBe(0);
   });
 
   it('should render generated image in-place via rich_message media', async () => {

@@ -95,7 +95,13 @@ describe('privateImageHandler', () => {
 
     const handled = await handlePrivateImageRequest(ctx, mockSessionManager as SessionManager, defaultOptions);
     expect(handled).toBe(true);
-    expect(runModelWithFallbackChain).toHaveBeenCalled();
+    expect(runModelWithFallbackChain).toHaveBeenCalledWith(
+      expect.stringContaining('generate_image'),
+      expect.stringContaining('Gemini'),
+      expect.anything(),
+      undefined,
+      expect.anything(),
+    );
     expect(ctx.api.sendRichMessage).toHaveBeenCalledWith(
       1,
       expect.objectContaining({
@@ -107,6 +113,72 @@ describe('privateImageHandler', () => {
         ]),
       }),
     );
+  });
+
+  it('should embed every generated image in a single rich message', async () => {
+    vi.mocked(runModelWithFallbackChain).mockResolvedValue({
+      result: { output: '生成完成', conversationId: 'conv-multi', exitCode: 0, durationMs: 5000 },
+      modelUsed: 'Gemini 3.5 Flash',
+      isFallback: false,
+    });
+    vi.mocked(findNewImageArtifacts).mockResolvedValue([
+      '/tmp/agy-data/brain/conv-multi/img_1.png',
+      '/tmp/agy-data/brain/conv-multi/img_2.png',
+      '/tmp/agy-data/brain/conv-multi/img_3.png',
+    ]);
+
+    const ctx = {
+      message: { text: '/img 三张美女图' },
+      chat: { id: 1 },
+      reply: vi.fn().mockResolvedValue(true),
+      replyWithChatAction: vi.fn().mockResolvedValue(true),
+      api: {
+        sendRichMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      },
+    } as unknown as Context;
+
+    const handled = await handlePrivateImageRequest(ctx, mockSessionManager as SessionManager, defaultOptions);
+    expect(handled).toBe(true);
+    const args = vi.mocked(ctx.api.sendRichMessage).mock.calls[0][1] as {
+      markdown: string;
+      media: Array<{ id: string; media: { type: string; media: unknown } }>;
+    };
+    expect(args.markdown.match(/tg:\/\/photo\?id=/g)?.length).toBe(3);
+    expect(args.media).toHaveLength(3);
+    expect(args.media.map((m) => m.id)).toEqual(['c0_0', 'c0_1', 'c0_2']);
+    expect(args.markdown).toContain('共 3 张');
+  });
+
+  it('should split more than 10 images into multiple collages in one message', async () => {
+    vi.mocked(runModelWithFallbackChain).mockResolvedValue({
+      result: { output: '生成完成', conversationId: 'conv-many', exitCode: 0, durationMs: 5000 },
+      modelUsed: 'Gemini 3.5 Flash',
+      isFallback: false,
+    });
+    const paths = Array.from({ length: 25 }, (_, i) => `/tmp/agy-data/brain/conv-many/img_${i + 1}.png`);
+    vi.mocked(findNewImageArtifacts).mockResolvedValue(paths);
+
+    const ctx = {
+      message: { text: '/img 很多图' },
+      chat: { id: 1 },
+      reply: vi.fn().mockResolvedValue(true),
+      replyWithChatAction: vi.fn().mockResolvedValue(true),
+      api: {
+        sendRichMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      },
+    } as unknown as Context;
+
+    await handlePrivateImageRequest(ctx, mockSessionManager as SessionManager, defaultOptions);
+    const args = vi.mocked(ctx.api.sendRichMessage).mock.calls[0][1] as {
+      markdown: string;
+      media: Array<{ id: string; media: { type: string; media: unknown } }>;
+    };
+    expect(args.markdown.match(/<tg-collage>/g)?.length).toBe(3);
+    expect(args.media).toHaveLength(25);
+    expect(args.media[0].id).toBe('c0_0');
+    expect(args.media[10].id).toBe('c1_0');
+    expect(args.media[20].id).toBe('c2_0');
+    expect(args.markdown).toContain('共 25 张');
   });
 
   it('should report when no image artifact was produced', async () => {
