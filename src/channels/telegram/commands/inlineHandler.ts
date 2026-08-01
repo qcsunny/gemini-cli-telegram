@@ -7,7 +7,7 @@ import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir } from '../../../config/userConfig.js';
-import { formatTokenCount } from '../formatter/core.js';
+import { formatTokenCount, findSafeCutPoint } from '../formatter/core.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -474,17 +474,20 @@ const PAGE_THRESHOLD = 6000;
 function splitIntoPages(text: string, pageChars: number = PAGE_CHARS): string[] {
   if (text.length <= pageChars) return [text];
   const pages: string[] = [];
-  const chunks = text.split(/\n{2,}/);
-  let current = '';
-  for (const chunk of chunks) {
-    if (current && (current + '\n\n' + chunk).length > pageChars) {
-      pages.push(current);
-      current = chunk;
-    } else {
-      current = current ? current + '\n\n' + chunk : chunk;
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= pageChars) {
+      pages.push(remaining);
+      break;
     }
+    let cut = findSafeCutPoint(remaining, pageChars);
+    if (cut <= 0 || cut >= remaining.length) {
+      cut = pageChars;
+    }
+    const pageChunk = remaining.slice(0, cut).trim();
+    if (pageChunk) pages.push(pageChunk);
+    remaining = remaining.slice(cut).trim();
   }
-  if (current) pages.push(current);
   if (pages.length === 0) pages.push(text);
   return pages;
 }
