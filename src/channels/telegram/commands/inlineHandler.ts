@@ -7,13 +7,13 @@ import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir } from '../../../config/userConfig.js';
-import { findSafeCutPoint } from '../formatter/core.js';
+import { findSafeCutPoint, formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
-import { formatFooterMarker, type TokenUsage } from '../../../utils/pricing.js';
+import { calculateCost, type TokenUsage } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
 
 export interface InlineHandlerOptions {
@@ -1413,16 +1413,29 @@ async function runInlineGeneration(
 
     const cleanOutput = stripWholeMessageCodeFence(result.output);
     const rawOutputLen = cleanOutput.length;
-    const timeStr = result.durationMs ? `${(result.durationMs / 1000).toFixed(1)}s` : '';
-    const modelWithTime = modelUsed + (timeStr ? ` · ${timeStr}` : '') + (isFallback ? ' (已自动降级)' : '');
 
-    // Use formatFooterMarker to generate native tg://btn_info_footer anchor string
-    const footerMarker = formatFooterMarker(
-      modelWithTime,
-      prompt,
-      cleanOutput,
-      result.usage ?? undefined
-    );
+    let footerParts: string[] = [];
+    footerParts.push(`⏱️ ${((result.durationMs || 1000) / 1000).toFixed(1)}s`);
+    if (result.usage) {
+      const inCount = result.usage.input || 0;
+      const outCount = result.usage.output || 0;
+      const cachedCount = result.usage.cached || 0;
+      const thinkingCount = result.usage.thinking || 0;
+      if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}`);
+      if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}`);
+      const totalTokens = inCount + outCount;
+      if (totalTokens > 0) {
+        let tokenStr = `🪙 ${formatTokenCount(totalTokens)} tokens`;
+        const { totalCost, currency } = calculateCost(modelUsed, inCount, outCount, cachedCount, thinkingCount);
+        if (totalCost > 0) {
+          const sym = currency === 'CNY' ? '¥' : '$';
+          const costStr = totalCost < 0.0001 ? '<0.0001' : totalCost.toFixed(5);
+          tokenStr += ` (${sym}${costStr})`;
+        }
+        footerParts.push(tokenStr);
+      }
+    }
+    const footerText = footerParts.join(' · ');
 
     let fullMarkdown: string;
     let replyMarkup: unknown;
@@ -1439,13 +1452,8 @@ async function runInlineGeneration(
         const pageItems: InlinePage[] = pages.map((page) => {
           const summaryTitle = `💡 展开本页 AI 回答 (${modelUsed} · ${page.length} 字)`;
           const details = `<details><summary>${summaryTitle}</summary>\n\n${page}\n\n</details>`;
-          const pageFooterMarker = formatFooterMarker(
-            modelWithTime,
-            prompt,
-            page,
-            result.usage ?? undefined
-          );
-          const fullMd = `${header}\n\n${details}\n\n${pageFooterMarker}`;
+          const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : '';
+          const fullMd = `${header}\n\n${details}${footer}`;
           const blocks = markdownToRichBlocks(fullMd);
           return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
         });
@@ -1469,7 +1477,7 @@ async function runInlineGeneration(
         const summaryTitle = `💡 点击展开 AI 完整回答 (${modelUsed} · ${rawOutputLen} 字)`;
         const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
         isCollapsible = true;
-        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}\n\n${footerMarker}`;
+        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
         const blocks = markdownToRichBlocks(fullMarkdown);
         finalBlocks = blocks.length > 0 ? blocks : undefined;
         replyMarkup = {
@@ -1478,9 +1486,7 @@ async function runInlineGeneration(
       }
     } else {
       // Short answer → plain text
-      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed}${isFallback ? ' · 已自动降级' : ''})：**\n\n${cleanOutput}\n\n${footerMarker}`;
-      const blocks = markdownToRichBlocks(fullMarkdown);
-      finalBlocks = blocks.length > 0 ? blocks : undefined;
+      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
       replyMarkup = {
         inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
       };
@@ -1612,13 +1618,8 @@ async function runCompareGeneration(
     const modelLine = `**${num} ${s.model}**\n\n`;
     const summaryTitle = `💡 点击展开 ${s.model.split(' ')[0] || s.model} 的完整回答 (${s.model})`;
     const bodyMarkdown = `<details><summary>${summaryTitle}</summary>\n\n${clean}\n\n</details>`;
-    const footerMarker = formatFooterMarker(
-      s.model,
-      prompt,
-      clean,
-      s.usage
-    );
-    const fullMd = `${header}${modelLine}${bodyMarkdown}\n\n${footerMarker}`;
+    const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
+    const fullMd = `${header}${modelLine}${bodyMarkdown}${footer}`;
     const blocks = markdownToRichBlocks(fullMd);
     return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
   });
