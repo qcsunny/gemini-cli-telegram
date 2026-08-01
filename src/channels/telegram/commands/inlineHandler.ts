@@ -464,6 +464,9 @@ export function registerInlineHandler(
       const onChunk = (chunk: string) => {
         accumulatedText += chunk;
         touchPendingResult(resultId);
+        // Image task message becomes a photo after first run — text streaming
+        // edits would fail ("no text in message to edit"), so skip them.
+        if (regen.task === 'image') return;
         if (accumulatedText.trim().length > 0) {
           const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
           const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${activeModelName})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
@@ -929,27 +932,54 @@ async function finalizeImageResult(
   }
 
   const imagePath = images[images.length - 1];
-  let sent = false;
+
+  // Inline messages can only be edited to media via a URL or an existing
+  // file_id (no local upload). Upload the file by sending it to the user's
+  // private chat first, then reuse the returned file_id for editMessageMedia.
+  let fileId: string | null = null;
   try {
-    await ctx.api.sendPhoto(fromId, new InputFile(imagePath), {
+    const sentMsg = await ctx.api.sendPhoto(fromId, new InputFile(imagePath), {
       caption: `🎨 图片生成完成\n\n**提示词：** ${displayPrompt}\n_模型: ${modelUsed}_`,
       parse_mode: 'HTML',
     });
-    sent = true;
+    const largest = sentMsg?.photo?.slice().sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
+    fileId = largest?.file_id || null;
+    logger.info(`[InlineResult] Uploaded image to private chat, file_id=${fileId ? fileId.slice(0, 24) + '...' : 'NONE'}`);
   } catch (e) {
-    logger.error(`[InlineResult] Failed to send image to private chat: ${e}`);
+    logger.error(`[InlineResult] Failed to upload image to private chat: ${e}`);
   }
 
-  const finalText = sent
-    ? `**🖼️ 图片已生成并发送到你的私聊！**\n\n**💬 提示词：** ${displayPrompt}\n_模型: ${modelUsed} · 文件: ${path.basename(imagePath)}_`
-    : `**🖼️ 图片已生成**\n\n**💬 提示词：** ${displayPrompt}\n\n_⚠️ 未能发送到私聊（请先给机器人发消息开启私聊）_\n\n_模型: ${modelUsed} · 文件: ${path.basename(imagePath)}_`;
+  const caption = `**💬 提示词：** ${displayPrompt}\n_模型: ${modelUsed}_`;
+  const regenButton = {
+    inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+  };
 
+  if (fileId) {
+    // Render the image in-place on the inline message via editMessageMedia.
+    const media = { type: 'photo', media: fileId, caption, parse_mode: 'HTML' };
+    await ctx.api.raw.editMessageMedia({
+      inline_message_id: inlineMessageId,
+      media,
+      reply_markup: regenButton,
+    } as any).catch((e: Error) => {
+      logger.error(`[InlineResult] editMessageMedia failed, falling back to text: ${e}`);
+      // Fallback: describe the image as text if media edit fails
+      const fallbackText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 原地渲染失败，请查看私聊收到的图片。_`;
+      return ctx.api.raw.editMessageText({
+        inline_message_id: inlineMessageId,
+        rich_message: { markdown: fallbackText },
+        reply_markup: regenButton,
+      } as any).catch(() => {});
+    });
+    return;
+  }
+
+  // No file_id (private chat unavailable): describe the image as text.
+  const finalText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 未能上传渲染（请先给机器人发消息开启私聊）_\n\n_文件: ${path.basename(imagePath)}_`;
   await ctx.api.raw.editMessageText({
     inline_message_id: inlineMessageId,
     rich_message: { markdown: finalText },
-    reply_markup: {
-      inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
-    },
+    reply_markup: regenButton,
   } as any).catch(() => {});
 }
 
