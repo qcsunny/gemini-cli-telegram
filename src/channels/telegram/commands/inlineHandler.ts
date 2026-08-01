@@ -353,12 +353,13 @@ export function parseInlineModelAndPrompt(
   model: string;
   prompt: string;
   family?: string;
+  families: string[];
   projectUsed?: ProjectInfo;
   task?: InlineTask;
 } {
   let text = rawQuery.trim();
   let selectedModel = defaultModel;
-  let family: string | undefined;
+  const families: string[] = [];
   let projectUsed: ProjectInfo | undefined;
   let task: InlineTask | undefined;
 
@@ -391,7 +392,8 @@ export function parseInlineModelAndPrompt(
 
     // Model family search: any @keyword fuzzy-matches model names.
     if (token.startsWith('@')) {
-      family = token.slice(1).toLowerCase();
+      const tag = token.slice(1).toLowerCase();
+      if (tag) families.push(tag);
       parts.shift();
       continue;
     }
@@ -408,7 +410,8 @@ export function parseInlineModelAndPrompt(
   return {
     model: selectedModel,
     prompt: text,
-    family,
+    family: families.length > 0 ? families[families.length - 1] : undefined,
+    families,
     projectUsed,
     task,
   };
@@ -841,7 +844,7 @@ export function registerInlineHandler(
     const sessionModel = activeSession?.config?.getModel();
     const activeModel = sessionModel || defaultOptions.model || '';
     const allProjects = sessionManager.getProjects();
-    const { model: modelToUse, prompt, family, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
+    const { model: modelToUse, prompt, family, families, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
 
     // Default to active session project if no explicit /pN flag was provided
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
@@ -919,11 +922,20 @@ export function registerInlineHandler(
     let suggestionCandidates: string[] = [];
     if (task !== 'image') {
       const availableModels = getEffectiveModelOrder();
-      if (family) {
-        // Match against the full lowercase name so "DeepSeek: Pro" still hits
-        // the "deepseek" family even though the channel prefix is stripped by
-        // normalizeModelName.
-        suggestionCandidates = availableModels.filter((m) => m.toLowerCase().includes(family));
+      if (families.length > 0) {
+        // Match models containing ALL keywords first (intersection)
+        let matched = availableModels.filter((m) => {
+          const lower = m.toLowerCase();
+          return families.every((tag) => lower.includes(tag));
+        });
+        // Fallback to union if intersection is empty
+        if (matched.length === 0) {
+          matched = availableModels.filter((m) => {
+            const lower = m.toLowerCase();
+            return families.some((tag) => lower.includes(tag));
+          });
+        }
+        suggestionCandidates = matched;
       } else {
         suggestionCandidates = fuzzyMatchModels(prompt, availableModels, MAX_MODEL_SUGGESTIONS);
         if (suggestionCandidates.length === 0) {
@@ -931,7 +943,7 @@ export function registerInlineHandler(
         }
       }
       suggestionCandidates = suggestionCandidates.filter((m) => m !== modelToUse);
-      if (!family) suggestionCandidates = suggestionCandidates.slice(0, MAX_MODEL_SUGGESTIONS);
+      if (families.length === 0) suggestionCandidates = suggestionCandidates.slice(0, MAX_MODEL_SUGGESTIONS);
     }
 
     // Family mode: show ONLY one card per matching model (no primary/ask card).
@@ -941,7 +953,7 @@ export function registerInlineHandler(
 
     if (task === 'compare') {
       let candidates = getEffectiveModelOrder();
-      if (family && suggestionCandidates.length > 0) {
+      if (families.length > 0 && suggestionCandidates.length > 0) {
         candidates = suggestionCandidates;
       }
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
