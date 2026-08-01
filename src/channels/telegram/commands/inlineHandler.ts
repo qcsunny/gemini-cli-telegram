@@ -57,13 +57,75 @@ export function isCompareInlineResult(resultId: string): boolean {
   return compareContexts.has(resultId) || regenerateContexts.get(resultId)?.task === 'compare';
 }
 
+import * as fsSync from 'node:fs';
+
 export interface InlinePage {
   markdown?: string;
   blocks?: RichBlock[];
 }
 
-/** Paginated pages of a finished answer, keyed by resultId. */
-const inlinePages = new Map<string, InlinePage[]>();
+// ---------------------------------------------------------------------------
+// Persistent inline-pages store (survives bot restarts)
+// ---------------------------------------------------------------------------
+const INLINE_PAGES_TTL = 7 * 24 * 60 * 60_000; // 7 days
+
+interface InlinePagesStore {
+  [resultId: string]: { pages: InlinePage[]; createdAt: number };
+}
+
+function getInlinePagesFile(): string {
+  return path.join(getAgyDataDir(), 'inline_pages.json');
+}
+
+function loadInlinePagesFromDisk(): Map<string, InlinePage[]> {
+  const map = new Map<string, InlinePage[]>();
+  try {
+    const raw = fsSync.readFileSync(getInlinePagesFile(), 'utf8');
+    const store: InlinePagesStore = JSON.parse(raw);
+    const cutoff = Date.now() - INLINE_PAGES_TTL;
+    for (const [id, entry] of Object.entries(store)) {
+      if (entry.createdAt > cutoff) map.set(id, entry.pages);
+    }
+  } catch {
+    // file doesn't exist yet or is corrupt — start fresh
+  }
+  return map;
+}
+
+async function saveInlinePagesToDisk(map: Map<string, InlinePage[]>): Promise<void> {
+  try {
+    const store: InlinePagesStore = {};
+    const cutoff = Date.now() - INLINE_PAGES_TTL;
+    // Include only non-expired entries when writing
+    for (const [id, pages] of map) {
+      // We don't track createdAt per entry in the Map, so preserve existing timestamps
+      const existing = _inlinePagesOnDisk[id];
+      const createdAt = existing?.createdAt ?? Date.now();
+      if (createdAt > cutoff) store[id] = { pages, createdAt };
+    }
+    _inlinePagesOnDisk = store;
+    await fs.writeFile(getInlinePagesFile(), JSON.stringify(store), 'utf8');
+  } catch (e) {
+    logger.warn(`[inlinePages] Failed to persist to disk: ${e}`);
+  }
+}
+
+let _inlinePagesOnDisk: InlinePagesStore = {};
+
+/** Paginated pages of a finished answer, keyed by resultId. Disk-backed. */
+const inlinePages = loadInlinePagesFromDisk();
+
+function setInlinePages(resultId: string, pages: InlinePage[]): void {
+  inlinePages.set(resultId, pages);
+  _inlinePagesOnDisk[resultId] = { pages, createdAt: Date.now() };
+  saveInlinePagesToDisk(inlinePages).catch(() => {});
+}
+
+function deleteInlinePages(resultId: string): void {
+  inlinePages.delete(resultId);
+  delete _inlinePagesOnDisk[resultId];
+  saveInlinePagesToDisk(inlinePages).catch(() => {});
+}
 
 /** Max models user can pick for a /v multi-model comparison. */
 export const MAX_COMPARE_MODELS = 3;
@@ -116,7 +178,7 @@ const cleanupTimer = setInterval(() => {
   for (const [key, val] of regenerateContexts) {
     if (val.createdAt < actionCutoff) {
       regenerateContexts.delete(key);
-      inlinePages.delete(key);
+      deleteInlinePages(key);
     }
   }
   for (const [key, val] of compareContexts) {
@@ -722,7 +784,9 @@ export function registerInlineHandler(
       const [resultId, pageIdxStr] = data.slice('inline_page:'.length).split(':');
       const pageIdx = parseInt(pageIdxStr, 10);
       const pages = inlinePages.get(resultId);
+      logger.info(`[InlinePage] userId=${ctx.from?.id} resultId=${resultId} pageIdx=${pageIdx} pagesFound=${pages ? pages.length : 'null'} inlineMsgId=${inlineMessageId ?? 'null'}`);
       if (!pages || Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= pages.length) {
+        logger.warn(`[InlinePage] EXPIRED or invalid: resultId=${resultId} pages=${pages ? pages.length : 'null'} pageIdx=${pageIdx}`);
         await ctx.answerCallbackQuery({ text: '❌ 分页已过期。', show_alert: true }).catch(() => {});
         return;
       }
@@ -731,6 +795,7 @@ export function registerInlineHandler(
       const richMessagePayload = targetPage.blocks && targetPage.blocks.length > 0
         ? { blocks: targetPage.blocks }
         : { markdown: targetPage.markdown || '' };
+      logger.info(`[InlinePage] Editing to page ${pageIdx + 1}/${pages.length} for resultId=${resultId} payloadType=${targetPage.blocks ? 'blocks' : 'markdown'}`);
       await ctx.api.raw.editMessageText({
         inline_message_id: inlineMessageId,
         rich_message: richMessagePayload,
@@ -744,7 +809,7 @@ export function registerInlineHandler(
             [{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }],
           ],
         },
-      } as any).catch((e: Error) => logger.warn(`[InlineResult] Page edit failed: ${e}`));
+      } as any).catch((e: Error) => logger.warn(`[InlinePage] Page edit failed: ${e}`));
       return;
     }
 
@@ -1383,7 +1448,7 @@ async function runInlineGeneration(
           const blocks = markdownToRichBlocks(fullMd);
           return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
         });
-        inlinePages.set(resultId, pageItems);
+        setInlinePages(resultId, pageItems);
         fullMarkdown = pageItems[0].markdown || '';
         const baseButtons: { text: string; callback_data: string }[] = [
           { text: '◀️ 上一页', callback_data: 'inline_noop' },
@@ -1530,7 +1595,7 @@ async function runCompareGeneration(
     const blocks = markdownToRichBlocks(fullMd);
     return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
   });
-  inlinePages.set(resultId, pageItems);
+  setInlinePages(resultId, pageItems);
   const pageCount = pageItems.length;
 
   const allSucceeded = failedModels.length === 0;
