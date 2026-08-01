@@ -230,15 +230,13 @@ describe('Utils Test Suite', () => {
 
       logger.error('unit test error writing to log', new Error('test failure details'));
 
-      await new Promise<void>((resolve) => {
+      await vi.waitFor(() => {
         pinoInstance.flush();
-        setTimeout(resolve, 50);
-      });
-
-      expect(fs.existsSync(ERROR_LOG_PATH)).toBe(true);
-      const content = fs.readFileSync(ERROR_LOG_PATH, 'utf-8');
-      expect(content).toContain('unit test error writing to log');
-      expect(content).toContain('test failure details');
+        expect(fs.existsSync(ERROR_LOG_PATH)).toBe(true);
+        const content = fs.readFileSync(ERROR_LOG_PATH, 'utf-8');
+        expect(content).toContain('unit test error writing to log');
+        expect(content).toContain('test failure details');
+      }, { timeout: 1000, interval: 20 });
     });
 
     it('should NOT log debug messages when LOG_LEVEL is default info', async () => {
