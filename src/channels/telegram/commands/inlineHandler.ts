@@ -658,6 +658,14 @@ export function registerInlineHandler(
               markdown: initMarkdown,
             },
           } as any,
+          // An inline keyboard is REQUIRED for Telegram to return
+          // inline_message_id on chosen_inline_result, which is the handle used
+          // to stream/update the message in-place (BUGFIX: removed 1056263).
+          reply_markup: {
+            inline_keyboard: [[
+              { text: `${ICONS.loading} 生成中...`, callback_data: 'inline_thinking' }
+            ]],
+          },
         },
         {
           type: 'article' as const,
