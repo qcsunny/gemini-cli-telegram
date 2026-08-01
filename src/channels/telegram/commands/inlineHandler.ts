@@ -713,6 +713,11 @@ export function registerInlineHandler(
       return;
     }
 
+    if (data === 'inline_noop') {
+      await ctx.answerCallbackQuery().catch(() => {});
+      return;
+    }
+
     if (data.startsWith('inline_page:')) {
       const [resultId, pageIdxStr] = data.slice('inline_page:'.length).split(':');
       const pageIdx = parseInt(pageIdxStr, 10);
@@ -721,6 +726,7 @@ export function registerInlineHandler(
         await ctx.answerCallbackQuery({ text: '❌ 分页已过期。', show_alert: true }).catch(() => {});
         return;
       }
+      await ctx.answerCallbackQuery().catch(() => {});
       const targetPage = pages[pageIdx];
       const richMessagePayload = targetPage.blocks && targetPage.blocks.length > 0
         ? { blocks: targetPage.blocks }
