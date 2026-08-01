@@ -43,6 +43,7 @@ import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 import { CONFIG_PATH, getBackendUrl } from '../../config/userConfig.js';
 import { buildChannelReply } from './bot/channelReply.js';
+import { isCompareInlineResult } from './commands/inlineHandler.js';
 import { startBackoffCleanup } from './bot/rateLimiter.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
@@ -734,6 +735,17 @@ export class TelegramBot {
       const allowedSet = new Set(allowedUsers);
       this.bot.use(async (ctx, next) => {
         const userId = ctx.from?.id;
+        const callbackData = ctx.callbackQuery?.data;
+
+        // ONLY bypass whitelist for final response pagination of multi-model comparison results
+        if (callbackData && callbackData.startsWith('inline_page:')) {
+          const resultId = callbackData.slice('inline_page:'.length).split(':')[0];
+          if (resultId && isCompareInlineResult(resultId)) {
+            await next();
+            return;
+          }
+        }
+
         if (!userId || !allowedSet.has(userId)) {
           logger.warn(`Unauthorized access attempt from user ${userId}`);
           if (ctx.chat) {
