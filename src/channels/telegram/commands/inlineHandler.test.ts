@@ -360,7 +360,7 @@ describe('registerInlineHandler', () => {
     );
   });
 
-  it('should render generated image in-place via editMessageMedia', async () => {
+  it('should render generated image in-place via rich_message media', async () => {
     // Return a conversationId so image artifact scanning runs
     vi.mocked(runAgyPrint).mockImplementation(async (opts: any) => {
       if (opts?.onChunk) opts.onChunk('');
@@ -389,12 +389,21 @@ describe('registerInlineHandler', () => {
         inline_message_id: 'test_inline_msg_id_123',
       },
       api: {
-        sendPhoto: vi.fn().mockResolvedValue({
-          photo: [
-            { file_id: 'photo_small', file_size: 100 },
-            { file_id: 'photo_large', file_size: 5000 },
-          ],
+        sendRichMessage: vi.fn().mockResolvedValue({
+          message_id: 999,
+          rich_message: {
+            blocks: [
+              {
+                type: 'photo',
+                photo: [
+                  { file_id: 'photo_small', file_size: 100 },
+                  { file_id: 'photo_large', file_size: 5000 },
+                ],
+              },
+            ],
+          },
         }),
+        deleteMessage: vi.fn().mockResolvedValue(true),
         raw: {
           editMessageText: vi.fn().mockResolvedValue(true),
           editMessageMedia: vi.fn().mockResolvedValue(true),
@@ -405,15 +414,32 @@ describe('registerInlineHandler', () => {
     await chosenInlineResultHandler!(mockChosenCtx);
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    expect(mockChosenCtx.api.sendPhoto).toHaveBeenCalled();
-    expect(mockChosenCtx.api.raw.editMessageMedia).toHaveBeenCalledWith(
+    expect(mockChosenCtx.api.sendRichMessage).toHaveBeenCalledWith(
+      12345,
+      expect.objectContaining({
+        markdown: expect.stringContaining('tg://photo?id='),
+        media: expect.arrayContaining([
+          expect.objectContaining({
+            media: expect.objectContaining({ type: 'photo' }),
+          }),
+        ]),
+      }),
+    );
+    // Transient relay message is deleted so the image only shows in-line.
+    expect(mockChosenCtx.api.deleteMessage).toHaveBeenCalledWith(12345, 999);
+    expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
       expect.objectContaining({
         inline_message_id: 'test_inline_msg_id_123',
-        media: expect.objectContaining({
-          type: 'photo',
-          media: 'photo_large',
+        rich_message: expect.objectContaining({
+          markdown: expect.stringContaining('tg://photo?id='),
+          media: expect.arrayContaining([
+            expect.objectContaining({
+              media: expect.objectContaining({ type: 'photo', media: 'photo_large' }),
+            }),
+          ]),
         }),
       }),
     );
+    expect(mockChosenCtx.api.raw.editMessageMedia).not.toHaveBeenCalled();
   });
 });
