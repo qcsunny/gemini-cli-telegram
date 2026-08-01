@@ -109,18 +109,6 @@ describe('parseInlineModelAndPrompt', () => {
     expect(res.projectUsed).toBeUndefined();
     expect(res.prompt).toBe('怎么写算法');
   });
-
-  it('should parse /pdf as pdf task', () => {
-    const res = parseInlineModelAndPrompt('/pdf 这份文档讲了什么', 'Gemini 3.5 Flash');
-    expect(res.task).toBe('pdf');
-    expect(res.prompt).toBe('这份文档讲了什么');
-  });
-
-  it('should allow empty prompt for /pdf (default to summary)', () => {
-    const res = parseInlineModelAndPrompt('/pdf', 'Gemini 3.5 Flash');
-    expect(res.task).toBe('pdf');
-    expect(res.prompt).toBe('');
-  });
 });
 
 describe('fuzzyMatchModels', () => {

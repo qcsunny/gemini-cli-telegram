@@ -43,7 +43,6 @@ import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 import { CONFIG_PATH, getBackendUrl } from '../../config/userConfig.js';
 import { buildChannelReply } from './bot/channelReply.js';
-import { cacheDocument } from './commands/pdfCache.js';
 import { startBackoffCleanup } from './bot/rateLimiter.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
@@ -940,18 +939,6 @@ export class TelegramBot {
       this.defaultOptions,
       async (session, channelReply) => {
         tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
-
-        // Text/PDF documents are cached for later inline /pdf Q&A AND still
-        // parsed directly by the model as an attachment for this message.
-        if (mediaType === 'document') {
-          const userId = ctx.from?.id;
-          if (userId) {
-            const cached = await cacheDocument(userId, tempFilePath, info.fileName || 'document');
-            if (cached) {
-              await ctx.reply(`${ICONS.sparkles} <b>文档已缓存</b>\n\n📄 <code>${escapeHtml(info.fileName || 'document')}</code>\n\n可直接用 inline 对它提问，或等待下方回答（已同时交给 AI 解析）。`);
-            }
-          }
-        }
 
         const multimodalInput: MultimodalInput = {
           text: info.caption,
