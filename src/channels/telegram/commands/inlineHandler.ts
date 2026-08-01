@@ -658,11 +658,6 @@ export function registerInlineHandler(
               markdown: initMarkdown,
             },
           } as any,
-          reply_markup: {
-            inline_keyboard: [[
-              { text: `${ICONS.bot} ⏳ AI 正在${task === 'image' ? '生成图片' : '深度思考'}中...`, callback_data: 'inline_thinking' }
-            ]],
-          },
         },
         {
           type: 'article' as const,
