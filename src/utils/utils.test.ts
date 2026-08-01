@@ -7,6 +7,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { MessageCache } from './messageCache.js';
 import { formatFooterMarker, estimateTokens, calculateCost } from './pricing.js';
 import { startHealthServer, stopHealthServer } from './healthServer.js';
@@ -177,6 +179,11 @@ describe('Utils Test Suite', () => {
     beforeEach(async () => {
       vi.resetModules();
       vi.stubEnv('NODE_ENV', 'production');
+      // Point the logger at a temp dir so tests never unlink the live
+      // daemon.log/error.log the running service holds open (which orphans
+      // its writes to a deleted inode).
+      vi.stubEnv('TEST_ERROR_LOG_PATH', path.join(os.tmpdir(), 'gemini-test-error.log'));
+      vi.stubEnv('TEST_DAEMON_LOG_PATH', path.join(os.tmpdir(), 'gemini-test-daemon.log'));
     });
 
     afterEach(async () => {
