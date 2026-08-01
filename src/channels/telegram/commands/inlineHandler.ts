@@ -608,7 +608,7 @@ export function registerInlineHandler(
           description: '/translate /summarize /fix /code /img 一键调用',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与模型前缀混用（如 <code>/flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（发送到私聊）`,
+            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与模型前缀混用（如 <code>/flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -640,7 +640,7 @@ export function registerInlineHandler(
         : `🤔 点击发送并开始思考 [${modelToUse}]`;
       let initMarkdown: string;
       if (task === 'image') {
-        initMarkdown = `**🎨 图像生成模式**\n\n**💬 提示词：**\n> ${displayPrompt}\n\n*🚀 正在生成图片，完成后将自动发送到你的私聊。*`;
+        initMarkdown = `**🎨 图像生成模式**\n\n**💬 提示词：**\n> ${displayPrompt}\n\n*🚀 正在生成图片，完成后将自动原地更新。*`;
       } else {
         const modelLine = `**🧠 目标模型：** \`${modelToUse}\`\n`;
         initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI 推理引擎已启动**\n\n${modelLine}**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`;
@@ -928,20 +928,31 @@ async function finalizeImageResult(
 
   const imagePath = images[images.length - 1];
 
-  // Inline messages can only be edited to media via a URL or an existing
-  // file_id (no local upload). Upload the file by sending it to the user's
-  // private chat first, then reuse the returned file_id for editMessageMedia.
+  // Inline messages can only reference media via a URL or an existing
+  // file_id (no local upload). Upload the file through a transient rich-message
+  // relay to the user's private chat to obtain a file_id, then delete the relay
+  // message so the image only ever appears in-place in the inline message.
   let fileId: string | null = null;
+  let relayMessageId: number | null = null;
   try {
-    const sentMsg = await ctx.api.sendPhoto(fromId, new InputFile(imagePath), {
-      caption: `🎨 图片生成完成\n\n**提示词：** ${displayPrompt}\n_模型: ${modelUsed}_`,
-      parse_mode: 'HTML',
+    const relayMediaId = `img${Date.now().toString(36)}`;
+    const sentMsg = await ctx.api.sendRichMessage(fromId, {
+      markdown: `![生成的图片](tg://photo?id=${relayMediaId})\n\n*上传中转中...*`,
+      media: [{ id: relayMediaId, media: { type: 'photo', media: new InputFile(imagePath) } }],
     });
-    const largest = sentMsg?.photo?.slice().sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
+    relayMessageId = sentMsg?.message_id ?? null;
+    const photoBlock = (sentMsg?.rich_message?.blocks as Array<Record<string, any>> | undefined)?.find((b) => b?.['type'] === 'photo');
+    const sizes: Array<{ file_id: string; file_size?: number }> = photoBlock?.['photo'] ?? [];
+    const largest = sizes.slice().sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
     fileId = largest?.file_id || null;
-    logger.info(`[InlineResult] Uploaded image to private chat, file_id=${fileId ? fileId.slice(0, 24) + '...' : 'NONE'}`);
+    logger.info(`[InlineResult] Uploaded image via rich-message relay, file_id=${fileId ? fileId.slice(0, 24) + '...' : 'NONE'}`);
   } catch (e) {
-    logger.error(`[InlineResult] Failed to upload image to private chat: ${e}`);
+    logger.error(`[InlineResult] Failed to relay-upload image: ${e}`);
+  } finally {
+    // Remove the transient relay copy so the image is only shown in the inline message.
+    if (relayMessageId != null) {
+      await ctx.api.deleteMessage(fromId, relayMessageId).catch(() => {});
+    }
   }
 
   const caption = `**💬 提示词：** ${displayPrompt}\n_模型: ${modelUsed}_`;
@@ -950,16 +961,22 @@ async function finalizeImageResult(
   };
 
   if (fileId) {
-    // Render the image in-place on the inline message via editMessageMedia.
-    const media = { type: 'photo', media: fileId, caption, parse_mode: 'HTML' };
-    await ctx.api.raw.editMessageMedia({
+    // Render the image in-place AND rich text via rich_message: the markdown
+    // references the attached photo through tg://photo?id=, with the actual
+    // media supplied in the media array. editMessageMedia cannot carry
+    // rich_message, so editMessageText is the correct transport here.
+    const mediaId = `img${Date.now().toString(36)}`;
+    const richMarkdown = `![生成的图片](tg://photo?id=${mediaId})\n\n${caption}\n\n_🖼️ 图片已生成，可点击 🔄 重新生成。_`;
+    await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
-      media,
+      rich_message: {
+        markdown: richMarkdown,
+        media: [{ id: mediaId, media: { type: 'photo', media: fileId } }],
+      },
       reply_markup: regenButton,
     } as any).catch((e: Error) => {
-      logger.error(`[InlineResult] editMessageMedia failed, falling back to text: ${e}`);
-      // Fallback: describe the image as text if media edit fails
-      const fallbackText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 原地渲染失败，请查看私聊收到的图片。_`;
+      logger.error(`[InlineResult] rich_message media edit failed, falling back to text: ${e}`);
+      const fallbackText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 原地渲染失败。_`;
       return ctx.api.raw.editMessageText({
         inline_message_id: inlineMessageId,
         rich_message: { markdown: fallbackText },
@@ -969,7 +986,7 @@ async function finalizeImageResult(
     return;
   }
 
-  // No file_id (private chat unavailable): describe the image as text.
+  // No file_id (relay upload failed): describe the image as text.
   const finalText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 未能上传渲染（请先给机器人发消息开启私聊）_\n\n_文件: ${path.basename(imagePath)}_`;
   await ctx.api.raw.editMessageText({
     inline_message_id: inlineMessageId,
