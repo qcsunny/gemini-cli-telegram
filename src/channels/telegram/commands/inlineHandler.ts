@@ -13,7 +13,7 @@ import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
-import { calculateCost, type TokenUsage } from '../../../utils/pricing.js';
+import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
 
 export interface InlineHandlerOptions {
@@ -1416,24 +1416,25 @@ async function runInlineGeneration(
 
     let footerParts: string[] = [];
     footerParts.push(`⏱️ ${((result.durationMs || 1000) / 1000).toFixed(1)}s`);
-    if (result.usage) {
-      const inCount = result.usage.input || 0;
-      const outCount = result.usage.output || 0;
-      const cachedCount = result.usage.cached || 0;
-      const thinkingCount = result.usage.thinking || 0;
-      if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}`);
-      if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}`);
-      const totalTokens = inCount + outCount;
-      if (totalTokens > 0) {
-        let tokenStr = `🪙 ${formatTokenCount(totalTokens)} tokens`;
-        const { totalCost, currency } = calculateCost(modelUsed, inCount, outCount, cachedCount, thinkingCount);
-        if (totalCost > 0) {
-          const sym = currency === 'CNY' ? '¥' : '$';
-          const costStr = totalCost < 0.0001 ? '<0.0001' : totalCost.toFixed(5);
-          tokenStr += ` (${sym}${costStr})`;
-        }
-        footerParts.push(tokenStr);
+    
+    const inCount = result.usage?.input || estimateTokens(prompt);
+    const outCount = result.usage?.output || estimateTokens(cleanOutput);
+    const cachedCount = result.usage?.cached || 0;
+    const thinkingCount = result.usage?.thinking || 0;
+    const estLabel = !result.usage ? ' (预估)' : '';
+
+    if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}${estLabel}`);
+    if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}${estLabel}`);
+    const totalTokens = inCount + outCount;
+    if (totalTokens > 0) {
+      let tokenStr = `🪙 ${formatTokenCount(totalTokens)} tokens`;
+      const { totalCost, currency } = calculateCost(modelUsed, inCount, outCount, cachedCount, thinkingCount);
+      if (totalCost > 0) {
+        const sym = currency === 'CNY' ? '¥' : '$';
+        const costStr = totalCost < 0.0001 ? '<0.0001' : totalCost.toFixed(5);
+        tokenStr += ` (${sym}${costStr})`;
       }
+      footerParts.push(tokenStr);
     }
     const footerText = footerParts.join(' · ');
 
