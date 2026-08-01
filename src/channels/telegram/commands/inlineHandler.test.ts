@@ -315,16 +315,16 @@ describe('registerInlineHandler', () => {
     await chosenInlineResultHandler!(mockChosenCtx);
 
     // Wait for async runModelWithFallbackChain in background to complete
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inline_message_id: 'test_inline_msg_id_123',
-        rich_message: expect.objectContaining({
-          markdown: expect.any(String),
+    await vi.waitFor(() => {
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'test_inline_msg_id_123',
+          rich_message: expect.objectContaining({
+            markdown: expect.any(String),
+          }),
         }),
-      }),
-    );
+      );
+    });
   });
 
   it('should not edit when inline_message_id is missing', async () => {
@@ -384,7 +384,9 @@ describe('registerInlineHandler', () => {
     };
 
     await chosenInlineResultHandler!(mockChosenCtx);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await vi.waitFor(() => {
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalled();
+    });
 
     const regenCtx = {
       callbackQuery: {
@@ -400,10 +402,10 @@ describe('registerInlineHandler', () => {
     };
 
     await callbackQueryHandler!(regenCtx);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
-    expect(regenCtx.answerCallbackQuery).toHaveBeenCalled();
-    expect(regenCtx.api.raw.editMessageText).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(regenCtx.answerCallbackQuery).toHaveBeenCalled();
+      expect(regenCtx.api.raw.editMessageText).toHaveBeenCalled();
+    });
   });
 
   it('should answer callback query with alert for inline_thinking', async () => {
@@ -535,12 +537,13 @@ describe('registerInlineHandler', () => {
     };
 
     await chosenInlineResultHandler!(mockChosenCtx);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     // runAgyPrint must have been called with the model from the chosen card.
-    expect(runAgyPrint).toHaveBeenCalledWith(
-      expect.objectContaining({ model: chosenModel }),
-    );
+    await vi.waitFor(() => {
+      expect(runAgyPrint).toHaveBeenCalledWith(
+        expect.objectContaining({ model: chosenModel }),
+      );
+    });
   });
 
   it('should not append suggestion cards for image task', async () => {
@@ -611,34 +614,35 @@ describe('registerInlineHandler', () => {
     };
 
     await chosenInlineResultHandler!(mockChosenCtx);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    expect(mockChosenCtx.api.sendRichMessage).toHaveBeenCalledWith(
-      12345,
-      expect.objectContaining({
-        markdown: expect.stringContaining('tg://photo?id='),
-        media: expect.arrayContaining([
-          expect.objectContaining({
-            media: expect.objectContaining({ type: 'photo' }),
-          }),
-        ]),
-      }),
-    );
-    // Transient relay message is deleted so the image only shows in-line.
-    expect(mockChosenCtx.api.deleteMessage).toHaveBeenCalledWith(12345, 999);
-    expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inline_message_id: 'test_inline_msg_id_123',
-        rich_message: expect.objectContaining({
+    await vi.waitFor(() => {
+      expect(mockChosenCtx.api.sendRichMessage).toHaveBeenCalledWith(
+        12345,
+        expect.objectContaining({
           markdown: expect.stringContaining('tg://photo?id='),
           media: expect.arrayContaining([
             expect.objectContaining({
-              media: expect.objectContaining({ type: 'photo', media: 'photo_large' }),
+              media: expect.objectContaining({ type: 'photo' }),
             }),
           ]),
         }),
-      }),
-    );
-    expect(mockChosenCtx.api.raw.editMessageMedia).not.toHaveBeenCalled();
+      );
+      // Transient relay message is deleted so the image only shows in-line.
+      expect(mockChosenCtx.api.deleteMessage).toHaveBeenCalledWith(12345, 999);
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'test_inline_msg_id_123',
+          rich_message: expect.objectContaining({
+            markdown: expect.stringContaining('tg://photo?id='),
+            media: expect.arrayContaining([
+              expect.objectContaining({
+                media: expect.objectContaining({ type: 'photo', media: 'photo_large' }),
+              }),
+            ]),
+          }),
+        }),
+      );
+      expect(mockChosenCtx.api.raw.editMessageMedia).not.toHaveBeenCalled();
+    });
   });
 });

@@ -557,7 +557,7 @@ describe('[Integration] InlineStreamQueue adaptive throttling', () => {
       },
     };
 
-    const queue = new InlineStreamQueue(mockApi, 'inline-msg-429');
+    const queue = new InlineStreamQueue(mockApi, 'inline-msg-429', 0.01);
     const success = await queue.flushFinal('Final after 429 retry');
 
     expect(success).toBe(true);
