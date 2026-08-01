@@ -986,6 +986,50 @@ describe('registerInlineHandler', () => {
     });
   });
 
+  it('should filter candidate models when /v @family search is used', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/v @deep 对比DeepSeek模型' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const resultId = inlineCtx.answerInlineQuery.mock.calls[0][0][0].id;
+    const mockChosenCtx = {
+      from: { id: 12345 },
+      chosenInlineResult: {
+        result_id: resultId,
+        from: { id: 12345 },
+        query: '/v @deep 对比DeepSeek模型',
+        inline_message_id: 'cmp_deep_msg',
+      },
+      api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+    await chosenInlineResultHandler!(mockChosenCtx);
+
+    await vi.waitFor(() => {
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'cmp_deep_msg',
+          reply_markup: expect.objectContaining({
+            inline_keyboard: expect.arrayContaining([
+              expect.arrayContaining([
+                expect.objectContaining({ text: expect.stringContaining('DeepSeek') }),
+              ]),
+            ]),
+          }),
+        }),
+      );
+    });
+  });
+
   it('should render the compare picker when a compare card is chosen', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
