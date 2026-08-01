@@ -8,7 +8,6 @@ import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir } from '../../../config/userConfig.js';
 import { formatTokenCount } from '../formatter/core.js';
-import { getCachedDocument } from './pdfCache.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -232,14 +231,13 @@ export class InlineStreamQueue {
   }
 }
 
-export type InlineTask = 'translate' | 'summarize' | 'fix' | 'code' | 'image' | 'pdf';
+export type InlineTask = 'translate' | 'summarize' | 'fix' | 'code' | 'image';
 const TASK_PREFIX_MAP: Record<string, InlineTask> = {
   '/translate': 'translate',
   '/summarize': 'summarize',
   '/fix': 'fix',
   '/code': 'code',
   '/img': 'image',
-  '/pdf': 'pdf',
 };
 
 export const IMAGE_TASK_INSTRUCTION =
@@ -298,7 +296,6 @@ const TASK_INSTRUCTION: Record<InlineTask, string> = {
   fix: '请分析以下代码/报错信息并给出修复方案，附上修改后的代码：\n\n',
   code: '请给出实现以下需求的完整代码（含必要注释）：\n\n',
   image: IMAGE_TASK_INSTRUCTION,
-  pdf: '',
 };
 
 const THUMBNAIL_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72';
@@ -332,7 +329,7 @@ export function parseInlineModelAndPrompt(
     const token = parts[0];
 
     // Task prefixes take precedence over project switches so a literal
-    // /pdf is never swallowed by the /p project matcher below.
+    // task flag is never swallowed by the /p project matcher below.
     const alias = token.toLowerCase();
     if (TASK_PREFIX_MAP[alias]) {
       task = TASK_PREFIX_MAP[alias];
@@ -393,7 +390,6 @@ export async function runModelWithFallbackChain(
   customCwd?: string,
   onChunk?: (chunk: string) => void,
   onModelStart?: (modelName: string) => void,
-  extraDirs?: string[],
 ): Promise<FallbackRunResult> {
   const skipModels = new Set<string>();
   const chain = buildTierAwareChain(initialModel, skipModels);
@@ -412,7 +408,6 @@ export async function runModelWithFallbackChain(
           proxy: defaultOptions.proxy,
           onChunk,
           signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
-          extraDirs,
         });
         clearTimeout(timeout);
         if (result?.output) {
@@ -627,7 +622,7 @@ export function registerInlineHandler(
     // Default to active session project if no explicit /pN flag was provided
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
-    if (!prompt && task !== 'image' && task !== 'pdf') {
+    if (!prompt && task !== 'image') {
       const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>/p${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
       const results = [
         {
@@ -681,7 +676,7 @@ export function registerInlineHandler(
           description: '/translate /summarize /fix /code /img 一键调用',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与搜索前缀混用（如 <code>@flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）\n📄 <code>/pdf 问题</code> — 分析私聊上传的文档（先发送文档给 @static32bot 缓存）`,
+            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与搜索前缀混用（如 <code>@flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🛠️ <code>/fix 代码/报错</code> — 分析修复\n💻 <code>/code 需求</code> — 生成完整代码\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -731,7 +726,6 @@ export function registerInlineHandler(
         : task === 'summarize' ? '📋 **总结模式**'
         : task === 'fix' ? '🛠️ **修复模式**'
         : task === 'code' ? '💻 **代码模式**'
-        : task === 'pdf' ? '📄 **文档问答模式**'
         : undefined;
 
       if (familyMode) {
@@ -772,7 +766,6 @@ export function registerInlineHandler(
         : task === 'summarize' ? `📋 点击总结 [${modelToUse}]`
         : task === 'fix' ? `🛠️ 点击修复 [${modelToUse}]`
         : task === 'code' ? `💻 点击生成代码 [${modelToUse}]`
-        : task === 'pdf' ? `📄 点击文档问答 [${modelToUse}]`
         : `🤔 点击发送并开始思考 [${modelToUse}]`;
       let initMarkdown: string;
       if (task === 'image') {
@@ -955,34 +948,14 @@ async function runInlineGeneration(
     createdAt: Date.now(),
   });
 
-  // /pdf Q&A: attach the user's cached document and let the model read it.
-  let pdfExtraDirs: string[] | undefined;
-  let effectivePrompt = prompt;
-  if (task === 'pdf') {
-    const doc = getCachedDocument(fromId);
-    if (doc) {
-      pdfExtraDirs = [path.dirname(doc.filePath)];
-      effectivePrompt = `请阅读并解析以下文档文件，然后回答我的问题：\n\n文档：${doc.fileName}\n\n（文件已放在可访问目录中，请使用工具读取它的完整内容。）\n\n问题：${prompt || '请总结这份文档的内容要点。'}`;
-      logger.info(`[InlineResult] /pdf task for userId=${fromId} file="${doc.fileName}"`);
-    } else {
-      await ctx.api.raw.editMessageText({
-        inline_message_id: inlineMessageId,
-        text: `<b>📄 /pdf 文档问答</b>\n\n⚠️ <b>未找到已缓存的文档</b>\n请先在私聊中把要分析的文档（.txt/.md/.json/.pdf 等）发送给 @static32bot，它会自动缓存，然后再用 <code>@static32bot /pdf 你的问题</code> 发起提问。`,
-        parse_mode: 'HTML',
-      } as any).catch(() => {});
-      return;
-    }
-  }
-
   const { result, modelUsed, isFallback } = await runModelWithFallbackChain(
-    effectivePrompt,
+    prompt,
     model,
     defaultOptions,
     ctrl.signal,
     projectPath,
     onChunk,
     onModelStart,
-    pdfExtraDirs,
   );
 
   if (task === 'image') {
