@@ -84,9 +84,9 @@ describe('parseInlineModelAndPrompt', () => {
     expect(res1.prompt).toContain('总结');
     expect(res1.prompt).toContain('量子计算');
 
-    const res2 = parseInlineModelAndPrompt('/fix @pro 这个报错', 'Gemini 3.5 Flash');
+    const res2 = parseInlineModelAndPrompt('/v @pro 这个报错', 'Gemini 3.5 Flash');
     expect(res2.family).toBe('pro');
-    expect(res2.task).toBe('fix');
+    expect(res2.task).toBe('compare');
   });
 
   it('should mark /img as image task and wrap prompt with image instruction', () => {
@@ -794,6 +794,153 @@ describe('registerInlineHandler', () => {
         }),
       );
       expect(mockChosenCtx.api.raw.editMessageMedia).not.toHaveBeenCalled();
+    });
+  });
+
+  it('should mark /v as compare task with empty instruction', () => {
+    const res = parseInlineModelAndPrompt('/v 这个方案如何', 'Gemini 3.6 Flash (Medium)');
+    expect(res.task).toBe('compare');
+    expect(res.prompt).toBe('这个方案如何');
+  });
+
+  it('should answer /v inline query with a single compare picker card', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/v 对比一下方案' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    expect(callArg).toHaveLength(1);
+    expect(callArg[0]).toMatchObject({
+      id: expect.stringContaining('ai-'),
+      title: expect.stringContaining('⚖️'),
+    });
+  });
+
+  it('should render the compare picker when a compare card is chosen', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/v 对比一下方案' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+    const resultId = inlineCtx.answerInlineQuery.mock.calls[0][0][0].id;
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: resultId,
+        from: { id: 12345 },
+        query: '/v 对比一下方案',
+        inline_message_id: 'cmp_inline_msg',
+      },
+      api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+    await chosenInlineResultHandler!(mockChosenCtx);
+
+    await vi.waitFor(() => {
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'cmp_inline_msg',
+          rich_message: expect.objectContaining({
+            markdown: expect.stringContaining('⚖️ 多模型对比'),
+          }),
+          reply_markup: expect.objectContaining({
+            inline_keyboard: expect.arrayContaining([
+              expect.arrayContaining([
+                expect.objectContaining({ callback_data: expect.stringContaining('inline_cmp_pick:') }),
+              ]),
+            ]),
+          }),
+        }),
+      );
+    });
+  });
+
+  it('should run all selected models in parallel when compare starts', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+    (runAgyPrint as any).mockClear();
+    (runAgyPrint as any).mockResolvedValue({ output: '对比回答内容。' });
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/v 对比一下方案' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+    const resultId = inlineCtx.answerInlineQuery.mock.calls[0][0][0].id;
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: resultId,
+        from: { id: 12345 },
+        query: '/v 对比一下方案',
+        inline_message_id: 'cmp_inline_msg',
+      },
+      api: {
+        editMessageTextInline: vi.fn().mockResolvedValue(true),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+    await chosenInlineResultHandler!(mockChosenCtx);
+
+    // Grab the keyboard rows from the picker edit and click two model buttons.
+    const pickEdit = mockChosenCtx.api.raw.editMessageText.mock.calls[0][0];
+    const buttons = pickEdit.reply_markup.inline_keyboard.flat() as Array<{ callback_data: string }>;
+    const pickButtons = buttons.filter((b) => b.callback_data.startsWith('inline_cmp_pick:'));
+
+    const pickCtxBase = {
+      answerCallbackQuery: vi.fn().mockResolvedValue(true),
+      api: {
+        raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+      },
+      callbackQuery: { inline_message_id: 'cmp_inline_msg', data: '' },
+    };
+
+    await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: pickButtons[0].callback_data } });
+    await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: pickButtons[1].callback_data } });
+
+    // Now click the start button that appeared.
+    const startEdit = pickCtxBase.api.raw.editMessageText.mock.calls.slice(-1)[0][0];
+    const startButtons = (startEdit.reply_markup.inline_keyboard.flat() as Array<{ callback_data: string }>).filter((b) => b.callback_data.startsWith('inline_cmp_start:'));
+    expect(startButtons.length).toBe(1);
+
+    await callbackQueryHandler!({ ...pickCtxBase, callbackQuery: { ...pickCtxBase.callbackQuery, data: startButtons[0].callback_data } });
+
+    await vi.waitFor(() => {
+      expect(runAgyPrint).toHaveBeenCalledTimes(2);
+    });
+
+    // Final flush includes pagination with regenerate button.
+    await vi.waitFor(() => {
+      expect(pickCtxBase.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rich_message: expect.objectContaining({
+            markdown: expect.stringContaining('⚖️ 多模型对比'),
+          }),
+          reply_markup: expect.objectContaining({
+            inline_keyboard: expect.arrayContaining([
+              expect.arrayContaining([
+                expect.objectContaining({ callback_data: expect.stringContaining('inline_page:') }),
+              ]),
+            ]),
+          }),
+        }),
+      );
     });
   });
 });
