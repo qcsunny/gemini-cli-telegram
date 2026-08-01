@@ -742,6 +742,9 @@ export class TelegramBot {
           callbackData === 'inline_noop' ||
           callbackData === 'inline_thinking'
         )) {
+          const inMsgId = ctx.callbackQuery?.inline_message_id ?? '(no inline_message_id)';
+          const isAllowed = !!userId && allowedSet.has(userId);
+          logger.info(`[Auth] BYPASS inline pagination: userId=${userId} allowed=${isAllowed} data="${callbackData}" inline_message_id=${inMsgId}`);
           await next();
           return;
         }
