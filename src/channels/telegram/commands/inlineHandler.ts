@@ -20,7 +20,10 @@ export interface InlineHandlerOptions {
   allowedUsers?: number[];
 }
 
-const MODEL_TIMEOUT_MS = 120_000;
+/** Inactivity timeout — aborts when no stream activity for this long. */
+const INACTIVITY_TIMEOUT_MS = 60_000;
+/** Hard ceiling — aborts regardless of activity to prevent infinite agent loops. */
+const HARD_TIMEOUT_MS = 600_000;
 const RESULTS_TTL = 120_000;
 
 interface PendingResult {
@@ -505,8 +508,30 @@ export async function runModelWithFallbackChain(
 
   for (const modelToUse of chain) {
     for (let attempt = 1; attempt <= 2; attempt++) {
+      // Sliding inactivity timer (reset on every stream chunk) + hard ceiling.
+      // Tool-calling/agentic models may work for a long time without emitting a
+      // final answer — a fixed deadline would kill them mid-tool-call. We abort
+      // only when the model goes silent, or after the hard ceiling.
       const timeoutCtrl = new AbortController();
-      const timeout = setTimeout(() => timeoutCtrl.abort(), MODEL_TIMEOUT_MS);
+      let inactivityTimer: NodeJS.Timeout;
+      let hardTimer: NodeJS.Timeout;
+      const armTimer = () => {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(() => timeoutCtrl.abort(), INACTIVITY_TIMEOUT_MS);
+      };
+      armTimer();
+      hardTimer = setTimeout(() => timeoutCtrl.abort(), HARD_TIMEOUT_MS);
+      const clearTimers = () => {
+        clearTimeout(inactivityTimer);
+        clearTimeout(hardTimer);
+      };
+      // Reset the inactivity timer whenever the model streams something.
+      const wrappedChunk = onChunk
+        ? (chunk: string) => {
+            armTimer();
+            onChunk(chunk);
+          }
+        : undefined;
       try {
         logger.info(`[InlineQuery] Attempting model="${modelToUse}" (${attempt}/2) for initial="${initialModel}"`);
         if (onModelStart) onModelStart(modelToUse);
@@ -515,25 +540,29 @@ export async function runModelWithFallbackChain(
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
           model: modelToUse,
           proxy: defaultOptions.proxy,
-          onChunk,
+          onChunk: wrappedChunk,
           signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
         });
-        clearTimeout(timeout);
-        if (result?.output) {
+        clearTimers();
+        // A timed-out run may carry partial stdout; treat it as a failure rather
+        // than returning a truncated "successful" answer.
+        if (result?.output && !result.isTimeout) {
           return {
             result,
             modelUsed: modelToUse,
             isFallback: modelToUse !== initialModel,
           };
         }
+        logger.warn(`[AgentQuery] attempt ${attempt}/2 incomplete for model="${modelToUse}" output=${result?.output ? result.output.length : 0} isTimeout=${result?.isTimeout}`);
       } catch (err) {
-        clearTimeout(timeout);
-        // A user-initiated stop (or timeout) must terminate the whole chain
-        // immediately — never auto-retry an aborted attempt.
+        clearTimers();
+        // A user-initiated stop must terminate the whole chain immediately —
+        // never auto-retry an aborted attempt. Inactivity/hard timeouts surface
+        // as a resolving result (with isTimeout), not a reject.
         if ((err as Error)?.name === 'AbortError') {
           return { result: null, modelUsed: initialModel, isFallback: false };
         }
-        logger.warn(`[InlineQuery] Attempt ${attempt}/2 failed for model="${modelToUse}": ${err}`);
+        logger.warn(`[Agent] Attempt ${attempt}/2 failed for model="${modelToUse}": ${err}`);
       }
     }
   }
