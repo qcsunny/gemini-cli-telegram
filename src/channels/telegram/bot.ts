@@ -67,6 +67,29 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
   return markdownToHtml(originalText, isStreaming);
 }
 
+// ── Media caption task instruction injection (#3) ──
+
+const MEDIA_CAPTION_TASK_MAP: Record<string, string> = {
+  '/translate': '请将以下图片/文档中的内容翻译成中文，保持原意与格式：\n\n',
+  '/summarize': '请用简洁的语言总结以下图片/文档中的内容，列出要点：\n\n',
+};
+
+/**
+ * If a media caption starts with a supported task command (/translate, /summarize),
+ * strip the command token and inject the corresponding task instruction as the
+ * text prompt — while leaving the actual attachment pipeline untouched.
+ * Returns undefined when no task command is present.
+ */
+function injectMediaCaptionTask(caption?: string): string | undefined {
+  if (!caption) return undefined;
+  const trimmed = caption.trim();
+  const lowerToken = trimmed.split(/\s+/)[0]?.toLowerCase() ?? '';
+  const instruction = MEDIA_CAPTION_TASK_MAP[lowerToken];
+  if (!instruction) return undefined;
+  const rest = trimmed.slice(trimmed.indexOf(' ') + 1).trim();
+  return `${instruction}${rest}`;
+}
+
 // ── Types ──
 
 export interface TelegramBotOptions {
@@ -973,8 +996,9 @@ export class TelegramBot {
       async (session, channelReply) => {
         tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
 
+        const taskText = injectMediaCaptionTask(info.caption);
         const multimodalInput: MultimodalInput = {
-          text: info.caption,
+          text: taskText ?? info.caption ?? '',
           media: [
             {
               type: mediaType,

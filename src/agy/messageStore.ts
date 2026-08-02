@@ -98,6 +98,63 @@ export function clearMessages(conversationId: string, backend: Backend): void {
   }
 }
 
+/**
+ * Aggregate cumulative token usage across ALL stored messages for a given
+ * Telegram chat (matched via conversations table → conversationId), summing the
+ * per-turn `usage` JSON column. Returns a single cumulative TokenUsage.
+ */
+export function getCumulativeUsageByChat(chatId: string | number): {
+  input: number;
+  output: number;
+  cached: number;
+  thinking: number;
+} {
+  const zero = { input: 0, output: 0, cached: 0, thinking: 0 };
+  try {
+    const db = getDb();
+    const convRows = db
+      .select({ conversationId: schema.conversations.conversationId })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.chatId, String(chatId)))
+      .all() as { conversationId: string }[];
+
+    if (convRows.length === 0) return zero;
+
+    const convIds = convRows.map((r) => r.conversationId);
+    const allMsgs = db
+      .select({
+        conversationId: schema.messages.conversationId,
+        usage: schema.messages.usage,
+        backend: schema.messages.backend,
+      })
+      .from(schema.messages)
+      .all() as { conversationId: string; usage: string | null; backend: string }[];
+
+    let input = 0;
+    let output = 0;
+    let cached = 0;
+    let thinking = 0;
+
+    for (const row of allMsgs) {
+      if (!convIds.includes(row.conversationId) || !row.usage) continue;
+      try {
+        const u = JSON.parse(row.usage) as Partial<Record<keyof typeof zero, number>>;
+        input += Number(u.input) || 0;
+        output += Number(u.output) || 0;
+        cached += Number(u.cached) || 0;
+        thinking += Number(u.thinking) || 0;
+      } catch {
+        /* skip malformed usage blob */
+      }
+    }
+
+    return { input, output, cached, thinking };
+  } catch (e) {
+    logger.warn(`[messageStore] getCumulativeUsageByChat failed: ${e}`);
+    return zero;
+  }
+}
+
 /** Known conversation IDs (backend|convId) for lazy loading. */
 export const knownConversationIds = new Set<string>();
 
