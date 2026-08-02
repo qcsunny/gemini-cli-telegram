@@ -14,6 +14,8 @@ import { registerAutomationHandlers } from './commands/automationHandlers.js';
 import { registerProjectHandlers } from './commands/projectHandlers.js';
 import { registerCallbackRouter } from './commands/callbackRouter.js';
 import { registerInlineHandler } from './commands/inlineHandler.js';
+import { registerPrivateTaskHandlers } from './commands/privateTaskHandler.js';
+import { registerSettingsHandler } from './commands/settingsHandler.js';
 
 /**
  * Register Telegram slash command handlers on the bot.
@@ -30,6 +32,8 @@ export function registerCommands(
   registerContentHandlers(bot, sessionManager, defaultOptions);
   registerAutomationHandlers(bot, sessionManager, defaultOptions, triggerAutopilot);
   registerProjectHandlers(bot, sessionManager, defaultOptions);
+  registerSettingsHandler(bot, sessionManager, defaultOptions);
   registerCallbackRouter(bot, sessionManager, defaultOptions);
   registerInlineHandler(bot, sessionManager, defaultOptions, { allowedUsers });
+  registerPrivateTaskHandlers(bot, sessionManager, defaultOptions);
 }
