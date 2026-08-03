@@ -16,7 +16,7 @@ import { Context, InputFile } from 'grammy';
 
 import type { InputRichMessage } from '@grammyjs/types/rich.js';
 import type { RichBlock } from '../richMessage.js';
-import { markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildStreamingBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
+import { markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
 import { draftBackoffUntil, record429Backoff, is429Error, get429RetryAfter } from './rateLimiter.js';
@@ -459,47 +459,45 @@ export function buildChannelReply(
     },
 
     sendRichDraft: async (originalText: string | StructuredMessage): Promise<number> => {
-      let draftId = draftIds.get(chatId);
-      if (!draftId) {
-        draftId = Math.floor(Math.random() * 2147483647) + 1;
-        draftIds.set(chatId, draftId);
-      }
-      activeDraftIds.add(draftId);
-
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
       const thoughtPreview = typeof originalText !== 'string' ? (originalText.thought?.slice(0, 60).replace(/\n/g, '\\n') || '') : '';
-      logger.info(`[TRACE-EVIDENCE] sendRichDraft called: draftId=${draftId}, originalTextLen=${logTextLen}, thought.len=${typeof originalText !== 'string' ? (originalText.thought?.length || 0) : 0}, thought.preview="${thoughtPreview}", first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      logger.info(`[TRACE-EVIDENCE] sendRichDraft called: originalTextLen=${logTextLen}, thought.len=${typeof originalText !== 'string' ? (originalText.thought?.length || 0) : 0}, thought.preview="${thoughtPreview}", first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = getCacheMarkdown(originalText);
 
       // Throttle to avoid 429 on rapid stream updates
       await throttleDraft(chatId, draftThrottleMs);
 
-      // Option A (10.2): Native structured blocks with native `thinking` placeholder
-      // while streaming (draft-only). Body blocks are streamed once content arrives.
+      // Visible streaming: send a REAL persisted message via sendRichMessage so the
+      // user's client renders the bubble, then editMessageText updates it in place.
+      // (Bot API 10.2 `thinking` blocks / <tg-thinking> are draft-only, so we fold
+      // the thought into a native `details` block instead of the draft placeholder.)
+
+      // Option A (10.2): Native structured blocks
       try {
-        const contentRaw = typeof originalText === 'string' ? originalText : originalText.content;
-        const thoughtRaw = typeof originalText === 'string' ? undefined : originalText.thought;
-        const blocks = buildStreamingBlocks({ content: contentRaw, thought: thoughtRaw });
+        const blocks = getBlocksPayload(originalText);
         if (blocks.length > 0) {
           if (!validateBlocksPayload(blocks)) {
-            logger.warn(`[BLOCK VALIDATION] Draft blocks failed pre-flight, falling through`);
+            logger.warn(`[BLOCK VALIDATION] sendRichDraft blocks failed pre-flight, falling through`);
             throw new Error('Draft blocks validation failed');
           }
-          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option A - blocks): draftId=${draftId}, blocks=${blocks.length}`);
-          await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessagePayload(blocks), {
+          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option A - blocks): blocks=${blocks.length}`);
+          const res = await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(blocks), {
             message_thread_id: messageThreadId,
           });
-          logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (blocks) success for draftId=${draftId}.`);
-          messageCache.set(draftId, cacheMarkdown);
-          return draftId;
+          const realId = res.message_id;
+          draftIds.set(chatId, realId);
+          activeDraftIds.add(realId);
+          messageCache.set(realId, cacheMarkdown);
+          logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft blocks) success: real message id=${realId}.`);
+          return realId;
         }
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (blocks) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (blocks) failed: ${err.message || err}. Stack: ${err.stack}`);
       }
 
-      // Option B: Native Rich HTML with native thinking animation
+      // Option B: Native Rich HTML (plain placeholder, not draft-only <tg-thinking>)
       try {
         const html = getHtmlPayloadWithDetails(originalText, true);
 
@@ -509,80 +507,73 @@ export function buildChannelReply(
 
         const suffix = contentText
           ? ''
-          : '\n<tg-thinking>正在思考...</tg-thinking>';
+          : '<br>正在思考...';
 
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option B): html="${html}${suffix}"`);
-        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageHtmlPayload(`${html}${suffix}`), {
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option B - HTML)`);
+        const res = await ctx.api.sendRichMessage(chatId, buildRichMessageHtmlPayload(`${html}${suffix}`), {
           message_thread_id: messageThreadId,
         });
-        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (HTML) success for draftId=${draftId}.`);
-        messageCache.set(draftId, cacheMarkdown);
-        return draftId;
+        const realId = res.message_id;
+        draftIds.set(chatId, realId);
+        activeDraftIds.add(realId);
+        messageCache.set(realId, cacheMarkdown);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft HTML) success: real message id=${realId}.`);
+        return realId;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option B (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option B (HTML) failed: ${err.message || err}. Stack: ${err.stack}`);
       }
 
       // Option C: Rich Markdown
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (Option C - Markdown): markdown="${safeMarkdown}"`);
-        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown), {
+        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option C - Markdown)`);
+        const res = await ctx.api.sendRichMessage(chatId, buildRichMessageMarkdownPayload(safeMarkdown), {
           message_thread_id: messageThreadId,
         });
-        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (Markdown) success for draftId=${draftId}.`);
-        messageCache.set(draftId, cacheMarkdown);
-        return draftId;
+        const realId = res.message_id;
+        draftIds.set(chatId, realId);
+        activeDraftIds.add(realId);
+        messageCache.set(realId, cacheMarkdown);
+        logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft Markdown) success: real message id=${realId}.`);
+        return realId;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option C (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option C (Markdown) failed: ${err.message || err}. Stack: ${err.stack}`);
         throw err;
       }
     },
     editRichDraft: async (draftId: number, originalText: string | StructuredMessage, isStreaming = true): Promise<void> => {
       const logTextLen = typeof originalText === 'string' ? originalText.length : (originalText.content.length + (originalText.thought?.length || 0));
       const logFirst100 = typeof originalText === 'string' ? originalText.slice(0, 100) : originalText.content.slice(0, 100);
-      logger.info(`[TRACE-EVIDENCE] editRichDraft called: draftId=${draftId}, isStreaming=${isStreaming}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
+      logger.info(`[TRACE-EVIDENCE] editRichDraft called: messageId=${draftId}, isStreaming=${isStreaming}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = getCacheMarkdown(originalText);
 
       // Throttle to avoid 429 on rapid stream updates
       await throttleDraft(chatId, draftThrottleMs);
 
-      // Try Option A (10.2): Native editRichMessage / editMessageText for visible message bubbles
+      // The draft is now a REAL persisted message (created by sendRichDraft via
+      // sendRichMessage), so we update it in place with editMessageText for a
+      // visible typewriter effect.
+
+      // Option A (10.2): Native structured blocks
       try {
-        const contentRaw = typeof originalText === 'string' ? originalText : originalText.content;
-        const thoughtRaw = typeof originalText === 'string' ? undefined : originalText.thought;
-        const html = getHtmlPayloadWithDetails(originalText, isStreaming);
-
-        // First attempt: try editRichMessage / editMessageText for true visible message bubble
-        try {
-          await ctx.api.editMessageText(chatId, draftId, html, {
-            parse_mode: 'HTML',
-          });
-          logger.info(`[TRACE-EVIDENCE] editMessageText success for visible bubble messageId=${draftId}.`);
-          messageCache.set(draftId, cacheMarkdown);
-          return;
-        } catch (editErr: any) {
-          if (editErr?.description?.includes('message is not modified') || String(editErr).includes('message is not modified')) {
-            return;
-          }
-          logger.debug(`[TRACE-EVIDENCE] Direct editMessageText for draftId=${draftId} failed, trying sendRichMessageDraft: ${editErr.message}`);
-        }
-
-        const blocks = buildStreamingBlocks({ content: contentRaw, thought: thoughtRaw });
+        const blocks = getBlocksPayload(originalText);
         if (blocks.length > 0 && validateBlocksPayload(blocks)) {
-          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option A - blocks): draftId=${draftId}, blocks=${blocks.length}`);
-          await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessagePayload(blocks), {
-            message_thread_id: messageThreadId,
-          });
-          logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit blocks) success for draftId=${draftId}.`);
+          logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft Option A - blocks): messageId=${draftId}, blocks=${blocks.length}`);
+          await ctx.api.editMessageText(chatId, draftId, buildRichMessagePayload(blocks));
+          logger.info(`[TRACE-EVIDENCE] editMessageText (edit blocks) success for messageId=${draftId}.`);
           messageCache.set(draftId, cacheMarkdown);
           return;
         }
       } catch (err: any) {
+        if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        }
         if (is429Error(err)) {
           record429Backoff(chatId, get429RetryAfter(err));
         }
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A (blocks) failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 
       // Option B: Rich HTML
@@ -593,33 +584,44 @@ export function buildChannelReply(
           ? (originalText.includes('<thought') || originalText.includes('<thinking'))
           : (!!originalText.thought && originalText.thought.trim().length > 0);
 
-        const suffix = (isStreaming && !hasThought)
-          ? '\n<tg-thinking>正在思考...</tg-thinking>'
+        const contentText = typeof originalText === 'string'
+          ? originalText.replace(/<thought[^>]*>[\s\S]*?<\/thought[^>]*>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think[^>]*>/gi, '').trim()
+          : (originalText.content || '').trim();
+
+        const suffix = (isStreaming && !hasThought && !contentText)
+          ? '<br>正在思考...'
           : '';
 
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option B, isStreaming=${isStreaming}): html="${html}${suffix}"`);
-        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageHtmlPayload(`${html}${suffix}`), {
-          message_thread_id: messageThreadId,
-        });
-        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit HTML) success for draftId=${draftId}.`);
+        logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft Option B - HTML, isStreaming=${isStreaming})`);
+        await ctx.api.editMessageText(chatId, draftId, buildRichMessageHtmlPayload(`${html}${suffix}`));
+        logger.info(`[TRACE-EVIDENCE] editMessageText (edit HTML) success for messageId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option B (HTML) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        }
+        if (is429Error(err)) {
+          record429Backoff(chatId, get429RetryAfter(err));
+        }
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option B (HTML) failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
       }
 
       // Option C: Rich Markdown fallback
       try {
         const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (edit - Option C - Markdown): markdown="${safeMarkdown}"`);
-        await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown), {
-          message_thread_id: messageThreadId,
-        });
-        logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (edit Markdown) success for draftId=${draftId}.`);
+        logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft Option C - Markdown)`);
+        await ctx.api.editMessageText(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown));
+        logger.info(`[TRACE-EVIDENCE] editMessageText (edit Markdown) success for messageId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
       } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option C (Markdown) failed for draftId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        }
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option C (Markdown) failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
         throw err;
       }
     },
@@ -639,10 +641,12 @@ export function buildChannelReply(
           logger.warn(`[BLOCK VALIDATION] sendRichDraftBlocks payload failed validation`);
           throw new Error('Block payload validation failed');
         }
-        await ctx.api.sendRichMessageDraft(chatId, targetDraftId, buildRichMessagePayload(blocks as RichBlock[]), {
+        const res = await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(blocks as RichBlock[]), {
           message_thread_id: messageThreadId,
         });
-        return targetDraftId;
+        draftIds.set(chatId, res.message_id);
+        activeDraftIds.add(res.message_id);
+        return res.message_id;
       } catch (err: any) {
         logger.warn(`sendRichDraftBlocks failed for draftId=${draftId}: ${err.message || err}`);
         throw err;
@@ -655,13 +659,11 @@ export function buildChannelReply(
           throw new Error('Block payload validation failed');
         }
         if (activeDraftIds.has(messageId) || draftIds.get(chatId) === messageId) {
-          // Materialize draft: sendRichMessage creates a persisted message
-          const res = await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(blocks as RichBlock[]), {
-            message_thread_id: messageThreadId,
-          });
+          // The "draft" is now a real persisted message; edit it in place.
+          await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(blocks as RichBlock[]));
           activeDraftIds.delete(messageId);
           if (draftIds.get(chatId) === messageId) draftIds.delete(chatId);
-          return res.message_id;
+          return messageId;
         }
         // Edit existing persisted message via editMessageText
         await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(blocks as RichBlock[]));
@@ -680,20 +682,12 @@ export function buildChannelReply(
 
       const cacheMarkdown = getCacheMarkdown(originalText);
 
-      // If we have an active draft, the messageId is actually a draftId.
-      // Per Telegram Bot API, a streamed draft is an EPHEMERAL preview that is
-      // NOT persisted in the chat. To keep the first message, we MUST materialize
-      // it into a real message by sending the final content via sendRichMessage
-      // (not another sendRichMessageDraft, which would just refresh the preview
-      // and leave the first message swallowed once the draft expires). The draft
-      // bubble is abandoned and cleaned up by Telegram automatically.
+      // The "draft" is now a REAL persisted message (created by sendRichDraft via
+      // sendRichMessage), so finalization edits it in place — no second message.
       if (activeDraftIds.has(messageId) || draftIds.get(chatId) === messageId) {
-        logger.info(`[FINALIZE] materializing draft into a real persisted message via sendRich (was draft messageId=${messageId})`);
+        logger.info(`[FINALIZE] finalizing real streaming message in place (was messageId=${messageId})`);
         activeDraftIds.delete(messageId);
         if (draftIds.get(chatId) === messageId) draftIds.delete(chatId);
-        const realId = await replyObj.sendRich!(originalText);
-        logger.info(`[FINALIZE] sent real message id=${realId} for chat ${chatId}; first message preserved`);
-        return realId;
       }
 
       // Option A (10.2): Native structured blocks (final, persisted message).

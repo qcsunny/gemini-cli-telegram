@@ -208,8 +208,10 @@ describe('[Integration] Private chat: rich message full path', () => {
     await processMessage(session, { text: 'hello' }, reply, makeFormatter());
 
     expect(reply.sendRichDraft).toHaveBeenCalled();
-    expect(reply.sendRich).toHaveBeenCalled();
-    const finalArg = (reply.sendRich as any).mock.calls[0][0];
+    // Finalize edits the real streaming message in place (no duplicate sendRich).
+    expect(reply.sendRich).not.toHaveBeenCalled();
+    expect(reply.editRich).toHaveBeenCalled();
+    const finalArg = (reply.editRich as any).mock.calls[0][1];
     expect(finalArg.content).toContain('Answer here.');
     expect(reply.send).not.toHaveBeenCalled();
   });
@@ -227,8 +229,9 @@ describe('[Integration] Private chat: rich message full path', () => {
 
     await processMessage(session, { text: 'hi' }, reply, makeFormatter());
 
-    expect(reply.sendRich).toHaveBeenCalled();
-    const finalArg = (reply.sendRich as any).mock.calls[0][0];
+    // The streamed draft is a real message; finalize edits it in place.
+    expect(reply.editRich).toHaveBeenCalled();
+    const finalArg = (reply.editRich as any).mock.calls[0][1];
     expect((finalArg.content ?? finalArg)).toContain('Short answer.');
   });
 
@@ -270,8 +273,8 @@ describe('[Integration] Private chat: rich message full path', () => {
 
     await processMessage(session, { text: 'fallback test' }, reply, makeFormatter());
 
-    expect(reply.sendRich).toHaveBeenCalled();
-    const finalArg = (reply.sendRich as any).mock.calls[0][0];
+    expect(reply.editRich).toHaveBeenCalled();
+    const finalArg = (reply.editRich as any).mock.calls[0][1];
     expect((finalArg.content ?? finalArg)).toContain('Fallback OK.');
   });
 });
