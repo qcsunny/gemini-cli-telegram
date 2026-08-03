@@ -83,9 +83,12 @@ export function registerSettingsHandler(
   // Callback panel. Registered BEFORE callbackRouter (in registerCommands) so it
   // owns `settings:`-prefixed callbacks; everything else is passed through via
   // the middleware chain (this handler returns without answering otherwise).
-  bot.on('callback_query:data', async (ctx: Context) => {
+  bot.on('callback_query:data', async (ctx: Context, next) => {
     const data = ctx.callbackQuery?.data;
-    if (!data || !data.startsWith('settings:')) return;
+    if (!data || !data.startsWith('settings:')) {
+      await next();
+      return;
+    }
     const chatId = ctx.chat?.id;
     if (!chatId) {
       await ctx.answerCallbackQuery().catch(() => {});
