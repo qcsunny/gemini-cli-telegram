@@ -2,17 +2,27 @@ import { extractThoughtAndContent } from '../../agy/agyCli.js';
 
 export function stripWholeMessageCodeFence(text: string): string {
   const trimmed = text.trim();
-  // Match code fences wrapping the entire output (allowing any common text/markdown language tag or no tag)
-  const fenceMatch = /^```([a-zA-Z0-9_+-]*)\s*\n([\s\S]*?)\n```$/s.exec(trimmed);
-  if (!fenceMatch) return text;
-  const lang = (fenceMatch[1] || '').toLowerCase();
+  // Match a leading fence wrapping the body. The whole fragment need not be
+  // JUST the fence — models often append a brief remark after the closing
+  // fence, which would otherwise leave the entire body framed as a code block.
+  const opening = /^```([a-zA-Z0-9_+-]*)\s*\n/.exec(trimmed);
+  if (!opening) return text;
+  const lang = (opening[1] || '').toLowerCase();
   // Allow empty lang tag, or markdown/md/text/plaintext/none
   const allowedLangs = new Set(['', 'markdown', 'md', 'text', 'plaintext', 'none', 'txt']);
   if (lang && !allowedLangs.has(lang)) return text;
-  const inner = fenceMatch[2];
-  // If the inner content contains nested fences (e.g. real code snippets), don't strip if lang is empty and it might break code
-  if (lang === '' && /^```/m.test(inner.trim())) return text;
-  return inner.trim();
+  const rest = trimmed.slice(opening[0].length);
+  // Find the FIRST fence-close line (a line that is only backticks). Inner
+  // nested fences cast as code can't be the closer because a proper closing
+  // fence must be flush (no info string). Use the earliest one to keep the
+  // tail that follows the outer fence (e.g. a human remark after the block).
+  const closeMatch = /^```[ \t]*$/m.exec(rest);
+  if (!closeMatch) return text;
+  const inner = rest.slice(0, closeMatch.index).trim();
+  // If the inner content contains nested fences (e.g. real code snippets),
+  // don't strip when lang is empty and it might break code.
+  if (lang === '' && /^```/m.test(inner)) return text;
+  return inner;
 }
 
 export function normalizeCodeFences(text: string): string {
