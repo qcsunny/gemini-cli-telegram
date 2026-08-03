@@ -215,7 +215,7 @@ describe('TelegramBot', () => {
       }));
 
       await reply.sendRichDraft!('Hello Draft!');
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith(expect.objectContaining({
         chat_id: chatId,
         message_thread_id: 42,
         rich_message: { blocks: expect.any(Array) }
@@ -270,43 +270,32 @@ describe('TelegramBot', () => {
       expect(msgId).toBe(999);
     });
 
-    it('should generate and reuse draft ID across sendRichDraft calls', async () => {
+    it('should send a REAL persisted message via sendRichDraft and return its message id', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      const firstId = await reply.sendRichDraft!('draft text 1');
 
-      const firstDraftId = await reply.sendRichDraft!('draft text 1');
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledWith({
+      // sendRichDraft must use sendRichMessage (a real persisted message), NOT the
+      // ephemeral sendRichMessageDraft preview, so the user sees the streamed bubble.
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith({
         chat_id: chatId,
-        draft_id: firstDraftId,
         rich_message: expect.any(Object),
       });
-      let parsed = mockCtx.api.raw.sendRichMessageDraft.mock.calls[0][0].rich_message;
+      const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
       expect(parsed).toHaveProperty('blocks');
-
-      const secondDraftId = await reply.sendRichDraft!('draft text 2');
-      expect(secondDraftId).toBe(firstDraftId);
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenLastCalledWith({
-        chat_id: chatId,
-        draft_id: firstDraftId,
-        rich_message: expect.any(Object),
-      });
-      parsed = mockCtx.api.raw.sendRichMessageDraft.mock.calls[1][0].rich_message;
-      expect(parsed).toHaveProperty('blocks');
+      // The returned id is the real message id from Telegram.
+      expect(firstId).toBe(888);
     });
 
     it('should fallback to Option B (HTML) in sendRichDraft if Option A (blocks) throws', async () => {
-      mockCtx.api.raw.sendRichMessageDraft.mockRejectedValueOnce(new Error('blocks draft fail'));
+      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('blocks draft fail'));
 
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const draftId = await reply.sendRichDraft!('draft text');
 
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(2);
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenLastCalledWith({
-        chat_id: chatId,
-        draft_id: draftId,
-        rich_message: expect.any(Object),
-      });
-      const parsed = mockCtx.api.raw.sendRichMessageDraft.mock.calls[1][0].rich_message;
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(2);
+      const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[1][0].rich_message;
       expect(parsed).toHaveProperty('html');
+      expect(draftId).toBe(888);
     });
 
     it('should successfully edit Rich blocks (Option A)', async () => {
@@ -327,28 +316,28 @@ describe('TelegramBot', () => {
 
       // Simulate draft is active (this sets a draft ID in draftIds map for the chatId)
       const draftId = await reply.sendRichDraft!('some draft');
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
 
       // Now call editRich (simulating finalization edit)
       const finalizedId = await reply.editRich!(draftId, 'final text');
 
-      // A streamed draft is an ephemeral preview that is NOT persisted by Telegram.
-      // Finalization MUST materialize it into a real message via sendRichMessage
-      // (not another sendRichMessageDraft, which would just refresh the preview and
-      // leave the first message swallowed).
-      expect(mockCtx.api.raw.editMessageText).not.toHaveBeenCalled();
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+      // sendRichDraft creates a REAL persisted message (sendRichMessage), and the
+      // draft is tracked in draftIds/activeDraftIds. Finalization must EDIT that
+      // same real message in place via editMessageText (no duplicate send, no
+      // ephemeral sendRichMessageDraft).
+      expect(mockCtx.api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
-      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith(
+      expect(mockCtx.api.raw.editMessageText).toHaveBeenCalledWith(
         expect.objectContaining({
           chat_id: chatId,
+          message_id: draftId,
           rich_message: expect.objectContaining({
             blocks: expect.any(Array),
           }),
         })
       );
-      // The real persisted message id is returned so callers can track it.
-      expect(finalizedId).toBe(888);
+      // editRich edits in place and returns void (no new message id).
+      expect(finalizedId).toBeUndefined();
     });
 
     it('should fallback to edit Option B (HTML) if Option A (blocks) throws', async () => {
@@ -388,7 +377,7 @@ describe('TelegramBot', () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText', undefined, undefined, { draftThrottleMs: 0 });
       const draftId = await reply.sendPlain('streaming text');
 
-      expect(mockCtx.api.raw.sendRichMessageDraft).toHaveBeenCalled();
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalled();
       expect(draftId).toBeDefined();
     });
 
@@ -401,7 +390,7 @@ describe('TelegramBot', () => {
     });
 
     it('should trigger circuit breaker and fall back to plain editing if sendRichDraft fails twice', async () => {
-      mockCtx.api.raw.sendRichMessageDraft.mockRejectedValue(new Error('Draft rate limit'));
+      mockCtx.api.raw.sendRichMessage.mockRejectedValue(new Error('Draft rate limit'));
       mockCtx.api.editMessageText.mockRejectedValue(new Error('Edit rate limit'));
       const reply = buildChannelReply(mockCtx, chatId, 'RichText', undefined, undefined, { draftThrottleMs: 0 });
       
@@ -412,10 +401,10 @@ describe('TelegramBot', () => {
       // Verify it handles failures gracefully and does not throw to the caller
       expect(mockCtx.reply).toHaveBeenCalled();
       
-      // Verify subsequent calls directly bypass sendRichMessageDraft (it won't be called more times after threshold is hit)
-      mockCtx.api.raw.sendRichMessageDraft.mockClear();
+      // Verify subsequent calls directly bypass sendRichMessage (it won't be called more times after threshold is hit)
+      mockCtx.api.raw.sendRichMessage.mockClear();
       await reply.sendPlain('stream chunk 3');
-      expect(mockCtx.api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
+      expect(mockCtx.api.raw.sendRichMessage).not.toHaveBeenCalled();
     });
 
     it('should detect 429 error and extract retry_after', () => {

@@ -501,9 +501,11 @@ describe('processMessage', () => {
 
     // sendRichDraft was called during streaming (thought → body transition)
     expect(richReply.sendRichDraft).toHaveBeenCalled();
-    // sendRich was called for the final persisted message with content+thought
-    expect(richReply.sendRich).toHaveBeenCalled();
-    const finalCall = (richReply.sendRich as any).mock.calls[0][0];
+    // The streaming draft is now a REAL message, so finalization EDITS it in place
+    // via editRich with the final content+thought (no duplicate sendRich).
+    expect(richReply.sendRich).not.toHaveBeenCalled();
+    expect(richReply.editRich).toHaveBeenCalled();
+    const finalCall = (richReply.editRich as any).mock.calls[0][1];
     // The final content includes both body and thought as a StructuredMessage
     expect(finalCall).toHaveProperty('content');
     expect(finalCall.content).toContain('final answer');

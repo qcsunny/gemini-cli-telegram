@@ -114,7 +114,7 @@ export async function processMessage(
       const resId = await reply.sendRichDraft!(content);
       if (typeof resId === 'number' && resId > 0) currentMessageId = resId;
     } else if (phase === 'footer') {
-      await reply.sendRich!(content);
+      await reply.editRichDraft!(currentMessageId, content);
     } else {
       await reply.editRichDraft!(currentMessageId, content);
     }
@@ -491,10 +491,16 @@ export async function processMessage(
             if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
             if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
 
-            logger.info(`[TRACE finalize] content.len=${finalContent.content.length} thought.len=${(finalContent.thought || '').length} thought.preview="${(finalContent.thought || '').slice(0, 80).replace(/\n/g, '\\n')}" hasSendRich=${!!reply.sendRich}`);
+            logger.info(`[TRACE finalize] content.len=${finalContent.content.length} thought.len=${(finalContent.thought || '').length} thought.preview="${(finalContent.thought || '').slice(0, 80).replace(/\n/g, '\\n')}" hasSendRich=${!!reply.sendRich} hasEditRich=${!!reply.editRich}`);
 
-            // Use sendRich to finalize the message
-            if (reply.sendRich) {
+            // The streaming draft is now a REAL persisted message (sendRichDraft
+            // uses sendRichMessage), so finalize by EDITING it in place with the
+            // final content (thought folded into a details block + footer).
+            // Only send a brand-new message if no edit primitive is available
+            // (e.g. plain-text fallback or a legacy non-rich reply object).
+            if (reply.editRich) {
+              await reply.editRich!(currentMessageId, finalContent);
+            } else if (reply.sendRich) {
               currentMessageId = await reply.sendRich!(finalContent);
             } else {
               // Plain text fallback
@@ -512,10 +518,14 @@ export async function processMessage(
               };
               if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
               if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
-              currentMessageId = await reply.sendRich!(finalContent);
+              if (reply.editRich) {
+                await reply.editRich!(currentMessageId, finalContent);
+              } else {
+                currentMessageId = await reply.sendRich!(finalContent);
+              }
               if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
             } catch (e2) {
-              logger.warn(`[messageLoop] sendRich fallback failed: ${e2}`);
+              logger.warn(`[messageLoop] editRich/sendRich fallback failed: ${e2}`);
             }
           }
         } else if (answerBuffer.trim()) {
