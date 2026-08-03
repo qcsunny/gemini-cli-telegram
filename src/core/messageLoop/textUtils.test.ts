@@ -32,6 +32,24 @@ describe('stripWholeMessageCodeFence', () => {
     const input = '```js\nconsole.log(1)\n```';
     expect(stripWholeMessageCodeFence(input)).toBe(input);
   });
+
+  it('strips a whole-message fence with four backticks (model quirk)', () => {
+    const input = '````markdown\n# 人机协同的深度演进\n\n图片展示了论文。\n````';
+    expect(stripWholeMessageCodeFence(input)).toBe(
+      '# 人机协同的深度演进\n\n图片展示了论文。'
+    );
+  });
+
+  it('strips a four-backtick fence even with a remark appended after close', () => {
+    const input =
+      '````markdown\n# 标题\n\n正文内容。\n````\n以上是我对该论文的解读';
+    expect(stripWholeMessageCodeFence(input)).toBe('# 标题\n\n正文内容。');
+  });
+
+  it('strips a four-backtick opening fence closed with three backticks (model quirk)', () => {
+    const input = '````markdown\n# 标题\n\n正文内容。\n```';
+    expect(stripWholeMessageCodeFence(input)).toBe('# 标题\n\n正文内容。');
+  });
 });
 
 describe('normalizeCodeFences', () => {

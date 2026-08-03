@@ -2,21 +2,26 @@ import { extractThoughtAndContent } from '../../agy/agyCli.js';
 
 export function stripWholeMessageCodeFence(text: string): string {
   const trimmed = text.trim();
-  // Match a leading fence wrapping the body. The whole fragment need not be
-  // JUST the fence — models often append a brief remark after the closing
-  // fence, which would otherwise leave the entire body framed as a code block.
-  const opening = /^```([a-zA-Z0-9_+-]*)\s*\n/.exec(trimmed);
+  // Match a leading fence wrapping the body. Models sometimes emit MORE than
+  // three backticks (e.g. ````markdown````) — accept any run of 3+ backticks
+  // as the fence delimiter. Also tolerate a brief remark appended after the
+  // closing fence instead of requiring the fragment to be exactly the fence.
+  const opening = /^(`{3,})([a-zA-Z0-9_+-]*)\s*\n/.exec(trimmed);
   if (!opening) return text;
-  const lang = (opening[1] || '').toLowerCase();
+  const fenceTicks = opening[1];
+  const lang = (opening[2] || '').toLowerCase();
   // Allow empty lang tag, or markdown/md/text/plaintext/none
   const allowedLangs = new Set(['', 'markdown', 'md', 'text', 'plaintext', 'none', 'txt']);
   if (lang && !allowedLangs.has(lang)) return text;
   const rest = trimmed.slice(opening[0].length);
-  // Find the FIRST fence-close line (a line that is only backticks). Inner
-  // nested fences cast as code can't be the closer because a proper closing
-  // fence must be flush (no info string). Use the earliest one to keep the
-  // tail that follows the outer fence (e.g. a human remark after the block).
-  const closeMatch = /^```[ \t]*$/m.exec(rest);
+  // Find the FIRST fence-close line. Prefer a run as long as the opener's
+  // (spec-compliant); if the model closed with fewer backticks than it opened
+  // with (common quirk: ````markdown … ```), fall back to any flush line of
+  // >=3 backticks. The earliest match keeps the tail after the outer fence.
+  let closeMatch = new RegExp('^' + fenceTicks + '[ \\t]*$', 'm').exec(rest);
+  if (!closeMatch) {
+    closeMatch = /^`{3,}[ \t]*$/m.exec(rest);
+  }
   if (!closeMatch) return text;
   const inner = rest.slice(0, closeMatch.index).trim();
   // If the inner content contains nested fences (e.g. real code snippets),
