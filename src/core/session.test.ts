@@ -48,6 +48,21 @@ describe('ProjectManager', () => {
     });
   });
 
+  describe('getProjectsInConfigOrder', () => {
+    it('should return projects in load (insertion) order regardless of lastUsed', async () => {
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify([
+        { id: 'p-a', name: 'Alpha', path: '/p/a', lastUsed: '2020-01-01T00:00:00Z' },
+        { id: 'p-b', name: 'Beta', path: '/p/b', lastUsed: '2020-03-01T00:00:00Z' },
+        { id: 'p-c', name: 'Gamma', path: '/p/c', lastUsed: '2020-02-01T00:00:00Z' },
+      ]));
+
+      await projectManager.loadProjects();
+
+      expect(projectManager.getProjects().map(p => p.name)).toEqual(['Beta', 'Gamma', 'Alpha']);
+      expect(projectManager.getProjectsInConfigOrder().map(p => p.name)).toEqual(['Alpha', 'Beta', 'Gamma']);
+    });
+  });
+
   describe('scanDirectory', () => {
     it('should identify a directory with package.json as a project', async () => {
       const mockDirPath = '/projects/my-app';

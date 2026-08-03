@@ -1033,7 +1033,7 @@ export function registerInlineHandler(
     const activeSession = sessionManager.getSession(fromId);
     const sessionModel = activeSession?.config?.getModel();
     const activeModel = sessionModel || defaultOptions.model || '';
-    const allProjects = sessionManager.getProjects();
+    const allProjects = sessionManager.getProjectsInConfigOrder();
     const { model: modelToUse, prompt, family, families, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
 
     // Default to active session project if no explicit /pN flag was provided
