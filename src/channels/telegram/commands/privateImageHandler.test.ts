@@ -43,6 +43,7 @@ describe('privateImageHandler', () => {
     mockSessionManager = {
       getSession: vi.fn().mockReturnValue(null),
       getProjects: vi.fn().mockReturnValue([]),
+      getProjectsInConfigOrder: vi.fn().mockReturnValue([]),
     };
     defaultOptions = { cwd: '/tmp', model: 'Gemini 3.5 Flash' };
   });

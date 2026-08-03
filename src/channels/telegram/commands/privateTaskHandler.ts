@@ -62,7 +62,7 @@ async function handlePrivateTask(
   // Reuse the shared prefix parser: pass `/task <payload>` so /p /@ /task
   // tokens are honored and the task instruction is injected automatically.
   const session = sessionManager.getSession(chatId);
-  const availableProjects = sessionManager.getProjects() as any[];
+  const availableProjects = sessionManager.getProjectsInConfigOrder() as any[];
   const defaultModel =
     session?.model || session?.config?.getModel?.() || defaultOptions.model || 'Gemini 3.5 Flash';
 

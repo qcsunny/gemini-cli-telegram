@@ -236,6 +236,16 @@ export class ProjectManager {
       .sort((a, b) => (b.lastUsed?.getTime() || 0) - (a.lastUsed?.getTime() || 0));
   }
 
+  /**
+   * Projects in solidified config order (config.json `projects` array), so
+   * `/pN` numeric indices map to the same stable numbering users see.
+   * Insertion order of the map equals the solidified order because
+   * initialize() rebuilds the map by iterating the config array.
+   */
+  getProjectsInConfigOrder(): ProjectInfo[] {
+    return Array.from(this.projects.values());
+  }
+
   getProject(id: string): ProjectInfo | undefined {
     return this.projects.get(id);
   }
@@ -347,6 +357,10 @@ export class SessionManager {
 
   getProjects(): ProjectInfo[] {
     return this.projectManager.getProjects();
+  }
+
+  getProjectsInConfigOrder(): ProjectInfo[] {
+    return this.projectManager.getProjectsInConfigOrder();
   }
 
   private async createSession(
