@@ -215,10 +215,12 @@ describe('TelegramBot', () => {
       }));
 
       await reply.sendRichDraft!('Hello Draft!');
+      // Streaming draft is sent as markdown (fast typewriter path); blocks are
+      // rendered only at finalize.
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith(expect.objectContaining({
         chat_id: chatId,
         message_thread_id: 42,
-        rich_message: { blocks: expect.any(Array) }
+        rich_message: { markdown: expect.any(String) }
       }));
     });
 
@@ -281,21 +283,20 @@ describe('TelegramBot', () => {
         rich_message: expect.any(Object),
       });
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
-      expect(parsed).toHaveProperty('blocks');
+      // Streaming phase sends markdown directly for a smooth typewriter effect.
+      expect(parsed).toHaveProperty('markdown');
       // The returned id is the real message id from Telegram.
       expect(firstId).toBe(888);
     });
 
-    it('should fallback to Option B (HTML) in sendRichDraft if Option A (blocks) throws', async () => {
-      mockCtx.api.raw.sendRichMessage.mockRejectedValueOnce(new Error('blocks draft fail'));
-
+    it('should send streaming draft as markdown (no block parse during streaming)', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
-      const draftId = await reply.sendRichDraft!('draft text');
+      await reply.sendRichDraft!('draft text');
 
-      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(2);
-      const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[1][0].rich_message;
-      expect(parsed).toHaveProperty('html');
-      expect(draftId).toBe(888);
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+      const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
+      expect(parsed).toHaveProperty('markdown');
+      expect(parsed).not.toHaveProperty('blocks');
     });
 
     it('should successfully edit Rich blocks (Option A)', async () => {

@@ -40,6 +40,31 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
     : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
 }
 
+/**
+ * Streaming-safe markdown: strips any literal <thought>/<think> XML so the
+ * typewriter render never shows raw tags. Body content renders as markdown;
+ * while only thinking, show a short "thinking..." placeholder so the bubble
+ * is never empty (mirrors the inline path, which streams raw accumulated text).
+ */
+function getStreamingMarkdown(text: string | StructuredMessage): string {
+  const strip = (s: string) => s
+    .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<\/?thought[^>]*>/gi, '')
+    .replace(/<\/?thinking[^>]*>/gi, '')
+    .replace(/<\/?think[^>]*>/gi, '')
+    .trim();
+  if (typeof text === 'string') {
+    const content = strip(text);
+    return content || '🧠 正在思考... (Thinking...)';
+  }
+  const content = strip(text.content || '');
+  const thought = strip(text.thought || '');
+  if (content) return content;
+  if (thought) return '🧠 正在思考... (Thinking...)';
+  return '';
+}
+
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
   let html = getHtmlPayload(text, isStreaming);
   if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
@@ -51,6 +76,13 @@ function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming
 const draftThrottleTimestamps = new Map<number, number>();
 const DRAFT_THROTTLE_MS = 250;
 
+/**
+ * Draft update pacing. The per-chat 250ms fixed spacing is intentionally small:
+ * the core messageLoop already debounces stream flushes (debounceIntervalMs,
+ * default 350ms), so the two together cap edit rate at ~350ms without stacking.
+ * A 429 backoff overrides everything and force-waits until the retry-after
+ * window expires (draftBackoffUntil).
+ */
 async function throttleDraft(chatId: number, draftThrottleMs: number): Promise<void> {
   const now = Date.now();
   const backoffUntil = draftBackoffUntil.get(chatId) ?? 0;
@@ -471,62 +503,16 @@ export function buildChannelReply(
 
       // Visible streaming: send a REAL persisted message via sendRichMessage so the
       // user's client renders the bubble, then editMessageText updates it in place.
-      // (Bot API 10.2 `thinking` blocks / <tg-thinking> are draft-only, so we fold
-      // the thought into a native `details` block instead of the draft placeholder.)
-
-      // Option A (10.2): Native structured blocks
+      //
+      // Performance: during the streaming phase we send RICH MARKDOWN directly
+      // (Option C), skipping the expensive per-update blocks/AST parse. Parsing the
+      // accumulated markdown into native 10.2 blocks on every chunk caused visible
+      // stutter for long answers (same agy model streams smoothly via the inline
+      // path, which edits raw markdown). Blocks are rendered only once at finalize
+      // (editRich / editRichBlocks).
+      const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
+      logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option C - Markdown streaming)`);
       try {
-        const blocks = getBlocksPayload(originalText);
-        if (blocks.length > 0) {
-          if (!validateBlocksPayload(blocks)) {
-            logger.warn(`[BLOCK VALIDATION] sendRichDraft blocks failed pre-flight, falling through`);
-            throw new Error('Draft blocks validation failed');
-          }
-          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option A - blocks): blocks=${blocks.length}`);
-          const res = await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(blocks), {
-            message_thread_id: messageThreadId,
-          });
-          const realId = res.message_id;
-          draftIds.set(chatId, realId);
-          activeDraftIds.add(realId);
-          messageCache.set(realId, cacheMarkdown);
-          logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft blocks) success: real message id=${realId}.`);
-          return realId;
-        }
-      } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (blocks) failed: ${err.message || err}. Stack: ${err.stack}`);
-      }
-
-      // Option B: Native Rich HTML (plain placeholder, not draft-only <tg-thinking>)
-      try {
-        const html = getHtmlPayloadWithDetails(originalText, true);
-
-        const contentText = typeof originalText === 'string'
-          ? originalText.replace(/<thought[^>]*>[\s\S]*?<\/thought[^>]*>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think[^>]*>/gi, '').trim()
-          : (originalText.content || '').trim();
-
-        const suffix = contentText
-          ? ''
-          : '<br>正在思考...';
-
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option B - HTML)`);
-        const res = await ctx.api.sendRichMessage(chatId, buildRichMessageHtmlPayload(`${html}${suffix}`), {
-          message_thread_id: messageThreadId,
-        });
-        const realId = res.message_id;
-        draftIds.set(chatId, realId);
-        activeDraftIds.add(realId);
-        messageCache.set(realId, cacheMarkdown);
-        logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft HTML) success: real message id=${realId}.`);
-        return realId;
-      } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option B (HTML) failed: ${err.message || err}. Stack: ${err.stack}`);
-      }
-
-      // Option C: Rich Markdown
-      try {
-        const safeMarkdown = prepareTelegramMarkdown(cacheMarkdown);
-        logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option C - Markdown)`);
         const res = await ctx.api.sendRichMessage(chatId, buildRichMessageMarkdownPayload(safeMarkdown), {
           message_thread_id: messageThreadId,
         });
@@ -554,6 +540,31 @@ export function buildChannelReply(
       // The draft is now a REAL persisted message (created by sendRichDraft via
       // sendRichMessage), so we update it in place with editMessageText for a
       // visible typewriter effect.
+      //
+      // Performance: during the streaming phase edit the RICH MARKDOWN directly
+      // (Option C), skipping the per-update blocks/AST parse that caused visible
+      // stutter (see sendRichDraft). Blocks are rendered once at finalize via
+      // editRich / editRichBlocks.
+      if (isStreaming) {
+        try {
+          const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
+          logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft streaming - Markdown)`);
+          await ctx.api.editMessageText(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown));
+          logger.info(`[TRACE-EVIDENCE] editMessageText (edit streaming Markdown) success for messageId=${draftId}.`);
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        } catch (err: any) {
+          if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+            messageCache.set(draftId, cacheMarkdown);
+            return;
+          }
+          if (is429Error(err)) {
+            record429Backoff(chatId, get429RetryAfter(err));
+          }
+          logger.info(`[TRACE-EVIDENCE] editRichDraft streaming Markdown failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+          throw err;
+        }
+      }
 
       // Option A (10.2): Native structured blocks
       try {
