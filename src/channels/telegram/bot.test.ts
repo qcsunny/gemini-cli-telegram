@@ -299,6 +299,17 @@ describe('TelegramBot', () => {
       expect(parsed).not.toHaveProperty('blocks');
     });
 
+    it('should never send an empty markdown payload during streaming (RICH_MESSAGE_EMPTY guard)', async () => {
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText');
+      await reply.sendRichDraft!({ content: '', thought: '' });
+
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+      const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
+      expect(parsed).toHaveProperty('markdown');
+      const md = parsed.markdown as string;
+      expect(md.trim().length).toBeGreaterThan(0);
+    });
+
     it('should successfully edit Rich blocks (Option A)', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       await reply.editRich!(100, '**bold** text');

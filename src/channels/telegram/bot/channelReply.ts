@@ -62,7 +62,7 @@ function getStreamingMarkdown(text: string | StructuredMessage): string {
   const thought = strip(text.thought || '');
   if (content) return content;
   if (thought) return '🧠 正在思考... (Thinking...)';
-  return '';
+  return '🧠 正在思考... (Thinking...)';
 }
 
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
