@@ -338,6 +338,38 @@ Thanks for reading! 🚀
     expect(detailsBlock.blocks[0].text[0].type).toBe('bold');
   });
 
+  it('should preserve body details blocks with formatted folded content in blocks path', () => {
+    const blocks = markdownToRichBlocks('> [details] 点击展开\n> 内容有 **粗体** 和 `代码` 还有 *斜体*\n\n后续正文');
+    const detailsBlock = blocks.find(b => b.type === 'details') as any;
+    expect(detailsBlock).toBeDefined();
+    expect(detailsBlock.summary).toBe('点击展开');
+    expect(detailsBlock.blocks[0].type).toBe('paragraph');
+    const content = detailsBlock.blocks[0].text as any[];
+    expect(content).toEqual([
+      '内容有 ',
+      { type: 'bold', text: ['粗体'] },
+      ' 和 代码 还有 ',
+      { type: 'italic', text: ['斜体'] },
+    ]);
+    // The body paragraph after the details block is still present.
+    expect(blocks.some(b => b.type === 'paragraph')).toBe(true);
+  });
+
+  it('should keep details block when folded body has content (not filtered as empty)', () => {
+    const blocks = markdownToRichBlocks('> [details] 只有标题\n> 折叠内容');
+    const detailsBlock = blocks.find(b => b.type === 'details') as any;
+    expect(detailsBlock).toBeDefined();
+    expect(detailsBlock.summary).toBe('只有标题');
+    expect(detailsBlock.blocks[0].text).toBe('折叠内容');
+  });
+
+  it('should keep details block even with no folded body (empty placeholder not filtered)', () => {
+    const blocks = markdownToRichBlocks('> [details] 仅标题折叠');
+    const detailsBlock = blocks.find(b => b.type === 'details') as any;
+    expect(detailsBlock).toBeDefined();
+    expect(detailsBlock.summary).toBe('仅标题折叠');
+  });
+
   it('should preserve bold tags in buildFooterBlocksFromHtml for thinking details', () => {
     const html = '<details><summary>🧠 思考过程</summary><b>AssessingPaceofProgress</b></details>';
     const blocks = buildFooterBlocksFromHtml(html);
