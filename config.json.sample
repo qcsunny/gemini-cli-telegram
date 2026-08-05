@@ -2,10 +2,14 @@
   "telegramBotToken": "YOUR_BOT_TOKEN",
   "allowedUsers": [123456789],
   "model": "Gemini 3.5 Flash (Medium)",
+  "defaultProject": "示例项目",
   "proxy": "http://127.0.0.1:7890",
   "notebookPath": "",
   "geminiApiKey": "",
   "deepseekApiKey": "",
+  "paths": {
+    "opencodeDb": "/home/user/.local/share/opencode/opencode.db"
+  },
   "projects": [
     {
       "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
