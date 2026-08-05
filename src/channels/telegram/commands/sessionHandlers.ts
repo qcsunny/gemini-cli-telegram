@@ -9,6 +9,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
+import { getDefaultModel, getDefaultProjectName } from '../../../config/userConfig.js';
 import { ICONS, buildMainKeyboard, buildResumeKeyboard, escapeHtml, formatWelcome } from '../ui.js';
 import { fullInlineOutputs } from './inlineHandler.js';
 
@@ -65,15 +66,15 @@ export function registerSessionHandlers(
 
       const projectManager = sessionManager.getProjectManager();
       const allProjects = projectManager.getProjects() || [];
-      const defaultProj = allProjects.find(p => p?.name === '通用知识专家_RichText') || allProjects[0];
+      const defaultProj = allProjects.find(p => p?.name === getDefaultProjectName()) || allProjects[0];
       
       await sessionManager.reset(chatId, {
         ...defaultOptions,
         project: defaultProj,
-        model: defaultOptions.model || 'Gemini 3.6 Flash (High)',
+        model: defaultOptions.model || getDefaultModel() || '',
       });
 
-      const modelName = defaultOptions.model || 'Gemini 3.6 Flash (High)';
+      const modelName = defaultOptions.model || getDefaultModel() || '';
       await ctx.reply(
         `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${escapeHtml(modelName)}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },

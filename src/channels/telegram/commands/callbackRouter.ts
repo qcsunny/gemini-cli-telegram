@@ -11,7 +11,7 @@ import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
-import { getBrowseRoot, getInboxDir, loadUserConfig } from '../../../config/userConfig.js';
+import { getBrowseRoot, getInboxDir, getDefaultProjectName, loadUserConfig } from '../../../config/userConfig.js';
 import { loadModelsConfig } from '../../../core/modelRegistry.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { loadMessages } from '../../../agy/messageStore.js';
@@ -57,7 +57,7 @@ export function registerCallbackRouter(
       try {
         const projectManager = sessionManager.getProjectManager();
         const allProjects = projectManager.getProjects();
-        const defaultProj = allProjects.find(p => p.name === '通用知识专家_RichText') || allProjects[0];
+        const defaultProj = allProjects.find(p => p.name === getDefaultProjectName()) || allProjects[0];
         await sessionManager.reset(chatId, {
           ...defaultOptions,
           project: defaultProj,
