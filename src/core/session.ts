@@ -21,7 +21,7 @@ import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd } from '../agy/conversationStore.js';
 import { clearWeb2ApiHistory, clearDeepSeekHistory, clearGeminiDirectHistory, clearOpenCodeHistory } from '../agy/agyCli.js';
-import { loadUserConfig, CONFIG_DIR } from '../config/userConfig.js';
+import { loadUserConfig, getDefaultModel, getDefaultProjectName, CONFIG_DIR } from '../config/userConfig.js';
 
 /** Factory function type for building chat-bound media sender functions */
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
@@ -382,7 +382,8 @@ export class SessionManager {
 
     if (!project && !savedCwd) {
       const allProjects = this.projectManager.getProjects();
-      const found = allProjects.find(p => p.name === '通用知识专家_RichText') || allProjects[0];
+      const defaultProjectName = getDefaultProjectName();
+      const found = (defaultProjectName && allProjects.find(p => p.name === defaultProjectName)) || allProjects[0];
       if (found) {
         project = found;
         logger.info(`[SessionManager] Automatically set default project: ${project.name} (${project.path})`);
@@ -407,7 +408,7 @@ export class SessionManager {
 
     const conversationId = (await getConversationId(chatId)) || undefined;
     const storedModel = await getStoredModel(chatId);
-    const modelToUse = storedModel || options.model || 'Gemini 3.6 Flash (High)';
+    const modelToUse = storedModel || options.model || getDefaultModel() || '';
     const sendMedia = this.sendMediaFactory?.(chatId);
 
     const session: DaemonSession = {
@@ -430,7 +431,7 @@ export class SessionManager {
       sendMedia,
       autopilot: undefined,
       config: {
-        getModel: () => session.model || 'Gemini 3.6 Flash (High)',
+        getModel: () => session.model || getDefaultModel() || '',
         setModel: (modelName: string) => {
           session.model = modelName;
           setConversation(chatId, session.conversationId || '', session.currentProject?.path || process.cwd(), modelName).catch(err => {

@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import * as fs from 'node:fs';
+import Database from 'better-sqlite3';
 import { logger } from '../../utils/logger.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
+import { getOpenCodeDbPath } from '../../config/userConfig.js';
 import { opencodeHistories, makeOpenCodeConvId } from '../conversationManager.js';
 import { saveMessage } from '../messageStore.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
@@ -23,6 +25,34 @@ function getOpenCodePath(): string {
   return 'opencode';
 }
 
+const SESSION_TITLE_PREFIX = 'gemini-cli-telegram:';
+
+/**
+ * Look up an existing opencode session id by the bot's conversation marker.
+ * The bot tags every session it creates with title "gemini-cli-telegram:<convId>"
+ * so subsequent turns can continue the same conversation instead of starting
+ * a fresh session (which previously lost all multi-turn context).
+ */
+export function findSessionIdByConvId(convId: string): string | null {
+  const dbPath = getOpenCodeDbPath();
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const row = db
+      .prepare('SELECT id FROM session WHERE title = ? ORDER BY time_updated DESC LIMIT 1')
+      .get(`${SESSION_TITLE_PREFIX}${convId}`) as { id: string } | undefined;
+    if (row?.id) {
+      logger.info(`[opencode] Found existing session ${row.id} for conv ${convId}`);
+      return row.id;
+    }
+  } catch (err) {
+    logger.warn(`[opencode] Failed to query opencode db for session lookup: ${err}`);
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
+  }
+  return null;
+}
+
 export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
   const { prompt, conversationId: existingConvId, model = '', signal, proxy } = opts;
   const convId = existingConvId || makeOpenCodeConvId();
@@ -38,6 +68,16 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   if (modelId) {
     args.push('--model', modelId);
+  }
+
+  // Reuse the opencode-native session for multi-turn context: if this convId
+  // already has a tagged session, continue it with --session; otherwise create
+  // a new one and tag it so future turns can find it again.
+  const existingSessionId = findSessionIdByConvId(convId);
+  if (existingSessionId) {
+    args.push('--session', existingSessionId);
+  } else {
+    args.push('--title', `${SESSION_TITLE_PREFIX}${convId}`);
   }
 
   return new Promise((resolve, reject) => {

@@ -72,6 +72,9 @@ export const userConfigSchema = z.object({
   /** Solidified project list (id/name/path/description). Kept in the local,
    *  gitignored config so personal directory paths never reach the remote repo. */
   projects: z.array(projectInfoSchema).optional(),
+  /** Default project name used when a chat has no saved cwd. Matches a project
+   *  name in the `projects` list. If unset, falls back to the first project. */
+  defaultProject: z.string().optional(),
   /**
    * Custom file paths (optional). All default to CONFIG_DIR (project root).
    * Override any path to store data elsewhere.
@@ -93,6 +96,8 @@ export const userConfigSchema = z.object({
     agyConversations: z.string().optional(),
     /** agy CLI data directory (conversations, brain, OAuth token). Default: ~/.gemini/antigravity-cli */
     agyDataDir: z.string().optional(),
+    /** opencode SQLite database path. Default: $XDG_DATA_HOME/opencode/opencode.db or ~/.local/share/opencode/opencode.db */
+    opencodeDb: z.string().optional(),
     /** Default browse root directory for /project_browse. Default: ~/Documents */
     browseRoot: z.string().optional(),
     /** Default inbox directory for saving responses. Default: ~/Documents/Obsidian/Inbox */
@@ -308,11 +313,40 @@ export function getAgyDataDir(): string {
   return cfg?.paths?.agyDataDir || AGY_DATA_DIR_DEFAULT;
 }
 
+/**
+ * Returns the configured default model display name (config.json "model").
+ * Returns null when unset so callers can fall back to their own ordering.
+ */
+export function getDefaultModel(): string | null {
+  return loadUserConfig()?.model ?? null;
+}
+
+/**
+ * Returns the configured default project name (config.json "defaultProject").
+ * Returns null when unset so callers fall back to the first project.
+ */
+export function getDefaultProjectName(): string | null {
+  return loadUserConfig()?.defaultProject ?? null;
+}
+
 const BROWSE_ROOT_DEFAULT = path.join(os.homedir(), 'Documents');
 
 export function getBrowseRoot(): string {
   const cfg = loadUserConfig();
   return cfg?.paths?.browseRoot || BROWSE_ROOT_DEFAULT;
+}
+
+const OPENCODE_DATA_DIR_DEFAULT = path.join(os.homedir(), '.local', 'share', 'opencode');
+const OPENCODE_DB_DEFAULT = path.join(OPENCODE_DATA_DIR_DEFAULT, 'opencode.db');
+
+export function getOpenCodeDbPath(): string {
+  if (process.env['OPENCODE_DB']) return process.env['OPENCODE_DB'];
+  const cfg = loadUserConfig();
+  if (cfg?.paths?.opencodeDb) return cfg.paths.opencodeDb;
+  if (process.env['XDG_DATA_HOME']) {
+    return path.join(process.env['XDG_DATA_HOME'], 'opencode', 'opencode.db');
+  }
+  return OPENCODE_DB_DEFAULT;
 }
 
 const OBSIDIAN_INBOX_DEFAULT = path.join(os.homedir(), 'Documents', 'Obsidian', 'Inbox');

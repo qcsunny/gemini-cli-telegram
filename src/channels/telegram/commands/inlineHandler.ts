@@ -6,7 +6,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { getAgyDataDir } from '../../../config/userConfig.js';
+import { getAgyDataDir, getDefaultModel } from '../../../config/userConfig.js';
 import { findSafeCutPoint, formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
@@ -360,13 +360,15 @@ export const MAX_COLLAGE_IMAGES = 10;
 export const MAX_MODEL_SUGGESTIONS = 5;
 
 /** Fallback model suggestions shown when no model keyword matched. */
-const FALLBACK_MODEL_SUGGESTIONS = [
-  'Gemini 3.6 Flash (High)',
-  'Web2API: Gemini 3.1 Pro',
-  'DeepSeek: Flash',
-  'Claude Sonnet 4.6 (Thinking)',
-  'OpenCode: DeepSeek V4 Flash Free',
-];
+function getFallbackModelSuggestions(): string[] {
+  return [
+    getDefaultModel() || 'Gemini 3.6 Flash (High)',
+    'Web2API: Gemini 3.1 Pro',
+    'DeepSeek: Flash',
+    'Claude Sonnet 4.6 (Thinking)',
+    'OpenCode: DeepSeek V4 Flash Free',
+  ];
+}
 
 const CHANNEL_PREFIX_RE = /^(Web2API|DeepSeek|OpenCode)\s*:\s*/i;
 
@@ -1129,7 +1131,7 @@ export function registerInlineHandler(
       } else {
         suggestionCandidates = fuzzyMatchModels(prompt, availableModels, MAX_MODEL_SUGGESTIONS);
         if (suggestionCandidates.length === 0) {
-          suggestionCandidates = FALLBACK_MODEL_SUGGESTIONS.filter((m) => availableModels.includes(m));
+          suggestionCandidates = getFallbackModelSuggestions().filter((m) => availableModels.includes(m));
         }
       }
       suggestionCandidates = suggestionCandidates.filter((m) => m !== modelToUse);
