@@ -178,6 +178,24 @@ Thanks for reading! 🚀
     expect(blocks[0].blocks[1]).toEqual({ type: 'photo', photo: { type: 'photo', media: 'https://example.com/b.jpg' } });
   });
 
+  it('should convert <tg-collage> to a collage block of media blocks', () => {
+    const blocks = markdownToRichBlocks('<tg-collage>\n<img src="https://example.com/a.jpg"/>\n<img src="https://example.com/b.jpg"/>\n</tg-collage>') as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('collage');
+    expect(blocks[0].blocks).toHaveLength(2);
+    expect(blocks[0].blocks[0]).toEqual({ type: 'photo', photo: { type: 'photo', media: 'https://example.com/a.jpg' } });
+    expect(blocks[0].blocks[1]).toEqual({ type: 'photo', photo: { type: 'photo', media: 'https://example.com/b.jpg' } });
+  });
+
+  it('should convert <tg-collage> with markdown image syntax to a collage block', () => {
+    const blocks = markdownToRichBlocks('<tg-collage>\n![a](https://example.com/a.jpg)\n![b](https://example.com/b.jpg)\n</tg-collage>') as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('collage');
+    expect(blocks[0].blocks).toHaveLength(2);
+    expect(blocks[0].blocks[0]).toEqual({ type: 'photo', photo: { type: 'photo', media: 'https://example.com/a.jpg' } });
+    expect(blocks[0].blocks[1]).toEqual({ type: 'photo', photo: { type: 'photo', media: 'https://example.com/b.jpg' } });
+  });
+
   it('should leave inline media tags inside a paragraph as placeholder text', () => {
     const blocks = markdownToRichBlocks('text <img src="https://example.com/inline.jpg"> tail') as any[];
     expect(blocks).toHaveLength(1);

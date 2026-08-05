@@ -151,8 +151,9 @@ function validateBlocksPayload(blocks: unknown[]): boolean {
         }
         break;
       case 'slideshow':
+      case 'collage':
         if (!Array.isArray(b['blocks']) || (b['blocks'] as unknown[]).length === 0) {
-          logger.warn(`[BLOCK VALIDATION] Block ${i} (slideshow) missing or empty 'blocks'`);
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (${type}) missing or empty 'blocks'`);
           return false;
         }
         break;
