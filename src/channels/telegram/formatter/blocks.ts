@@ -756,17 +756,51 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
           j++;
         }
 
-        const parsedInner = markdownTokensToRichBlocks(innerTokens, math);
-
-        if (parsedInner.length > 0 && parsedInner[0].type === 'paragraph') {
-          const firstPara = parsedInner[0] as any;
-          const rawText = extractStringFromRichText(firstPara.text).trim();
-          if (rawText.startsWith('[details]')) {
+        // Detect a `> [details] <summary>` blockquote whose FIRST inline content
+        // is the `[details]` marker. Detect it from the raw inline tokens so the
+        // folded body keeps its original RichText formatting (bold/italic/code
+        // etc.) instead of being re-parsed from a plain-text extract.
+        const firstInlineIdx = innerTokens.findIndex(t => t.type === 'inline');
+        if (firstInlineIdx !== -1) {
+          const firstInline = innerTokens[firstInlineIdx] as MarkdownToken;
+          const children = (firstInline.children ?? []) as MarkdownToken[];
+          const firstTextNode = children.find(c => c.type === 'text');
+          const firstText = firstTextNode?.content ?? '';
+          if (firstText.startsWith('[details]')) {
             isDetails = true;
-            detailsSummary = rawText.replace(/^\[details\]\s*/i, '') || 'Click to expand';
-            parsedInner.shift();
+            const rest = firstText.replace(/^\[details\]\s*/i, '');
+            const nl = rest.search(/\n/);
+            if (nl === -1) {
+              detailsSummary = rest.trim() || 'Click to expand';
+            } else {
+              detailsSummary = rest.slice(0, nl).trim() || 'Click to expand';
+            }
+            // Rebuild the paragraph's inline children WITHOUT the summary line:
+            // drop the leading text node (summary) and the softbreak after it,
+            // keeping every following formatted child intact.
+            const summaryLen = firstText.length;
+            const rebuiltChildren: MarkdownToken[] = [];
+            let cursor = summaryLen;
+            for (const child of children) {
+              if (child.type === 'text' && cursor > 0) {
+                const childContent = child.content ?? '';
+                const cut = Math.min(cursor, childContent.length);
+                const remainder = childContent.slice(cut);
+                cursor -= cut;
+                if (remainder) rebuiltChildren.push({ ...child, content: remainder });
+              } else if (cursor > 0) {
+                // Still consuming the summary line — skip softbreak/markers.
+                cursor = 0;
+              } else {
+                rebuiltChildren.push(child);
+              }
+            }
+            const rebuiltInline: MarkdownToken = { ...firstInline, children: rebuiltChildren, content: (firstInline.content ?? '').slice(summaryLen) };
+            innerTokens[firstInlineIdx] = rebuiltInline;
           }
         }
+
+        const parsedInner = markdownTokensToRichBlocks(innerTokens, math);
 
         if (isDetails) {
           blocks.push({
@@ -916,7 +950,14 @@ function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
     const text = b['text'];
     return typeof text === 'string' && text.length > 0;
   }
-  if (type === 'blockquote' || type === 'details') {
+  if (type === 'details') {
+    // A details block is meaningful even when its only child is the empty
+    // ' ' paragraph placeholder (content was folded into the summary line).
+    // Only drop it when the *summary* itself is empty/unusable.
+    const summary = (b['summary'] as string | undefined) ?? '';
+    return typeof summary === 'string' && summary.trim().length > 0;
+  }
+  if (type === 'blockquote') {
     const innerBlocks = (b['blocks'] as RichBlock[]) ?? [];
     const filtered = innerBlocks.filter(child => isMeaningfulBlock(child, depth + 1));
     if (filtered.length === 0) return false;
