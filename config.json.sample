@@ -2,7 +2,7 @@
   "telegramBotToken": "YOUR_BOT_TOKEN",
   "allowedUsers": [123456789],
   "model": "Gemini 3.5 Flash (Medium)",
-  "defaultProject": "示例项目",
+  "defaultProject": "Example Project",
   "proxy": "http://127.0.0.1:7890",
   "notebookPath": "",
   "geminiApiKey": "",
@@ -13,17 +13,17 @@
   "projects": [
     {
       "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-      "name": "示例项目",
+      "name": "Example Project",
       "path": "/abs/path/to/your/project",
-      "description": "项目描述"
+      "description": "Example project description"
     }
   ],
   "modelsConfig": {
     "tiers": [
-      { "name": "旗舰推理", "priority": 0, "models": ["Claude Opus 4.6 (Thinking)", "DeepSeek: Pro Thinking"] },
-      { "name": "高级推理", "priority": 1, "models": ["Web2API: Gemini 3.1 Pro Enhanced", "Gemini 3.1 Pro (High)"] },
-      { "name": "通用能力", "priority": 2, "models": ["Gemini 3.6 Flash (High)", "Web2API: Gemini 3.6 Flash Thinking"] },
-      { "name": "轻量快速", "priority": 3, "models": ["Web2API: Gemini Flash Lite"] }
+      { "name": "Flagship Reasoning", "priority": 0, "models": ["Claude Opus 4.6 (Thinking)", "DeepSeek: Pro Thinking"] },
+      { "name": "Advanced Reasoning", "priority": 1, "models": ["Web2API: Gemini 3.1 Pro Enhanced", "Gemini 3.1 Pro (High)"] },
+      { "name": "General Purpose", "priority": 2, "models": ["Gemini 3.6 Flash (High)", "Web2API: Gemini 3.6 Flash Thinking"] },
+      { "name": "Light & Fast", "priority": 3, "models": ["Web2API: Gemini Flash Lite"] }
     ],
     "routing": {
       "Web2API: Gemini 3.1 Pro Enhanced": "gemini-3.1-pro-enhanced",
