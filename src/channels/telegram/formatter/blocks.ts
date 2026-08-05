@@ -410,7 +410,162 @@ function tryHtmlBlockToRichBlock(
     }
   }
 
+  // Standalone `<img src="https://...">` (own line) → native photo block.
+  const imgMatch = content.match(/^<img\s+([^>]*?)\/?>\s*$/i);
+  if (imgMatch) {
+    const src = imgMatch[1].match(/src="([^"]*)"/)?.[1] ?? '';
+    if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+      return { block: mediaBlockFromUrl('img', src), advance: 1 };
+    }
+  }
+
+  // `<tg-slideshow>...</tg-slideshow>` → native slideshow block containing
+  // the media blocks parsed from the inner `<img>/<video>/<audio>` tags.
+  const slideshowMatch = content.match(/^<tg-slideshow>([\s\S]*?)<\/tg-slideshow>\s*$/i);
+  if (slideshowMatch) {
+    const mediaBlocks = parseMediaBlocksFromHtml(slideshowMatch[1]);
+    if (mediaBlocks.length > 0) {
+      return { block: { type: 'slideshow', blocks: mediaBlocks } as RichBlock, advance: 1 };
+    }
+  }
+
+  // `<tg-map ...>...</tg-map>` → native map block.
+  const mapMatch = content.match(/^<tg-map\s+([^>]*)>\s*(?:<\/tg-map>)?\s*$/i);
+  if (mapMatch) {
+    const block = mapBlockFromAttrs(mapMatch[1]);
+    if (block) return { block, advance: 1 };
+  }
+
   return { block: null, advance: 1 };
+}
+
+/**
+ * Build a native media RichBlock from a media HTML tag name and a remote URL.
+ * `<video>` maps to `animation` for GIF/WebM sources, `video` otherwise;
+ * `<audio>` maps to `voice_note` for OGG/Opus sources, `audio` otherwise.
+ */
+function mediaBlockFromUrl(tagName: 'img' | 'video' | 'audio', src: string): RichBlock {
+  const path = src.split('?')[0].toLowerCase();
+  const ext = path.endsWith('.gif') || path.endsWith('.webm') ? 'gif' : path.split('.').pop() ?? '';
+  if (tagName === 'img') {
+    return { type: 'photo', photo: { type: 'photo', media: src } } as RichBlock;
+  }
+  if (tagName === 'video') {
+    if (ext === 'gif' || ext === 'webm') {
+      return { type: 'animation', animation: { type: 'animation', media: src } } as RichBlock;
+    }
+    return { type: 'video', video: { type: 'video', media: src } } as RichBlock;
+  }
+  if (ext === 'ogg' || ext === 'opus') {
+    return { type: 'voice_note', voice_note: { type: 'voice_note', media: src } } as RichBlock;
+  }
+  return { type: 'audio', audio: { type: 'audio', media: src } } as RichBlock;
+}
+
+/**
+ * Parse media blocks out of the inner HTML of a `<tg-slideshow>` container.
+ * Supports `<img>`, `<video>` and `<audio>` tags with `src="https://..."`.
+ */
+function parseMediaBlocksFromHtml(html: string): RichBlock[] {
+  const blocks: RichBlock[] = [];
+  const tagRe = /<(img|video|audio)\b([^>]*)>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(html)) !== null) {
+    const tagName = m[1].toLowerCase() as 'img' | 'video' | 'audio';
+    const attrs = m[2] ?? '';
+    const src = attrs.match(/src="([^"]*)"/)?.[1] ?? '';
+    if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+      blocks.push(mediaBlockFromUrl(tagName, src));
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Detect a standalone media tag pair inside a paragraph's inline children and
+ * convert it to a native media RichBlock. Returns null when the paragraph
+ * contains any other meaningful content (inline media stays as-is).
+ *
+ * Handles `<img src="...">` (self-closing) and paired `<video>/<audio>/<tg-map>`
+ * tags; `<tg-map>` becomes a native map block.
+ */
+function tryInlineMediaToRichBlock(children: MarkdownToken[] | null | undefined): RichBlock | null {
+  if (!children || children.length === 0) return null;
+
+  // A standalone media paragraph must be exactly [openTag, closeTag] or a
+  // single self-closing tag. Filter whitespace-only text tokens.
+  const meaningful = children.filter(t => {
+    if (t.type === 'text') return (t.content ?? '').trim() !== '';
+    return true;
+  });
+  if (meaningful.length === 0) return null;
+
+  // Self-closing `<img src="..."/>`
+  if (meaningful.length === 1) {
+    const t = meaningful[0];
+    if (t.type === 'html_inline' && t.content) {
+      const m = t.content.match(/^<img\b([^>]*?)\/?\s*>$/i);
+      if (m) {
+        const src = m[1].match(/src="([^"]*)"/)?.[1] ?? '';
+        if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+          return mediaBlockFromUrl('img', src);
+        }
+      }
+    }
+    return null;
+  }
+
+  // Paired open + close tags.
+  if (meaningful.length === 2) {
+    const [openT, closeT] = meaningful;
+    if (openT.type !== 'html_inline' || closeT.type !== 'html_inline') return null;
+    const openContent = openT.content ?? '';
+    const closeContent = closeT.content ?? '';
+    const openMatch = openContent.match(/^<(video|audio|tg-map)\b([^>]*)>/i);
+    const closeMatch = closeContent.match(/^<\/(video|audio|tg-map)>\s*$/i);
+    if (!openMatch || !closeMatch) return null;
+    if (openMatch[1].toLowerCase() !== closeMatch[1].toLowerCase()) return null;
+    const tagName = openMatch[1].toLowerCase() as 'video' | 'audio' | 'tg-map';
+    const attrs = openMatch[2] ?? '';
+
+    if (tagName === 'tg-map') {
+      return mapBlockFromAttrs(attrs);
+    }
+
+    const src = attrs.match(/src="([^"]*)"/)?.[1] ?? '';
+    if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+      return mediaBlockFromUrl(tagName, src);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Build a native map block from the attributes of a `<tg-map>` tag:
+ * `location="lat,lng"`, optional `zoom`, `width` and `height`.
+ * Returns null when location is missing or invalid.
+ */
+function mapBlockFromAttrs(attrs: string): RichBlock | null {
+  const locationRaw = attrs.match(/location="([^"]*)"/)?.[1] ?? '';
+  const [lat, lng] = locationRaw.split(',').map(s => Number(s.trim()));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const zoom = clampNumber(Number(attrs.match(/zoom="(\d+)"/)?.[1]), 0, 24, 13);
+  const width = clampNumber(Number(attrs.match(/width="(\d+)"/)?.[1]), 1, 10000, 640);
+  const height = clampNumber(Number(attrs.match(/height="(\d+)"/)?.[1]), 1, 10000, 480);
+  return {
+    type: 'map',
+    location: { latitude: lat, longitude: lng },
+    zoom,
+    width,
+    height,
+  } as RichBlock;
+}
+
+/** Clamp a possibly-NaN number into [min, max], returning `def` when invalid. */
+function clampNumber(value: number, min: number, max: number, def: number): number {
+  if (!Number.isFinite(value)) return def;
+  return Math.min(max, Math.max(min, value));
 }
 
 function parseRichListToken(
@@ -540,6 +695,15 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
       case 'paragraph_open': {
         const inline = tokens[i + 1];
         if (inline?.type === 'inline') {
+          // Standalone media tag pair (`<video>`/`<audio>`/`<tg-map>` open+close,
+          // or a self-closing `<img>`) that is the only content of the paragraph
+          // becomes a native media block instead of an inline-text placeholder.
+          const mediaBlock = tryInlineMediaToRichBlock(inline.children);
+          if (mediaBlock) {
+            blocks.push(mediaBlock);
+            i += 2;
+            break;
+          }
           const text = trimRichText(inlineToRichText(inline.children, math));
           if (text) {
             blocks.push({ type: 'paragraph', text });
@@ -748,6 +912,21 @@ function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
     }
     return items.some(item => item.blocks.length > 0);
   }
+  if (type === 'slideshow') {
+    const innerBlocks = (b['blocks'] as RichBlock[]) ?? [];
+    const filtered = innerBlocks.filter(child => isMeaningfulBlock(child, depth + 1));
+    if (filtered.length === 0) return false;
+    (b['blocks'] as RichBlock[]) = filtered;
+    return true;
+  }
+  if (type === 'photo' || type === 'video' || type === 'animation' || type === 'audio' || type === 'voice_note') {
+    const media = (b['photo'] ?? b['video'] ?? b['animation'] ?? b['audio'] ?? b['voice_note']) as Record<string, unknown> | undefined;
+    return !!(media && typeof media['media'] === 'string' && media['media'].trim());
+  }
+  if (type === 'map') {
+    const loc = b['location'] as Record<string, unknown> | undefined;
+    return !!(loc && typeof b['zoom'] === 'number');
+  }
   return !!(type === 'anchor' || type === 'divider' || type === 'mathematical_expression' || type === 'table' || type === 'thinking');
 }
 
@@ -769,6 +948,13 @@ function flattenDepth(blk: RichBlock, depth: number): RichBlock {
     const inner = (blk as any).blocks as RichBlock[];
     (blk as any).blocks = inner.flatMap(child => {
       if (child.type === 'blockquote') return (child as any).blocks as RichBlock[];
+      return [flattenDepth(child, depth + 1)];
+    });
+  }
+  if (blk.type === 'slideshow') {
+    const inner = (blk as any).blocks as RichBlock[];
+    (blk as any).blocks = inner.flatMap(child => {
+      if (child.type === 'slideshow') return (child as any).blocks as RichBlock[];
       return [flattenDepth(child, depth + 1)];
     });
   }
@@ -1049,6 +1235,8 @@ function getBlockLength(block: RichBlock): number {
       return (b.text || '').length;
     case 'blockquote':
       return (b.blocks || []).reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
+    case 'slideshow':
+      return (b.blocks || []).reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
     case 'details':
       return richTextLength(b.summary) + (b.blocks || [])
         .reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
@@ -1062,6 +1250,12 @@ function getBlockLength(block: RichBlock): number {
       return cells.reduce((s: number, row: any[]) =>
         s + row.reduce((s2: number, cell: any) => s2 + richTextLength(cell.text), 0), 0);
     }
+    case 'photo':
+    case 'video':
+    case 'animation':
+    case 'audio':
+    case 'voice_note':
+    case 'map':
     case 'divider':
     case 'anchor':
     case 'mathematical_expression':

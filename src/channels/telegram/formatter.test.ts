@@ -128,6 +128,64 @@ Thanks for reading! 🚀
     expect(blocks.length).toBeGreaterThan(0);
   });
 
+  it('should convert standalone <img> to a native photo block', () => {
+    const blocks = markdownToRichBlocks('<img src="https://example.com/a.jpg">') as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('photo');
+    expect(blocks[0].photo).toEqual({ type: 'photo', media: 'https://example.com/a.jpg' });
+  });
+
+  it('should convert <video> to animation for GIF/WebM and video otherwise', () => {
+    const anim = markdownToRichBlocks('<video src="https://example.com/anim.gif"></video>') as any[];
+    expect(anim).toHaveLength(1);
+    expect(anim[0].type).toBe('animation');
+    expect(anim[0].animation).toEqual({ type: 'animation', media: 'https://example.com/anim.gif' });
+
+    const vid = markdownToRichBlocks('<video src="https://example.com/v.mp4"></video>') as any[];
+    expect(vid).toHaveLength(1);
+    expect(vid[0].type).toBe('video');
+    expect(vid[0].video).toEqual({ type: 'video', media: 'https://example.com/v.mp4' });
+  });
+
+  it('should convert <audio> to voice_note for OGG/Opus and audio otherwise', () => {
+    const voice = markdownToRichBlocks('<audio src="https://example.com/voice.ogg"></audio>') as any[];
+    expect(voice).toHaveLength(1);
+    expect(voice[0].type).toBe('voice_note');
+    expect(voice[0].voice_note).toEqual({ type: 'voice_note', media: 'https://example.com/voice.ogg' });
+
+    const music = markdownToRichBlocks('<audio src="https://example.com/music.mp3"></audio>') as any[];
+    expect(music).toHaveLength(1);
+    expect(music[0].type).toBe('audio');
+    expect(music[0].audio).toEqual({ type: 'audio', media: 'https://example.com/music.mp3' });
+  });
+
+  it('should convert <tg-map> to a native map block', () => {
+    const blocks = markdownToRichBlocks('<tg-map location="37.77,122.41" zoom="15" width="640" height="480"></tg-map>') as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('map');
+    expect(blocks[0].location).toEqual({ latitude: 37.77, longitude: 122.41 });
+    expect(blocks[0].zoom).toBe(15);
+    expect(blocks[0].width).toBe(640);
+    expect(blocks[0].height).toBe(480);
+  });
+
+  it('should convert <tg-slideshow> to a slideshow block of media blocks', () => {
+    const blocks = markdownToRichBlocks('<tg-slideshow>\n<img src="https://example.com/a.jpg"/>\n<img src="https://example.com/b.jpg"/>\n</tg-slideshow>') as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('slideshow');
+    expect(blocks[0].blocks).toHaveLength(2);
+    expect(blocks[0].blocks[0]).toEqual({ type: 'photo', photo: { type: 'photo', media: 'https://example.com/a.jpg' } });
+    expect(blocks[0].blocks[1]).toEqual({ type: 'photo', photo: { type: 'photo', media: 'https://example.com/b.jpg' } });
+  });
+
+  it('should leave inline media tags inside a paragraph as placeholder text', () => {
+    const blocks = markdownToRichBlocks('text <img src="https://example.com/inline.jpg"> tail') as any[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('paragraph');
+    const text = typeof blocks[0].text === 'string' ? blocks[0].text : JSON.stringify(blocks[0].text);
+    expect(text).toContain('tg://photo?id=');
+  });
+
   it('should preserve text preceding inline LaTeX formula in correct order', () => {
     const blocks = markdownToRichBlocks('Prefix text: \\( x + 1 = 2 \\) suffix text');
     expect(blocks).toHaveLength(1);
