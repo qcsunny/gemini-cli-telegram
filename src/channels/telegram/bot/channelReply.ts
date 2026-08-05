@@ -150,6 +150,30 @@ function validateBlocksPayload(blocks: unknown[]): boolean {
           return false;
         }
         break;
+      case 'slideshow':
+        if (!Array.isArray(b['blocks']) || (b['blocks'] as unknown[]).length === 0) {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (slideshow) missing or empty 'blocks'`);
+          return false;
+        }
+        break;
+      case 'map':
+        if (!b['location'] || typeof b['zoom'] !== 'number') {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (map) missing 'location' or 'zoom'`);
+          return false;
+        }
+        break;
+      case 'photo':
+      case 'video':
+      case 'animation':
+      case 'audio':
+      case 'voice_note': {
+        const mediaField = (b['photo'] ?? b['video'] ?? b['animation'] ?? b['audio'] ?? b['voice_note']) as Record<string, unknown> | undefined;
+        if (!mediaField || typeof mediaField['media'] !== 'string' || !mediaField['media'].trim()) {
+          logger.warn(`[BLOCK VALIDATION] Block ${i} (${type}) missing media URL`);
+          return false;
+        }
+        break;
+      }
       case 'table':
         if (!Array.isArray(b['cells']) || (b['cells'] as unknown[]).length === 0) {
           logger.warn(`[BLOCK VALIDATION] Block ${i} (table) missing or empty 'cells'`);

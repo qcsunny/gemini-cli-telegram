@@ -833,9 +833,14 @@ export class TelegramBot {
         }
       }
 
-      // Extract quoted text (劃词局部引用) or reply_to_message text for Context Enrichment
+      // Extract quoted text (劃词局部引用) or reply_to_message text for Context Enrichment.
+      // Prefer the bot's original Markdown from messageCache: bot replies are sent as rich
+      // messages whose content lives in rich_message.blocks (not .text/.caption).
       const quoteText = ctx.message.quote?.text;
-      const replyMsgText = ctx.message.reply_to_message?.text ?? ctx.message.reply_to_message?.caption;
+      const replyToMessage = ctx.message.reply_to_message;
+      const replyMsgText = replyToMessage
+        ? (messageCache.get(replyToMessage.message_id) ?? replyToMessage.text ?? replyToMessage.caption)
+        : undefined;
       const refText = quoteText ?? replyMsgText;
 
       let promptText = text;
