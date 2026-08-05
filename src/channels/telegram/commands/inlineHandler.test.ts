@@ -73,7 +73,7 @@ describe('parseInlineModelAndPrompt', () => {
   it('should parse task prefixes and wrap prompt with instruction', () => {
     const res = parseInlineModelAndPrompt('/translate 你好世界', 'Gemini 3.5 Flash');
     expect(res.task).toBe('translate');
-    expect(res.prompt).toContain('翻译成中文');
+    expect(res.prompt).toContain('Translate the following content between Chinese and English');
     expect(res.prompt).toContain('你好世界');
   });
 
@@ -81,7 +81,7 @@ describe('parseInlineModelAndPrompt', () => {
     const res1 = parseInlineModelAndPrompt('@flash /summarize 量子计算', 'Gemini 3.5 Flash');
     expect(res1.family).toBe('flash');
     expect(res1.task).toBe('summarize');
-    expect(res1.prompt).toContain('总结');
+    expect(res1.prompt).toContain('Summarize the following content concisely');
     expect(res1.prompt).toContain('量子计算');
 
     const res2 = parseInlineModelAndPrompt('/v @pro 这个报错', 'Gemini 3.5 Flash');
@@ -218,7 +218,7 @@ describe('registerInlineHandler', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'unauthorized',
-          title: expect.stringContaining('未授权访问'),
+          title: expect.stringContaining('Unauthorized access'),
         }),
       ]),
       expect.objectContaining({ cache_time: 10 }),
@@ -262,7 +262,7 @@ describe('registerInlineHandler', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: expect.stringMatching(/^ai-/),
-          title: expect.stringContaining('点击发送并开始思考'),
+          title: expect.stringContaining('Click to send and start thinking'),
           input_message_content: expect.objectContaining({
             rich_message: expect.objectContaining({
               markdown: expect.any(String),
@@ -276,7 +276,7 @@ describe('registerInlineHandler', () => {
         }),
         expect.objectContaining({
           id: expect.stringMatching(/^prompt-/),
-          title: expect.stringContaining('提问卡片'),
+          title: expect.stringContaining('question card'),
         }),
       ]),
       expect.objectContaining({ cache_time: 0 }),
@@ -297,7 +297,7 @@ describe('registerInlineHandler', () => {
     const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
     const aiResult = callArg.find((r: any) => r.id.startsWith('ai-'));
     expect(aiResult.reply_markup.inline_keyboard[0][0]).toEqual({
-      text: '⏹ 停止',
+      text: '⏹ Stop',
       callback_data: `inline_stop:${aiResult.id}`,
     });
   });
@@ -367,13 +367,13 @@ describe('registerInlineHandler', () => {
       await chosenPromise;
 
       expect(stopCtx.answerCallbackQuery).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining('停止') }),
+        expect.objectContaining({ text: expect.stringContaining('Stop requested') }),
       );
       // The stopped generation edits its own message (via the chosen ctx).
       expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
         expect.objectContaining({
           inline_message_id: 'test_inline_msg_id_123',
-          text: expect.stringContaining('已停止生成'),
+          text: expect.stringContaining('Generation stopped'),
         }),
       );
     } finally {
@@ -540,8 +540,8 @@ describe('registerInlineHandler', () => {
     const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
     const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
     expect(suggestionCards.length).toBeGreaterThan(0);
-    expect(suggestionCards[0].title).toContain('用');
-    expect(suggestionCards[0].title).toContain('回答');
+    expect(suggestionCards[0].title).toContain('Answer with');
+    expect(suggestionCards[0].title).toContain('Sonnet');
     expect(suggestionCards[0].reply_markup.inline_keyboard).toBeDefined();
   });
 
@@ -732,7 +732,7 @@ describe('registerInlineHandler', () => {
 
     const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
     const aiResultId = callArg.find((r: any) => r.id.startsWith('ai-')).id;
-    expect(callArg.find((r: any) => r.id.startsWith('ai-')).title).toContain('点击生成图片');
+    expect(callArg.find((r: any) => r.id.startsWith('ai-')).title).toContain('Click to generate image');
 
     const mockChosenCtx = {
       me: { username: 'testbot' },
@@ -832,7 +832,7 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({
           inline_message_id: 'cmp_inline_msg',
           rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('⚖️ 多模型对比'),
+            markdown: expect.stringContaining('⚖️ Multi-model comparison'),
           }),
           reply_markup: expect.objectContaining({
             inline_keyboard: expect.arrayContaining([
@@ -861,7 +861,7 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({
           inline_message_id: 'cmp_inline_msg',
           rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('① 请选择第 1 个模型'),
+            markdown: expect.stringContaining('1. Please pick model 1'),
           }),
         }),
       );
@@ -870,8 +870,8 @@ describe('registerInlineHandler', () => {
     // Pick page 1 keyboard should have home button and next button
     const page2Page = pickCtxBase.api.raw.editMessageText.mock.calls[0][0];
     const page2Buttons = page2Page.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
-    expect(page2Buttons.find((b) => b.text === '◀️ 首页')).toBeDefined();
-    expect(page2Buttons.find((b) => b.text === '下一页 ▶️')).toBeDefined();
+    expect(page2Buttons.find((b) => b.text === '◀️ First')).toBeDefined();
+    expect(page2Buttons.find((b) => b.text === 'Next ▶️')).toBeDefined();
 
     // Click previous page
     await callbackQueryHandler!({
@@ -883,8 +883,8 @@ describe('registerInlineHandler', () => {
     await vi.waitFor(() => {
       const backPage = pickCtxBase.api.raw.editMessageText.mock.calls.slice(-1)[0][0];
       const backButtons = backPage.reply_markup.inline_keyboard.flat() as Array<{ text: string; callback_data: string }>;
-      expect(backButtons.find((b) => b.text === '◀️ 上一页')).toBeUndefined();
-      expect(backButtons.find((b) => b.text.includes('浏览/选择模型'))).toBeDefined();
+      expect(backButtons.find((b) => b.text === '◀️ Prev')).toBeUndefined();
+      expect(backButtons.find((b) => b.text.includes('Browse/select models'))).toBeDefined();
     });
   });
 
@@ -951,7 +951,7 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({
           inline_message_id: 'cmp_inline_msg',
           rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('🚀 开始对比'),
+            markdown: expect.stringContaining('🚀 Start comparison'),
           }),
         }),
       );
@@ -1066,7 +1066,7 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({
           inline_message_id: 'cmp_inline_msg',
           rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('⚖️ 多模型对比'),
+            markdown: expect.stringContaining('⚖️ Multi-model comparison'),
           }),
           reply_markup: expect.objectContaining({
             inline_keyboard: expect.arrayContaining([

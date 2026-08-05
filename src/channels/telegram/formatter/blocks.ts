@@ -743,7 +743,7 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
       case 'blockquote_open': {
         let j = i + 1;
         let isDetails = false;
-        let detailsSummary = '点击展开';
+        let detailsSummary = 'Click to expand';
         
         let depth = 1;
         const innerTokens: MarkdownToken[] = [];
@@ -763,7 +763,7 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
           const rawText = extractStringFromRichText(firstPara.text).trim();
           if (rawText.startsWith('[details]')) {
             isDetails = true;
-            detailsSummary = rawText.replace(/^\[details\]\s*/i, '') || '点击展开';
+            detailsSummary = rawText.replace(/^\[details\]\s*/i, '') || 'Click to expand';
             parsedInner.shift();
           }
         }
@@ -1070,7 +1070,7 @@ export function buildFinalBlocks(
 
   // 2. Thinking block
   if (thoughtText) {
-    let summary = '🧠 思考过程 (Thinking Process)';
+    let summary = '🧠 Thinking Process';
     const infoLines: string[] = [];
     if (opts?.time && Number(opts.time) > 0) infoLines.push(`Thinking Time: ${opts.time} s`);
     if (opts?.tokens && Number(opts.tokens) > 0) infoLines.push(`Thinking Tokens: ${opts.tokens}`);
@@ -1148,7 +1148,7 @@ export function buildStreamingBlocks(input: {
   }
 
   // Both empty
-  return [{ type: 'thinking', text: '正在思考...' } as RichBlock];
+  return [{ type: 'thinking', text: 'Thinking...' } as RichBlock];
 }
 
 /**
@@ -1201,7 +1201,7 @@ export function buildFooterBlocksFromHtml(html: string): RichBlock[] {
       const thoughtBlocks = markdownToRichBlocks(md);
       blocks.push({
         type: 'details',
-        summary: '🧠 思考过程 (Thinking Process)',
+        summary: '🧠 Thinking Process',
         blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: md }],
       });
     }
@@ -1354,7 +1354,7 @@ export function splitRichBlocks(
           type: 'details' as const,
           blocks: g,
           summary: arr.length > 1
-            ? `🧠 思考过程 (${idx + 1}/${arr.length})`
+            ? `🧠 Thinking Process (${idx + 1}/${arr.length})`
             : d.summary,
         }));
 

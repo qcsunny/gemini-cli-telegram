@@ -351,7 +351,7 @@ const TASK_PREFIX_MAP: Record<string, InlineTask> = {
 };
 
 export const IMAGE_TASK_INSTRUCTION =
-  '请使用 generate_image 工具为以下主题生成图片（可一次生成多张不同风格/构图的图片）。只调用工具生成图片，不要用文字描述图片：\n\n';
+  'Use the generate_image tool to generate images for the topic below (can generate multiple images of different styles/compositions at once). Only call the tool to generate images, do not describe the images with text:\n\n';
 
 /** Max photos a <tg-collage> / album can contain. */
 export const MAX_COLLAGE_IMAGES = 10;
@@ -403,8 +403,8 @@ export function fuzzyMatchModels(query: string, models: string[], limit: number 
 }
 
 const TASK_INSTRUCTION: Record<InlineTask, string> = {
-  translate: '请将以下内容翻译成中文，保持原意与格式：\n\n',
-  summarize: '请用简洁的语言总结以下内容，列出要点：\n\n',
+  translate: 'Translate the following content between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting. Reply in the same language as the user\'s message:\n\n',
+  summarize: 'Summarize the following content concisely and list the key points. Reply in the same language as the user\'s message:\n\n',
   image: IMAGE_TASK_INSTRUCTION,
   compare: '',
 };
@@ -631,18 +631,18 @@ export async function findNewImageArtifacts(conversationId: string, turnStartTim
 function renderComparePicker(cmp: CompareContext): string {
   const displayPrompt = cmp.prompt.length > 300 ? cmp.prompt.slice(0, 300) + '...' : cmp.prompt;
   const picked = cmp.selectedIdx.map((idx, i) => `**${i + 1}.** ${cmp.candidates[idx]}`).join('\n');
-  const pickedBlock = picked ? `\n✅ **已选模型：**\n${picked}\n` : '';
+  const pickedBlock = picked ? `\n✅ **Selected models:**\n${picked}\n` : '';
 
   if (cmp.currentPage === 0) {
-    return `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${pickedBlock}_点击“▶️ 浏览/选择模型”展开全量模型清单，或点击“🚀 默认组对比”。_`;
+    return `**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${pickedBlock}_Click "▶️ Browse/select models" to expand the full model list, or click "🚀 Default group compare"._`;
   }
 
   const countText = cmp.selectedIdx.length === 0
-    ? '① 请选择第 1 个模型'
+    ? '1. Please pick model 1'
     : cmp.selectedIdx.length === 1
-      ? '② 请选择第 2 个模型（或点“开始对比”）'
-      : '③ 请选择第 3 个模型（可跳过，点“开始对比”）';
-  return `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${pickedBlock}${countText}\n\n_点击下方模型按钮选择，选满 2-${MAX_COMPARE_MODELS} 个后点“🚀 开始对比”。_`;
+      ? '2. Please pick model 2 (or tap "Start comparison")'
+      : '3. Please pick model 3 (optional, tap "Start comparison")';
+  return `**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${pickedBlock}${countText}\n\n_Tap the model buttons below to select up to ${MAX_COMPARE_MODELS} models, then tap "🚀 Start comparison"._`;
 }
 
 /** Builds the picker keyboard for a /v selection screen. */
@@ -651,18 +651,18 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
 
   // Add selected models display (compact, no buttons)
   if (cmp.selectedIdx.length > 0) {
-    rows.push([{ text: `已选 ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}：${cmp.selectedIdx.map(i => cmp.candidates[i].slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
+    rows.push([{ text: `Selected ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}: ${cmp.selectedIdx.map(i => cmp.candidates[i].slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
   }
 
   if (cmp.currentPage === 0) {
     // Cover mode: ZERO model buttons on page 0 for maximum privacy
-    rows.push([{ text: '🚀 默认组对比 (Opus + R1 + Gemini)', callback_data: `inline_cmp_default:${cmp.resultId}` }]);
-    rows.push([{ text: '▶️ 浏览/选择模型 (展开全量清单)', callback_data: `inline_cmp_page:${cmp.resultId}:1` }]);
+    rows.push([{ text: '🚀 Default group compare (Opus + R1 + Gemini)', callback_data: `inline_cmp_default:${cmp.resultId}` }]);
+    rows.push([{ text: '▶️ Browse/select models (full list)', callback_data: `inline_cmp_page:${cmp.resultId}:1` }]);
     if (cmp.selectedIdx.length >= 2) {
-      rows.push([{ text: '🚀 开始对比', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
+      rows.push([{ text: '🚀 Start comparison', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
     }
     if (cmp.selectedIdx.length > 0) {
-      rows.push([{ text: '♻️ 清空选择', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
+      rows.push([{ text: '♻️ Clear selection', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
     }
     return { inline_keyboard: rows };
   }
@@ -689,19 +689,19 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
   // Pagination navigation bar
   const navRow: { text: string; callback_data: string }[] = [];
   if (listPageIndex > 0) {
-    navRow.push({ text: '◀️ 上一页', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage - 1}` });
+    navRow.push({ text: '◀️ Prev', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage - 1}` });
   } else {
-    navRow.push({ text: '◀️ 首页', callback_data: `inline_cmp_page:${cmp.resultId}:0` });
+    navRow.push({ text: '◀️ First', callback_data: `inline_cmp_page:${cmp.resultId}:0` });
   }
   navRow.push({ text: `${listPageIndex + 1}/${totalListPages}`, callback_data: 'inline_noop' });
   if (startIdx + COMPARE_MODELS_PER_PAGE < cmp.candidates.length) {
-    navRow.push({ text: '下一页 ▶️', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage + 1}` });
+    navRow.push({ text: 'Next ▶️', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage + 1}` });
   }
   rows.push(navRow);
 
-  rows.push([{ text: '♻️ 清空选择', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
+  rows.push([{ text: '♻️ Clear selection', callback_data: `inline_cmp_reset:${cmp.resultId}` }]);
   if (cmp.selectedIdx.length >= 2) {
-    rows.push([{ text: '🚀 开始对比', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
+    rows.push([{ text: '🚀 Start comparison', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
   }
 
   return { inline_keyboard: rows };
@@ -722,7 +722,7 @@ export function registerInlineHandler(
 
     if (data === 'inline_thinking') {
       await ctx.answerCallbackQuery({
-        text: '🧠 AI 推理引擎正在全量计算中，回答完成后将自动原地更新，请稍候...',
+        text: '🧠 AI is computing in full; the answer will update in place when complete, please wait...',
         show_alert: true,
       }).catch(() => {});
       return;
@@ -732,11 +732,11 @@ export function registerInlineHandler(
       const resultId = data.slice('inline_stop:'.length);
       const ctrl = userControllers.get(resultId);
       if (!ctrl) {
-        await ctx.answerCallbackQuery({ text: '⚠️ 该任务已完成或已停止。', show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '⚠️ This task is already complete or stopped.', show_alert: true }).catch(() => {});
         return;
       }
       ctrl.abort();
-      await ctx.answerCallbackQuery({ text: '⏹ 已发送停止指令，正在停止…', show_alert: true }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: '⏹ Stop requested, stopping...', show_alert: true }).catch(() => {});
       return;
     }
 
@@ -744,7 +744,7 @@ export function registerInlineHandler(
       const resultId = data.slice('inline_regenerate:'.length);
       const regen = regenerateContexts.get(resultId);
       if (!regen) {
-        await ctx.answerCallbackQuery({ text: '❌ 会话已过期，请重新发起提问。', show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '❌ Session expired, please ask again.', show_alert: true }).catch(() => {});
         return;
       }
 
@@ -762,7 +762,7 @@ export function registerInlineHandler(
           createdAt: Date.now(),
         };
         compareContexts.set(resultId, cmp);
-        await ctx.answerCallbackQuery({ text: '⚖️ 请重新选择对比模型', show_alert: false }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '⚖️ Please reselect comparison models', show_alert: false }).catch(() => {});
         await ctx.api.raw.editMessageText({
           inline_message_id: inlineMessageId,
           rich_message: { markdown: renderComparePicker(cmp) },
@@ -771,7 +771,7 @@ export function registerInlineHandler(
         return;
       }
 
-      await ctx.answerCallbackQuery({ text: '🔄 正在重新生成回答，请稍候...' }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: '🔄 Regenerating answer, please wait...' }).catch(() => {});
       const ctrl = new AbortController();
       userControllers.set(resultId, ctrl);
       const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
@@ -786,7 +786,7 @@ export function registerInlineHandler(
         if (regen.task === 'image') return;
         if (accumulatedText.trim().length > 0) {
           const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
-          const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${activeModelName})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
+          const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${activeModelName}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
           streamQueue.enqueueStream(streamMarkdown);
         }
       };
@@ -824,7 +824,7 @@ export function registerInlineHandler(
       logger.info(`[InlinePage] userId=${ctx.from?.id} resultId=${resultId} pageIdx=${pageIdx} pagesFound=${pages ? pages.length : 'null'} inlineMsgId=${inlineMessageId ?? 'null'}`);
       if (!pages || Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= pages.length) {
         logger.warn(`[InlinePage] EXPIRED or invalid: resultId=${resultId} pages=${pages ? pages.length : 'null'} pageIdx=${pageIdx}`);
-        await ctx.answerCallbackQuery({ text: '❌ 分页已过期。', show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '❌ Pagination expired.', show_alert: true }).catch(() => {});
         return;
       }
       await ctx.answerCallbackQuery().catch(() => {});
@@ -839,11 +839,11 @@ export function registerInlineHandler(
         reply_markup: {
           inline_keyboard: [
             [
-              ...(pageIdx > 0 ? [{ text: '◀️ 上一页', callback_data: `inline_page:${resultId}:${pageIdx - 1}` }] : []),
+              ...(pageIdx > 0 ? [{ text: '◀️ Prev', callback_data: `inline_page:${resultId}:${pageIdx - 1}` }] : []),
               { text: `${pageIdx + 1}/${pages.length}`, callback_data: 'inline_noop' },
-              ...(pageIdx < pages.length - 1 ? [{ text: '下一页 ▶️', callback_data: `inline_page:${resultId}:${pageIdx + 1}` }] : []),
+              ...(pageIdx < pages.length - 1 ? [{ text: 'Next ▶️', callback_data: `inline_page:${resultId}:${pageIdx + 1}` }] : []),
             ],
-            [{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }],
+            [{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }],
           ],
         },
       } as any).catch((e: Error) => logger.warn(`[InlinePage] Page edit failed: ${e}`));
@@ -855,7 +855,7 @@ export function registerInlineHandler(
       const idx = parseInt(idxStr, 10);
       const cmp = compareContexts.get(resultId);
       if (!cmp || Number.isNaN(idx) || idx < 0 || idx >= cmp.candidates.length) {
-        await ctx.answerCallbackQuery({ text: '❌ 选择已过期，请重新发起 /v 提问。', show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '❌ Selection expired, please start a new /v query.', show_alert: true }).catch(() => {});
         return;
       }
       if (cmp.selectedIdx.includes(idx)) {
@@ -863,11 +863,11 @@ export function registerInlineHandler(
         return;
       }
       if (cmp.selectedIdx.length >= MAX_COMPARE_MODELS) {
-        await ctx.answerCallbackQuery({ text: `⚠️ 最多选 ${MAX_COMPARE_MODELS} 个模型，点击“🚀 开始对比”执行。`, show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: `⚠️ Select up to ${MAX_COMPARE_MODELS} models, then tap "🚀 Start comparison".`, show_alert: true }).catch(() => {});
         return;
       }
       cmp.selectedIdx.push(idx);
-      await ctx.answerCallbackQuery({ text: `✅ 已选择 ${cmp.candidates[idx]}`, show_alert: true }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: `✅ Selected ${cmp.candidates[idx]}`, show_alert: true }).catch(() => {});
       await ctx.api.raw.editMessageText({
         inline_message_id: inlineMessageId,
         rich_message: { markdown: renderComparePicker(cmp) },
@@ -880,7 +880,7 @@ export function registerInlineHandler(
       const resultId = data.slice('inline_cmp_reset:'.length);
       const cmp = compareContexts.get(resultId);
       if (!cmp) {
-        await ctx.answerCallbackQuery({ text: '❌ 会话已过期。', show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '❌ Session expired.', show_alert: true }).catch(() => {});
         return;
       }
       cmp.selectedIdx = [];
@@ -914,7 +914,7 @@ export function registerInlineHandler(
         compareContexts.set(resultId, cmp);
       }
       if (Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= Math.ceil(cmp.candidates.length / COMPARE_MODELS_PER_PAGE)) {
-        await ctx.answerCallbackQuery({ text: '❌ 页码超出范围。', show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '❌ Page out of range.', show_alert: true }).catch(() => {});
         return;
       }
       cmp.currentPage = pageIdx;
@@ -952,7 +952,7 @@ export function registerInlineHandler(
         activeCmp.selectedIdx = activeCmp.candidates.map((_, i) => i).slice(0, 3);
       }
       const models = activeCmp.selectedIdx.map((idx: number) => activeCmp.candidates[idx]);
-      await ctx.answerCallbackQuery({ text: '🚀 开始默认顶级组对比…' }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: '🚀 Starting default top-tier comparison...' }).catch(() => {});
       const ctrl = new AbortController();
       userControllers.set(resultId, ctrl);
       const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
@@ -980,11 +980,11 @@ export function registerInlineHandler(
       const resultId = data.slice('inline_cmp_start:'.length);
       const cmp = compareContexts.get(resultId);
       if (!cmp || cmp.selectedIdx.length < 2) {
-        await ctx.answerCallbackQuery({ text: '❌ 至少选择 2 个模型才能对比。', show_alert: true }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: '❌ Select at least 2 models to compare.', show_alert: true }).catch(() => {});
         return;
       }
       const models = cmp.selectedIdx.map((idx: number) => cmp.candidates[idx]);
-      await ctx.answerCallbackQuery({ text: '⚖️ 开始多模型对比…' }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: '⚖️ Starting multi-model comparison...' }).catch(() => {});
       const ctrl = new AbortController();
       userControllers.set(resultId, ctrl);
       const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
@@ -1019,11 +1019,11 @@ export function registerInlineHandler(
       const unauthorizedResult = {
         type: 'article' as const,
         id: 'unauthorized',
-        title: '⚠️ 未授权访问 / Unauthorized',
-        description: '您的 Telegram ID 未在白名单许可列表中。',
+        title: '⚠️ Unauthorized access',
+        description: 'Your Telegram ID is not in the allowed whitelist.',
         thumbnail_url: THUMBNAILS.warning,
         input_message_content: {
-          message_text: `${ICONS.warning} <b>未授权访问</b>\n\n您的 Telegram ID (<code>${fromId}</code>) 未获得此 AI Bot 的 Inline 使用权限。`,
+          message_text: `${ICONS.warning} <b>Unauthorized access</b>\n\nYour Telegram ID (<code>${fromId}</code>) is not authorized to use this AI Bot's Inline mode.`,
           parse_mode: 'HTML' as const,
         },
       };
@@ -1042,7 +1042,7 @@ export function registerInlineHandler(
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
     if (!prompt && task !== 'image') {
-      const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>/p${idx + 1} 提问</code> — ${escapeHtmlText(p.name)}`).join('\n');
+      const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>/p${idx + 1} ask</code> — ${escapeHtmlText(p.name)}`).join('\n');
       const results = [
         {
           type: 'article' as const,
@@ -1051,51 +1051,51 @@ export function registerInlineHandler(
           description: `Type a question to ask AI (model: ${modelToUse})`,
           thumbnail_url: THUMBNAILS.bot,
           input_message_content: {
-            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Model switches (@keyword):</b>\n• <code>@flash 提问</code> — 列出所有 Flash 模型可选\n• <code>@pro 提问</code> — 列出所有 Pro 模型可选\n• <code>@deep 提问</code> — 列出所有 DeepSeek 模型可选\n• <code>@think 提问</code> — 列出所有 Thinking 模型可选\n\n<b>Project switches (/pN):</b>\n${projectHelpList || '• 自动继承 Bot 当前绑定的项目'}`,
+            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Model switches (@keyword):</b>\n• <code>@flash ask</code> — list all Flash models\n• <code>@pro ask</code> — list all Pro models\n• <code>@deep ask</code> — list all DeepSeek models\n• <code>@think ask</code> — list all Thinking models\n\n<b>Project switches (/pN):</b>\n${projectHelpList || "• inherits the bot's currently bound project"}`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-flash',
-          title: '⚡ @static32bot @flash 提问',
+          title: '⚡ @static32bot @flash ask',
           description: 'List all Flash-family models',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `⚡ <b>Model search</b>\n\nUse any <code>@keyword</code> prefix to list matching models:\n<code>@static32bot @flash 什么是量子计算？</code>\n<code>@static32bot @think 分析这个</code>\n\nPick any matching model from the floating cards.`,
+            message_text: `⚡ <b>Model search</b>\n\nUse any <code>@keyword</code> prefix to list matching models:\n<code>@static32bot @flash What is quantum computing?</code>\n<code>@static32bot @think Analyze this</code>\n\nPick any matching model from the floating cards.`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-pro',
-          title: '🧠 @static32bot @pro 提问',
+          title: '🧠 @static32bot @pro ask',
           description: 'List all Pro-family models',
           thumbnail_url: THUMBNAILS.thinking,
           input_message_content: {
-            message_text: `🧠 <b>Pro family</b>\n\nUse <code>@pro</code> prefix to list all Pro models:\n<code>@static32bot @pro 请详细解释...</code>\n\nPick any Pro-family model from the floating cards.`,
+            message_text: `🧠 <b>Pro family</b>\n\nUse <code>@pro</code> prefix to list all Pro models:\n<code>@static32bot @pro Please explain in detail...</code>\n\nPick any Pro-family model from the floating cards.`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-deepseek',
-          title: '🔍 @static32bot @deep 提问',
+          title: '🔍 @static32bot @deep ask',
           description: 'List all DeepSeek models',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `🔍 <b>DeepSeek family</b>\n\nUse <code>@deep</code> or <code>@deepseek</code> prefix:\n<code>@static32bot @deep 你的问题</code>\n\nPick any DeepSeek-family model from the floating cards.`,
+            message_text: `🔍 <b>DeepSeek family</b>\n\nUse <code>@deep</code> or <code>@deepseek</code> prefix:\n<code>@static32bot @deep your question</code>\n\nPick any DeepSeek-family model from the floating cards.`,
             parse_mode: 'HTML' as const,
           },
         },
         {
           type: 'article' as const,
           id: 'help-task',
-          title: '🎯 任务型前缀：翻译 / 总结 / 图片 / 对比',
-          description: '/translate /summarize /img /v 一键调用',
+          title: '🎯 Task prefixes: translate / summarize / image / compare',
+          description: '/translate /summarize /img /v one-tap',
           thumbnail_url: THUMBNAILS.sparkles,
           input_message_content: {
-            message_text: `🎯 <b>任务型前缀</b>\n\n在提问前加前缀即可一键调用专用模式，可与搜索前缀混用（如 <code>@flash /summarize ...</code>）：\n\n🌐 <code>/translate 内容</code> — 翻译成中文\n📋 <code>/summarize 内容</code> — 总结要点\n🖼️ <code>/img 提示词</code> — 生成图片（原地内嵌显示）\n⚖️ <code>/v 问题</code> — 多模型对比（逐步点选 2-3 个模型）`,
+            message_text: `🎯 <b>Task prefixes</b>\n\nAdd a prefix before your question to instantly trigger a dedicated mode, and mix it with search prefixes (e.g. <code>@flash /summarize ...</code>):\n\n🌐 <code>/translate content</code> — translate between Chinese & English\n📋 <code>/summarize content</code> — summarize key points\n🖼️ <code>/img prompt</code> — generate image (embedded in place)\n⚖️ <code>/v question</code> — multi-model comparison (pick 2-3 models step by step)`,
             parse_mode: 'HTML' as const,
           },
         },
@@ -1163,16 +1163,16 @@ export function registerInlineHandler(
       const results = [{
         type: 'article' as const,
         id: resultId,
-        title: '⚖️ 点击选择模型对比',
-        description: `选择 2-${MAX_COMPARE_MODELS} 个模型并行对比相同问题`,
+        title: '⚖️ Click to select models to compare',
+        description: `Compare the same question with 2-${MAX_COMPARE_MODELS} models in parallel`,
         thumbnail_url: THUMBNAILS.sparkles,
         input_message_content: {
           rich_message: {
-            markdown: `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n_点击后选择 ${MAX_COMPARE_MODELS} 个以内的模型进行并行对比。_`,
+            markdown: `**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n_After clicking, select up to ${MAX_COMPARE_MODELS} models for parallel comparison._`,
           },
         } as any,
         reply_markup: {
-          inline_keyboard: [[{ text: '⏹ 停止', callback_data: `inline_stop:${resultId}` }]],
+          inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${resultId}` }]],
         },
       }];
       logger.info(`[InlineQuery] Compare mode: sending picker card for "${prompt.slice(0, 40)}..."`);
@@ -1187,10 +1187,10 @@ export function registerInlineHandler(
     try {
       const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
       const taskLabel = task === 'image'
-        ? '🖼️ **图像生成模式**'
-        : task === 'translate' ? '🌐 **翻译模式**'
-        : task === 'summarize' ? '📋 **总结模式**'
-        : task === 'compare' ? '⚖️ **多模型对比模式**'
+        ? '🖼️ **Image generation mode**'
+        : task === 'translate' ? '🌐 **Translate mode**'
+        : task === 'summarize' ? '📋 **Summarize mode**'
+        : task === 'compare' ? '⚖️ **Multi-model comparison mode**'
         : undefined;
 
       if (familyMode) {
@@ -1202,11 +1202,11 @@ export function registerInlineHandler(
             type: 'article' as const,
             id: candidateId,
             title: `🧠 ${candidateModel}`,
-            description: `点击后用 ${candidateModel} 回答`,
+            description: `Answer with ${candidateModel}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
               rich_message: {
-                markdown: `${taskLabel ? taskLabel + '\n\n' : ''}**🧠 目标模型：** \`${candidateModel}\`\n\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`,
+                markdown: `${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${candidateModel}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
               },
             } as any,
             // An inline keyboard is REQUIRED for Telegram to return
@@ -1214,7 +1214,7 @@ export function registerInlineHandler(
             // to stream/update the message in-place (BUGFIX: removed 1056263).
             reply_markup: {
               inline_keyboard: [[
-                { text: '⏹ 停止', callback_data: `inline_stop:${candidateId}` }
+                { text: '⏹ Stop', callback_data: `inline_stop:${candidateId}` }
               ]],
             },
           };
@@ -1226,17 +1226,17 @@ export function registerInlineHandler(
       }
 
       const initTitle = task === 'image'
-        ? `🖼️ 点击生成图片 [${modelToUse}]`
-        : task === 'translate' ? `🌐 点击翻译 [${modelToUse}]`
-        : task === 'summarize' ? `📋 点击总结 [${modelToUse}]`
-        : task === 'compare' ? '⚖️ 点击选择模型对比'
-        : `🤔 点击发送并开始思考 [${modelToUse}]`;
+        ? `🖼️ Click to generate image [${modelToUse}]`
+        : task === 'translate' ? `🌐 Click to translate [${modelToUse}]`
+        : task === 'summarize' ? `📋 Click to summarize [${modelToUse}]`
+        : task === 'compare' ? '⚖️ Click to select models to compare'
+        : `🤔 Click to send and start thinking [${modelToUse}]`;
       let initMarkdown: string;
       if (task === 'image') {
-        initMarkdown = `**🎨 图像生成模式**\n\n**💬 提示词：**\n> ${displayPrompt}\n\n*🚀 正在生成图片，完成后将自动原地更新。*`;
+        initMarkdown = `**🎨 Image generation mode**\n\n**💬 Prompt:**\n> ${displayPrompt}\n\n*🚀 Generating images; will update in place when complete.*`;
       } else {
-        const modelLine = `**🧠 目标模型：** \`${modelToUse}\`\n`;
-        initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI 推理引擎已启动**\n\n${modelLine}**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`;
+        const modelLine = `**🧠 Target model:** \`${modelToUse}\`\n`;
+        initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI inference engine started**\n\n${modelLine}**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`;
       }
 
       const suggestionCards: any[] = [];
@@ -1249,17 +1249,17 @@ export function registerInlineHandler(
           suggestionCards.push({
             type: 'article' as const,
             id: candidateId,
-            title: `🧠 用 ${candidateModel} 回答`,
-            description: `切换到模型 ${candidateModel}`,
+            title: `🧠 Answer with ${candidateModel}`,
+            description: `Switch to model ${candidateModel}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
               rich_message: {
-                markdown: `**🧠 模型切换：** \`${candidateModel}\`\n\n**💬 提问内容：**\n> ${displayPrompt}\n\n*🚀 正在深度推演，回答完成后将自动原地更新。*`,
+                markdown: `**🧠 Model switch:** \`${candidateModel}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
               },
             } as any,
             reply_markup: {
               inline_keyboard: [[
-                { text: '⏹ 停止', callback_data: `inline_stop:${candidateId}` }
+                { text: '⏹ Stop', callback_data: `inline_stop:${candidateId}` }
               ]],
             },
           });
@@ -1271,7 +1271,7 @@ export function registerInlineHandler(
           type: 'article' as const,
           id: resultId,
           title: initTitle,
-          description: `${task === 'image' ? '生成图片' : `点击发送，${prompt.slice(0, 40)}...`} AI ${task === 'image' ? '图片' : '回答'}将自动更新`,
+          description: `${task === 'image' ? 'Generate image' : `Click to send, ${prompt.slice(0, 40)}...`} — AI ${task === 'image' ? 'image' : 'answer'} will auto-update`,
           thumbnail_url: task === 'image' ? THUMBNAILS.sparkles : THUMBNAILS.thinking,
           input_message_content: {
             rich_message: {
@@ -1283,19 +1283,19 @@ export function registerInlineHandler(
           // to stream/update the message in-place (BUGFIX: removed 1056263).
           reply_markup: {
             inline_keyboard: [[
-              { text: '⏹ 停止', callback_data: `inline_stop:${resultId}` }
+              { text: '⏹ Stop', callback_data: `inline_stop:${resultId}` }
             ]],
           },
         },
         {
           type: 'article' as const,
           id: `prompt-${Date.now()}`,
-          title: `💬 发送提问卡片 (默认模型)`,
-          description: `模型: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
+          title: `💬 Send question card (default model)`,
+          description: `Model: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
           thumbnail_url: THUMBNAILS.chat,
           input_message_content: {
             rich_message: {
-              markdown: `**💬 AI 提问卡片**\n\n**模型：** \`${modelToUse}\`\n**问题：** ${displayPrompt}\n\n*${ICONS.sparkles} 提问卡片已发送。*`,
+              markdown: `**💬 AI question card**\n\n**Model:** \`${modelToUse}\`\n**Question:** ${displayPrompt}\n\n*${ICONS.sparkles} Question card sent.*`,
             },
           } as any,
         },
@@ -1360,7 +1360,7 @@ export function registerInlineHandler(
       touchPendingResult(chosen.result_id);
       if (accumulatedText.trim().length > 0) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
-        const streamMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${activeModelName})：**\n\n${accumulatedText}\n\n_✍️ AI 正在实时打字更新中..._`;
+        const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${activeModelName}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
         streamQueue.enqueueStream(streamMarkdown);
       }
     };
@@ -1452,7 +1452,7 @@ async function runInlineGeneration(
     const outCount = result.usage?.output || estimateTokens(cleanOutput);
     const cachedCount = result.usage?.cached || 0;
     const thinkingCount = result.usage?.thinking || 0;
-    const estLabel = !result.usage ? ' (预估)' : '';
+    const estLabel = !result.usage ? ' (estimated)' : '';
 
     if (inCount) footerParts.push(`📥 In: ${formatTokenCount(inCount)}${estLabel}`);
     if (outCount) footerParts.push(`📤 Out: ${formatTokenCount(outCount)}${estLabel}`);
@@ -1480,11 +1480,11 @@ async function runInlineGeneration(
         // Long answer → paginate with collapsible fold
         const pages = splitIntoPages(cleanOutput);
         pageCount = pages.length;
-        const header = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**`;
+        const header = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${modelUsed}):**`;
         const pageItems: InlinePage[] = pages.map((page) => {
-          const summaryTitle = `💡 展开本页 AI 完整回答 (${page.length} 字)`;
+          const summaryTitle = `💡 ${page.length}-char full answer`;
           const details = `> [details] ${summaryTitle}\n> \n` + page.split('\n').map(line => `> ${line}`).join('\n');
-          const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : '';
+          const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : '';
           const fullMd = `${header}\n\n${details}${footer}`;
           const blocks = markdownToRichBlocks(fullMd);
           return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
@@ -1493,34 +1493,34 @@ async function runInlineGeneration(
         fullMarkdown = pageItems[0].markdown || '';
         finalBlocks = pageItems[0].blocks;
         const baseButtons: { text: string; callback_data: string }[] = [
-          { text: '◀️ 上一页', callback_data: 'inline_noop' },
+          { text: '◀️ Prev', callback_data: 'inline_noop' },
           { text: `1/${pageCount}`, callback_data: 'inline_noop' },
-          { text: '下一页 ▶️', callback_data: `inline_page:${resultId}:1` },
+          { text: 'Next ▶️', callback_data: `inline_page:${resultId}:1` },
         ];
 
         replyMarkup = {
           inline_keyboard: [
-            baseButtons.filter((b) => !(b.text === '◀️ 上一页')),
-            [{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }],
+            baseButtons.filter((b) => !(b.text === '◀️ Prev')),
+            [{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }],
           ],
         };
       } else {
         // Medium answer → single collapsible fold
-        const summaryTitle = `💡 点击展开 AI 完整回答 (${rawOutputLen} 字)`;
+        const summaryTitle = `💡 Click to expand full AI answer (${rawOutputLen} chars)`;
         const bodyMarkdown = `> [details] ${summaryTitle}\n> \n` + cleanOutput.split('\n').map(line => `> ${line}`).join('\n');
         isCollapsible = true;
-        fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+        fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${modelUsed}):**\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
         const blocks = markdownToRichBlocks(fullMarkdown);
         finalBlocks = blocks.length > 0 ? blocks : undefined;
         replyMarkup = {
-          inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+          inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
         };
       }
     } else {
       // Short answer → plain text
-      fullMarkdown = `**💬 问题：** ${displayPrompt}\n\n**🤖 回答 (${modelUsed})：**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (已自动降级)' : ''}_` : ''}`;
+      fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${modelUsed}):**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
       replyMarkup = {
-        inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+        inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
       };
     }
 
@@ -1534,8 +1534,8 @@ async function runInlineGeneration(
     const wasStopped = ctrl.signal.aborted;
     const displayPrompt = prompt.length > 200 ? prompt.slice(0, 200) + '...' : prompt;
     const failText = wasStopped
-      ? `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n⏹ <b>已停止生成</b>\n任务被手动停止。`
-      : `<b>💬 问题：</b> ${escapeHtmlText(displayPrompt)}\n\n⚠️ <b>生成回答失败</b>\n模型未返回有效的文本输出，请重试。`;
+      ? `<b>💬 Question:</b> ${escapeHtmlText(displayPrompt)}\n\n⏹ <b>Generation stopped</b>\nTask was manually stopped.`
+      : `<b>💬 Question:</b> ${escapeHtmlText(displayPrompt)}\n\n⚠️ <b>Failed to generate answer</b>\nThe model returned no valid text output, please retry.`;
     await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
       text: failText,
@@ -1581,13 +1581,13 @@ async function runCompareGeneration(
 
   const renderStatus = (): string => {
     const lines = statuses.map((s, i) => {
-      const num = ['①', '②', '③'][i] ?? `${i + 1}.`;
-      if (s.error) return `${num} \`${s.model}\`\n❌ 生成失败`;
-      if (s.done) return `${num} \`${s.model}\`\n✅ 完成`;
-      return `${num} \`${s.model}\`\n⏳ 思考中...`;
+      const num = ['1.', '2.', '3.'][i] ?? `${i + 1}.`;
+      if (s.error) return `${num} \`${s.model}\`\n❌ Generation failed`;
+      if (s.done) return `${num} \`${s.model}\`\n✅ Done`;
+      return `${num} \`${s.model}\`\n⏳ Thinking...`;
     }).join('\n\n');
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-    return `**⚖️ 多模型对比中...**\n\n**💬 提问：**\n> ${displayPrompt}\n\n${lines}\n\n_⏱️ ${elapsed}s 已运行，回答完成后将自动原地更新。_`;
+    return `**⚖️ Multi-model comparison in progress...**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${lines}\n\n_⏱️ elapsed ${elapsed}s, will update in place when complete._`;
   };
 
   // Parallel execution, one runModelWithFallbackChain per model.
@@ -1608,13 +1608,13 @@ async function runCompareGeneration(
     );
     if (result?.output) {
       statuses[i] = {
-        model: `${modelUsed}${isFallback ? '（降级）' : ''}`,
+        model: `${modelUsed}${isFallback ? ' (downgraded)' : ''}`,
         done: true,
         output: result.output,
         usage: result.usage ?? undefined,
       };
     } else {
-      statuses[i] = { model, done: true, error: ctrl.signal.aborted ? '已停止' : '无输出' };
+      statuses[i] = { model, done: true, error: ctrl.signal.aborted ? 'Stopped' : 'no output' };
     }
     streamQueue.enqueueStream(renderStatus());
   });
@@ -1633,8 +1633,8 @@ async function runCompareGeneration(
   if (doneModels.length === 0) {
     const wasStopped = ctrl.signal.aborted;
     const failText = wasStopped
-      ? `**💬 提问：** ${displayPrompt}\n\n⏹ **已停止对比**\n任务被手动停止。`
-      : `**💬 提问：** ${displayPrompt}\n\n⚠️ **对比失败**\n所有模型均未返回有效输出，请重试。`;
+      ? `**💬 Question:** ${displayPrompt}\n\n⏹ **Comparison stopped**\nTask was manually stopped.`
+      : `**💬 Question:** ${displayPrompt}\n\n⚠️ **Comparison failed**\nAll models returned no valid output, please retry.`;
     await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
       rich_message: { markdown: failText },
@@ -1643,12 +1643,12 @@ async function runCompareGeneration(
   }
 
   // Build paginated comparison: one page per successfully answered model.
-  const header = `**⚖️ 多模型对比**\n\n**💬 提问：**\n> ${displayPrompt}\n\n`;
+  const header = `**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n`;
   const pageItems: InlinePage[] = doneModels.map((s, i) => {
     const clean = stripWholeMessageCodeFence(s.output || '');
-    const num = ['①', '②', '③'][i] ?? `${i + 1}.`;
+    const num = ['1.', '2.', '3.'][i] ?? `${i + 1}.`;
     const modelLine = `**${num} ${s.model}**\n\n`;
-    const summaryTitle = `💡 点击展开 ${s.model.split(' ')[0] || s.model} 的完整回答 (${s.model})`;
+    const summaryTitle = `💡 Click to expand full answer of ${s.model.split(' ')[0] || s.model} (${s.model})`;
     const bodyMarkdown = `> [details] ${summaryTitle}\n> \n` + clean.split('\n').map(line => `> ${line}`).join('\n');
     const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
     const fullMd = `${header}${modelLine}${bodyMarkdown}${footer}`;
@@ -1660,20 +1660,20 @@ async function runCompareGeneration(
   const pageCount = pageItems.length;
 
   const allSucceeded = failedModels.length === 0;
-  const doneStr = doneModels.map((s) => s.model).join('、');
-  const failNote = failedModels.length > 0 ? `\n\n_⚠️ 生成失败：${failedModels.map((s) => s.model).join('、')}_` : '';
+  const doneStr = doneModels.map((s) => s.model).join(', ');
+  const failNote = failedModels.length > 0 ? `\n\n_⚠️ Failed: ${failedModels.map((s) => s.model).join(', ')}_` : '';
 
   // First page + pagination keyboard + regenerate.
-  const footerText = `${allSucceeded ? '对比完成' : '部分完成'}：${doneStr}${failNote}`;
+  const footerText = `${allSucceeded ? 'Comparison complete' : 'Partially complete'}: ${doneStr}${failNote}`;
   const firstPage = `${pageItems[0].markdown}\n\n_${footerText}_`;
   const replyMarkup = {
     inline_keyboard: [
       [
-        { text: '◀️ 上一页', callback_data: 'inline_noop' },
+        { text: '◀️ Prev', callback_data: 'inline_noop' },
         { text: `1/${pageCount}`, callback_data: 'inline_noop' },
-        { text: '下一页 ▶️', callback_data: `inline_page:${resultId}:1` },
-      ].filter((b) => b.text !== '◀️ 上一页'),
-      [{ text: '🔄 重新对比', callback_data: `inline_regenerate:${resultId}` }],
+        { text: 'Next ▶️', callback_data: `inline_page:${resultId}:1` },
+      ].filter((b) => b.text !== '◀️ Prev'),
+      [{ text: '🔄 Re-compare', callback_data: `inline_regenerate:${resultId}` }],
     ],
   };
 
@@ -1707,7 +1707,7 @@ async function finalizeImageResult(
   if (!result?.conversationId) {
     await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
-      text: `<b>🎨 图像生成失败</b>\n模型未返回会话信息，请重试。`,
+      text: `<b>🎨 Image generation failed</b>\nThe model returned no session info, please retry.`,
       parse_mode: 'HTML',
     } as any).catch(() => {});
     return;
@@ -1719,10 +1719,10 @@ async function finalizeImageResult(
     await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
       rich_message: {
-        markdown: `**🎨 图像生成结果**\n\n**💬 提示词：** ${displayPrompt}\n\n${output || '模型未生成图片文件。'}`,
+        markdown: `**🎨 Image generation result**\n\n**💬 Prompt:** ${displayPrompt}\n\n${output || 'The model did not generate image files.'}`,
       },
       reply_markup: {
-        inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+        inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
       },
     } as any).catch(() => {});
     return;
@@ -1744,13 +1744,13 @@ async function finalizeImageResult(
   let relayMessageId: number | null = null;
   try {
     const relayMarkdown = chunks
-      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![生成的图片](tg://photo?id=r${ci}_${i})`).join('\n')}\n</tg-collage>`)
+      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![generated image](tg://photo?id=r${ci}_${i})`).join('\n')}\n</tg-collage>`)
       .join('\n\n');
     const relayMedia = chunks.flatMap((chunk, ci) =>
       chunk.map((imgPath, i) => ({ id: `r${ci}_${i}`, media: { type: 'photo' as const, media: new InputFile(imgPath) } })),
     );
     const sentMsg = await ctx.api.sendRichMessage(fromId, {
-      markdown: `${relayMarkdown}\n\n*上传中转中...*`,
+      markdown: `${relayMarkdown}\n\n*uploading relay...*`,
       media: relayMedia,
     });
     relayMessageId = sentMsg?.message_id ?? null;
@@ -1778,9 +1778,9 @@ async function finalizeImageResult(
     }
   }
 
-  const caption = `**💬 提示词：** ${displayPrompt}\n\n_模型: ${modelUsed} · 共 ${images.length} 张_`;
+  const caption = `**💬 Prompt:** ${displayPrompt}\n\n_Model: ${modelUsed} · ${images.length} image(s) total_`;
   const regenButton = {
-    inline_keyboard: [[{ text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }]],
+    inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
   };
 
   if (fileIds.length > 0) {
@@ -1793,8 +1793,8 @@ async function finalizeImageResult(
       chunks.push(fileIds.slice(i, i + MAX_COLLAGE_IMAGES));
     }
     const richMarkdown = `${chunks
-      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![生成的图片](tg://photo?id=med${ci}_${i})`).join('\n')}\n</tg-collage>`)
-      .join('\n\n')}\n\n${caption}\n\n_🖼️ 图片已生成，可点击 🔄 重新生成。_`;
+      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![generated image](tg://photo?id=med${ci}_${i})`).join('\n')}\n</tg-collage>`)
+      .join('\n\n')}\n\n${caption}\n\n_🖼️ Image generated, tap 🔄 to regenerate._`;
     const media = chunks.flatMap((chunk, ci) =>
       chunk.map((fileId, i) => ({ id: `med${ci}_${i}`, media: { type: 'photo', media: fileId } })),
     );
@@ -1807,7 +1807,7 @@ async function finalizeImageResult(
       reply_markup: regenButton,
     } as any).catch((e: Error) => {
       logger.error(`[InlineResult] rich_message media edit failed, falling back to text: ${e}`);
-      const fallbackText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 原地渲染失败。_`;
+      const fallbackText = `**🖼️ Image generated**\n\n${caption}\n\n_⚠️ In-place rendering failed._`;
       return ctx.api.raw.editMessageText({
         inline_message_id: inlineMessageId,
         rich_message: { markdown: fallbackText },
@@ -1819,7 +1819,7 @@ async function finalizeImageResult(
 
   // No file_id (relay upload failed): describe the images as text.
   const filesText = images.map((p) => path.basename(p)).join(', ');
-  const finalText = `**🖼️ 图片已生成**\n\n${caption}\n\n_⚠️ 未能上传渲染（请先给机器人发消息开启私聊）_\n\n_文件: ${filesText}_`;
+  const finalText = `**🖼️ Image generated**\n\n${caption}\n\n_⚠️ Could not render via upload (message the bot first to enable DM)_\n\n_Files: ${filesText}_`;
   await ctx.api.raw.editMessageText({
     inline_message_id: inlineMessageId,
     rich_message: { markdown: finalText },

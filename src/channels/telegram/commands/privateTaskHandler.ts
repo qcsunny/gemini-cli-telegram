@@ -24,10 +24,10 @@ const PRIVATE_TASK: Record<string, InlineTask> = {
 };
 
 const TASK_TITLES: Record<InlineTask, string> = {
-  translate: '🌐 翻译结果',
-  summarize: '📝 内容总结',
-  image: '🖼️ 图像生成',
-  compare: '🔀 模型对比',
+  translate: '🌐 Translation Result',
+  summarize: '📝 Content Summary',
+  image: '🖼️ Image Generation',
+  compare: '🔀 Model Comparison',
 };
 
 export function registerPrivateTaskHandlers(
@@ -54,7 +54,7 @@ async function handlePrivateTask(
   const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
   if (!arg) {
     await ctx
-      .reply(`${TASK_TITLES[task]}：请附上内容。比如 /translate Hello world，或 /summarize 一段文章。`)
+      .reply(`${TASK_TITLES[task]}: please provide content. E.g. /translate Hello world, or /summarize a paragraph.`)
       .catch(() => {});
     return;
   }
@@ -85,7 +85,7 @@ async function handlePrivateTask(
     );
 
     if (!result?.output) {
-      await ctx.reply(`${TASK_TITLES[task]} <b>失败</b>\n模型未返回结果，请重试。`, { parse_mode: 'HTML' }).catch(() => {});
+      await ctx.reply(`${TASK_TITLES[task]} <b>failed</b>\nThe model returned no result, please retry.`, { parse_mode: 'HTML' }).catch(() => {});
       return;
     }
 
@@ -101,8 +101,8 @@ async function handlePrivateTask(
 
     const reply =
       `**${TASK_TITLES[task]}**\n\n` +
-      `**📌 输入：** ${displayPrompt}\n\n` +
-      `**🤖 输出 (${modelUsed})：**\n\n${cleanOutput}\n\n` +
+      `**📌 Input:** ${displayPrompt}\n\n` +
+      `**🤖 Output (${modelUsed}):**\n\n${cleanOutput}\n\n` +
       `_${footerParts.join(' · ')}_`;
 
     await ctx.reply(reply, { parse_mode: 'MarkdownV2' }).catch(async () => {
@@ -111,6 +111,6 @@ async function handlePrivateTask(
     logger.info(`[${task}] Delivered result (${cleanOutput.length} chars) to chatId=${chatId}`);
   } catch (e) {
     logger.error(`[PrivateTask] ${task} failed for chatId=${chatId}: ${e}`);
-    await ctx.reply(`${TASK_TITLES[task]} <b>失败</b>\n请稍后重试。`, { parse_mode: 'HTML' }).catch(() => {});
+    await ctx.reply(`${TASK_TITLES[task]} <b>failed</b>\nPlease try again later.`, { parse_mode: 'HTML' }).catch(() => {});
   }
 }

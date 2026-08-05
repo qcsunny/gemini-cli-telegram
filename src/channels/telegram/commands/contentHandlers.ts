@@ -70,7 +70,7 @@ export function registerContentHandlers(
       reassembledMarkdown += `${answerMarkdown}\n`;
 
       if (thinkingMarkdown.trim()) {
-        reassembledMarkdown += `\n---\n\n<details>\n<summary>🤔 AI Thinking（点击展开）</summary>\n\n${thinkingMarkdown.trim()}\n\n</details>\n`;
+        reassembledMarkdown += `\n---\n\n<details>\n<summary>🤔 AI Thinking (click to expand)</summary>\n\n${thinkingMarkdown.trim()}\n\n</details>\n`;
       }
 
       // Sanitize title for filename: Windows illegal characters are \/:*?"<>|

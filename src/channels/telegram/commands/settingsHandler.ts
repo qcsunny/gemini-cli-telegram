@@ -15,7 +15,7 @@ const PARSE_MODES = ['RichText', 'HTML', 'MarkdownV2'] as const;
 type ParseMode = (typeof PARSE_MODES)[number];
 
 const MODE_LABELS: Record<ParseMode, string> = {
-  RichText: 'Rich Text（推荐）',
+  RichText: 'Rich Text (Recommended)',
   HTML: 'HTML',
   MarkdownV2: 'MarkdownV2',
 };
@@ -35,7 +35,7 @@ function buildSettingsText(
   const session = sessionManager.getSession(chatId);
   const parseMode = readParseMode(session?.settings?.telegram?.parseMode);
   const model = escapeHtml(session?.model || defaultModel);
-  const project = session?.currentProject ? escapeHtml(session.currentProject.name) : '未选择';
+  const project = session?.currentProject ? escapeHtml(session.currentProject.name) : 'None selected';
   const turns = session?.turnCount ?? 0;
 
   return (
@@ -44,7 +44,7 @@ function buildSettingsText(
     `${ICONS.project} <b>Workspace:</b> <code>${project}</code>\n` +
     `${ICONS.clock} <b>Turns:</b> ${turns}\n` +
     `${ICONS.terminal} <b>Output Format:</b> ${MODE_LABELS[parseMode]}\n\n` +
-    `<i>调整后即时生效。</i>`
+    `<i>Takes effect immediately.</i>`
   );
 }
 

@@ -134,7 +134,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
             conversationId: convId,
             output: '',
             exitCode: 1,
-            stderr: '⚠️ 上游返回为空，可能是 Gemini 网页端限流，请稍后重试。',
+            stderr: '⚠️ The upstream returned empty, possibly rate-limited by the Gemini web interface. Please try again later.',
           });
           return;
         }

@@ -56,19 +56,19 @@ function getStreamingMarkdown(text: string | StructuredMessage): string {
     .trim();
   if (typeof text === 'string') {
     const content = strip(text);
-    return content || '🧠 正在思考... (Thinking...)';
+    return content || '🧠 Thinking...';
   }
   const content = strip(text.content || '');
   const thought = strip(text.thought || '');
   if (content) return content;
-  if (thought) return '🧠 正在思考... (Thinking...)';
-  return '🧠 正在思考... (Thinking...)';
+  if (thought) return '🧠 Thinking...';
+  return '🧠 Thinking...';
 }
 
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
   let html = getHtmlPayload(text, isStreaming);
   if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
-    html = '正在思考...<br><br>' + html;
+    html = 'Thinking...<br><br>' + html;
   }
   return html;
 }
@@ -410,7 +410,7 @@ export function buildChannelReply(
               logger.info(`[SENDRICH] Message too long (${totalTextLen} chars, ${parts.length} parts), falling back to file send`);
               const mdContent = typeof originalText === 'string'
                 ? originalText
-                : `${originalText.content}${originalText.thought ? `\n\n# 思考过程\n${originalText.thought}` : ''}`;
+                : `${originalText.content}${originalText.thought ? `\n\n# Thinking Process\n${originalText.thought}` : ''}`;
               const fileName = `response_${Date.now()}.md`;
               const replyParams = replyToMessageId ? { message_id: replyToMessageId } : undefined;
               const msg = await ctx.replyWithDocument(new InputFile(Buffer.from(mdContent, 'utf-8'), fileName), {
@@ -625,7 +625,7 @@ export function buildChannelReply(
           : (originalText.content || '').trim();
 
         const suffix = (isStreaming && !hasThought && !contentText)
-          ? '<br>正在思考...'
+          ? '<br>Thinking...'
           : '';
 
         logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft Option B - HTML, isStreaming=${isStreaming})`);

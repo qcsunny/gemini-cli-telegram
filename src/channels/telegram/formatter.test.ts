@@ -365,13 +365,13 @@ Thanks for reading! 🚀
   it('should format completed thought blocks as collapsible details', () => {
     const input = 'Pre-text\n<thought>\nLet me analyze the path\n</thought>\nPost-text';
     const html = markdownToHtml(input);
-    expect(html).toContain('<details><summary>🧠 思考过程 (Thinking Process)</summary>Let me analyze the path</details>');
+    expect(html).toContain('<details><summary>🧠 Thinking Process</summary>Let me analyze the path</details>');
   });
 
   it('should format streaming unclosed thought blocks as open details', () => {
     const input = '<thought>\nLet me analyze the path';
     const html = markdownToHtml(input);
-    expect(html).toContain('<details open><summary>🧠 正在思考... (Thinking...)</summary>Let me analyze the path</details>');
+    expect(html).toContain('<details open><summary>🧠 Thinking...</summary>Let me analyze the path</details>');
   });
 
   it('should format unclosed thought blocks in the middle of a string as normal content, not details', () => {
@@ -421,7 +421,7 @@ Thanks for reading! 🚀
     const longThought = 'A'.repeat(4000);
     const input = `Pre-text\n<thought time="1.5" tokens="500">\n${longThought}\n</thought>\nPost-text`;
     const html = markdownToHtml(input, true);
-    expect(html).toContain('……（已省略后续内容，超长思考摘要已被截断）');
+    expect(html).toContain('… (truncated: overlong thinking summary)');
     expect(html.length).toBeLessThan(4096);
   });
 
@@ -435,7 +435,7 @@ Thanks for reading! 🚀
     it('should format completed thought blocks with <details open> when isStreaming=true', () => {
       const input = 'Pre-text\n<thought>\nThinking content\n</thought>\nPost-text';
       const html = markdownToHtml(input, true);
-      expect(html).toContain('<details open><summary>🧠 正在思考... (Thinking...)</summary>');
+      expect(html).toContain('<details open><summary>🧠 Thinking...</summary>');
     });
   });
 
@@ -504,7 +504,7 @@ Thanks for reading! 🚀
       const chunks = splitDetails(detailsHtml, 80);
       expect(chunks.length).toBeGreaterThan(1);
       expect(chunks[0]).toContain('<details open><summary>Summary Title</summary>');
-      expect(chunks[1]).toContain('<details open><summary>Summary Title (续)</summary>');
+      expect(chunks[1]).toContain('<details open><summary>Summary Title (cont.)</summary>');
     });
 
     it('should correctly tokenize HTML elements into blocks and plain text', () => {
@@ -665,10 +665,10 @@ Thanks for reading! 🚀
     it('should parse a footer HTML into native details + footer blocks', () => {
       const html =
         '<a href="tg://btn_info_footer|Gemini 3.5 Flash (Medium)|120|250|$0.000084|40|1300">⚙️ Gemini 3.5 Flash (Medium) · In: 120 · Out: 250 · Cost: $0.000084</a>' +
-        '<details><summary>🧠 思考过程 (Thinking Process)</summary>Let me analyze the path.<i>Thinking Time: 2.5 s</i></details>';
+        '<details><summary>🧠 Thinking Process</summary>Let me analyze the path.<i>Thinking Time: 2.5 s</i></details>';
       const blocks = buildFooterBlocksFromHtml(html);
       expect(blocks.length).toBe(2);
-      expect(blocks[0]).toMatchObject({ type: 'details', summary: '🧠 思考过程 (Thinking Process)' });
+      expect(blocks[0]).toMatchObject({ type: 'details', summary: '🧠 Thinking Process' });
       expect((blocks[0] as any).blocks[0].text).toBe('Let me analyze the path.');
       expect(blocks[1]).toMatchObject({ type: 'footer' });
       expect((blocks[1] as any).text).toContain('⚙️ Gemini 3.5 Flash (Medium)');
@@ -833,7 +833,7 @@ Thanks for reading! 🚀
       expect(blocks.length).toBe(1);
       const first = blocks[0] as any;
       expect(first.type).toBe('thinking');
-      expect(first.text).toBe('正在思考...');
+      expect(first.text).toBe('Thinking...');
     });
   });
 
@@ -876,8 +876,8 @@ Thanks for reading! 🚀
       expect(allDetails.length).toBeGreaterThanOrEqual(2);
       // Each split details should have a numbered summary
       const summaries = allDetails.map(b => (b as any).summary);
-      expect(summaries[0]).toMatch(/🧠 思考过程 \(1\/\d+\)/);
-      expect(summaries[summaries.length - 1]).toMatch(/🧠 思考过程 \(\d+\/\d+\)/);
+      expect(summaries[0]).toMatch(/🧠 Thinking Process \(1\/\d+\)/);
+      expect(summaries[summaries.length - 1]).toMatch(/🧠 Thinking Process \(\d+\/\d+\)/);
     });
 
     it('should split a single oversize paragraph into smaller paragraph nodes', () => {

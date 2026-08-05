@@ -70,8 +70,8 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
 // ── Media caption task instruction injection (#3) ──
 
 const MEDIA_CAPTION_TASK_MAP: Record<string, string> = {
-  '/translate': '请将以下图片/文档中的内容翻译成中文，保持原意与格式：\n\n',
-  '/summarize': '请用简洁的语言总结以下图片/文档中的内容，列出要点：\n\n',
+  '/translate': 'Translate the content in the image/document below between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting. Reply in the same language as the user\'s message:\n\n',
+  '/summarize': 'Summarize the content in the image/document below concisely and list the key points. Reply in the same language as the user\'s message:\n\n',
 };
 
 /**
@@ -787,7 +787,7 @@ export class TelegramBot {
           logger.warn(`Unauthorized access attempt from user ${userId}`);
           if (ctx.callbackQuery) {
             await ctx.answerCallbackQuery({
-              text: '⚠️ 未授权访问：您的 Telegram ID 未在许可白名单中。',
+              text: '⚠️ Unauthorized: your Telegram ID is not on the allowed whitelist.',
               show_alert: true,
             }).catch(() => {});
             return;
@@ -846,7 +846,7 @@ export class TelegramBot {
       let promptText = text;
       if (refText && refText.trim()) {
         const cleanRef = refText.trim().slice(0, 1500);
-        promptText = `> [引用上下文]: ${cleanRef.replace(/\n/g, '\n> ')}\n\n${text}`;
+        promptText = `> [Quoted context]: ${cleanRef.replace(/\n/g, '\n> ')}\n\n${text}`;
         logger.info(`[ReplyContext] Augmented prompt with quoted/reply text (len=${cleanRef.length}) for chatId=${chatId}`);
       }
 

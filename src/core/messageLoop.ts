@@ -53,7 +53,7 @@ export async function processMessage(
 
   if (signal.aborted) {
     logger.debug(`[messageLoop] Signal already aborted. Skipping.`);
-    await reply.send(`${ICONS.cancel} 任务已被取消。`);
+    await reply.send(`${ICONS.cancel} Task cancelled.`);
     return;
   }
 
@@ -134,7 +134,7 @@ export async function processMessage(
           // Non-rich fallback: plain text (thinking then body), single message path.
           let text = '';
           if (thoughtBuffer.trim()) {
-            const prefix = isFinal ? '🧠 思考过程 (Thinking Process)\n\n' : '🧠 正在思考... (Thinking...)\n\n';
+            const prefix = isFinal ? '🧠 Thinking Process\n\n' : '🧠 Thinking...\n\n';
             text = prefix + thoughtBuffer.trim();
             if (answerBuffer.trim()) text += '\n\n' + answerBuffer.trim();
           } else if (answerBuffer.trim()) {
@@ -215,10 +215,10 @@ export async function processMessage(
         const switchedChannel = prevCh && nextCh && prevCh !== nextCh;
         const logTag = switchedChannel ? `[messageLoop] 🔀 Channel switch ${prevCh}→${nextCh}` : '[messageLoop]';
         logger.warn(`${logTag} Model "${prevModel}" failed (${reason}). Downgrading to "${modelToUse}" (attempt ${attempts}/${maxAttempts}).`);
-        const switchNote = switchedChannel ? `（切换至 ${nextCh} 通道）` : '';
+        const switchNote = switchedChannel ? ` (switched to ${nextCh} channel)` : '';
         // BUG-05: Edit the existing message instead of sending a new one to avoid
         // flooding the chat with multiple "downgrading..." messages.
-        const degradeHtml = `${ICONS.warning} ⚠️ 当前模型 \`${prevModel}\` 调用失败（${escapeHtml(reason).slice(0, 200)}），正在自动降级至 \`${modelToUse}\`${switchNote} 重试...`;
+        const degradeHtml = `${ICONS.warning} ⚠️ Current model \`${prevModel}\` call failed (${escapeHtml(reason).slice(0, 200)}), automatically downgrading to \`${modelToUse}\`${switchNote} and retrying...`;
         if (currentMessageId) {
           try { await reply.edit(currentMessageId, degradeHtml); } catch { await reply.send(degradeHtml); }
         } else {
@@ -253,7 +253,7 @@ export async function processMessage(
             const channel = getChannelModel(modelToUse);
             if (!isBackendAvailable(channel)) {
               logger.info(`[messageLoop] Skipping model "${modelToUse}" — backend "${channel}" is in cooldown`);
-              if (await advanceModel(`后端 ${channel} 暂时不可用`)) continue;
+              if (await advanceModel(`backend ${channel} temporarily unavailable`)) continue;
               break;
             }
           }
@@ -341,7 +341,7 @@ export async function processMessage(
 
           // ANY non-success is eligible for a retry/downgrade (rate-limit,
           // auth error, process termination, hard timeout, generic error).
-          const parsed = parseErrorMessage(stderr || output || '未知错误');
+          const parsed = parseErrorMessage(stderr || output || 'Unknown error');
           const isRateLimited = parsed.type === 'rate_limit';
           const isPermanent = parsed.type === 'connection' || parsed.type === 'auth' || parsed.type === 'critical';
           const reason = parsed.message;
@@ -382,7 +382,7 @@ export async function processMessage(
           const isRateLimited = parsed.type === 'rate_limit';
           const isEofError = errMsg.includes('EOF') || errMsg.includes('streamGenerateContent') || errMsg.includes('daily-cloudcode-pa');
           const isPermanent = isConnectionError(e) || isEofError || parsed.type === 'auth' || parsed.type === 'critical';
-          const reason = isEofError ? 'Google 云端 API 连接断开 (EOF 网络波动)' : parsed.message;
+          const reason = isEofError ? 'Google cloud API connection dropped (EOF network fluctuation)' : parsed.message;
 
           // Adaptive skip: permanently failed models are excluded from the rest of this session
           if (isPermanent) {
@@ -505,7 +505,7 @@ export async function processMessage(
             } else {
               // Plain text fallback
               const finalText = thoughtBuffer.trim()
-                ? `🧠 思考过程 (Thinking Process)\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
+                ? `🧠 Thinking Process\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
                 : answerBuffer.trim();
               await reply.edit!(currentMessageId, finalText);
             }
@@ -573,17 +573,17 @@ export async function processMessage(
         const isAuthError = stderrStr.includes('authentication failed') || stdoutStr.includes('authentication failed') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required');
         const isTerminated = stderrStr.includes('terminated due to error') || stdoutStr.includes('terminated due to error');
 
-        let errorReason = '执行失败';
-        if (isAuthError) errorReason = '认证已过期或未登录 (Authentication expired or not logged in)';
-        if (isTerminated) errorReason = '代理进程异常终止 (Agent execution terminated due to error)';
-        if (finalResult.isTimeout || signal.aborted) errorReason = '执行被取消或超时 (Cancelled/Timeout)';
+        let errorReason = 'Execution failed';
+        if (isAuthError) errorReason = 'Authentication expired or not logged in';
+        if (isTerminated) errorReason = 'Agent process terminated abnormally';
+        if (finalResult.isTimeout || signal.aborted) errorReason = 'Execution cancelled or timed out';
 
         let detailMsg = '';
 
         if (isFriendlyUpstreamMsg) {
           detailMsg = `\n\n${escapeHtml(stderrStr.trim())}`;
         } else if (stdoutStr.includes('Welcome to the Antigravity CLI') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required')) {
-          detailMsg = `\n\n<b>提示</b>: 检测到本地 agy CLI 处于未登录状态，登录交互信息：\n<pre>Welcome to the Antigravity CLI. You are currently not signed in. Select login method: > 1. Google OAuth</pre>\n请通过 SSH 登录服务器运行 <code>agy auth login</code> 完成重新登录。`;
+          detailMsg = `\n\n<b>Note</b>: local agy CLI is not logged in. Login interaction info:\n<pre>Welcome to the Antigravity CLI. You are currently not signed in. Select login method: > 1. Google OAuth</pre>\nLog in via SSH and run <code>agy auth login</code> to re-authenticate.`;
         } else {
           const lines: string[] = [];
           if (stdoutStr.trim()) {
@@ -594,18 +594,18 @@ export async function processMessage(
           }
           const uniqueLines = Array.from(new Set(lines)).slice(0, 3);
           if (uniqueLines.length > 0) {
-            detailMsg = `\n\n<b>错误详情</b>:\n<pre>${uniqueLines.map(escapeHtml).join('\n')}</pre>`;
+            detailMsg = `\n\n<b>Error details</b>:\n<pre>${uniqueLines.map(escapeHtml).join('\n')}</pre>`;
           }
         }
 
         // BUG-07: Choose error hint based on the actual failing channel, not always agy CLI.
         const failingChannel = getChannelModel(modelToUse);
         const channelHint = (!failingChannel || failingChannel === 'agy')
-          ? '请确认您的本地 `agy` CLI 已正确登录并配置网络。'
-          : `请检查 ${failingChannel} 后端服务的连通性与配置是否正常。`;
+          ? 'Please verify that your local `agy` CLI is logged in and configured properly.'
+          : `Please check that the ${failingChannel} backend service is reachable and configured correctly.`;
         const errorHtml = isFriendlyUpstreamMsg
           ? `${escapeHtml(stderrStr.trim())}`
-          : `${ICONS.error} <b>${errorReason}</b>（退出代码: ${finalResult.exitCode}）。${signal.aborted || finalResult.isTimeout ? '任务已被取消或超时（可能是系统看门狗或用户主动停止）。' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : channelHint)}${detailMsg}`;
+          : `${ICONS.error} <b>${errorReason}</b> (exit code: ${finalResult.exitCode}). ${signal.aborted || finalResult.isTimeout ? 'Task was cancelled or timed out (possibly by the system watchdog or the user).' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : channelHint)}${detailMsg}`;
         if (currentMessageId) {
           try {
             await reply.edit(currentMessageId, errorHtml);
@@ -622,9 +622,9 @@ export async function processMessage(
   } catch (e: any) {
     logger.error(`[messageLoop] Error running prompt: ${e?.message || e}`);
     if (signal.aborted) {
-      await reply.send(`${ICONS.cancel} 任务已被用户取消。`);
+      await reply.send(`${ICONS.cancel} Task cancelled by the user.`);
     } else {
-      await reply.send(`${ICONS.error} 发生错误: ${e?.message || String(e)}`);
+      await reply.send(`${ICONS.error} Error: ${e?.message || String(e)}`);
     }
   } finally {
     session.busy = false;
@@ -645,37 +645,37 @@ const ERROR_CODE_MAP: Record<string, {
     suggestion: string;
 }> = {
     // Rate Limit
-    "429": { type: "rate_limit", message: "请求频率超限（频控）", suggestion: "等待1-2分钟后重试，或切换模型" },
-    "quota": { type: "rate_limit", message: "配额已用完", suggestion: "配额用尽，等待恢复或降级模型" },
-    "exhausted": { type: "rate_limit", message: "资源耗尽", suggestion: "请稍后重试" },
-    "rate_limit": { type: "rate_limit", message: "请求频率超限", suggestion: "降低调用频率或降级模型" },
-    "rate_limit_exceeded": { type: "rate_limit", message: "请求频率超限", suggestion: "降低调用频率或降级模型" },
+    "429": { type: "rate_limit", message: "Rate limit exceeded (throttled)", suggestion: "Wait 1-2 minutes and retry, or switch models" },
+    "quota": { type: "rate_limit", message: "Quota exhausted", suggestion: "Quota used up, wait for recovery or downgrade model" },
+    "exhausted": { type: "rate_limit", message: "Resources exhausted", suggestion: "Please retry later" },
+    "rate_limit": { type: "rate_limit", message: "Rate limit exceeded", suggestion: "Lower call frequency or downgrade model" },
+    "rate_limit_exceeded": { type: "rate_limit", message: "Rate limit exceeded", suggestion: "Lower call frequency or downgrade model" },
 
     // Connection
-    "ECONNREFUSED": { type: "connection", message: "连接被拒绝", suggestion: "服务端未启动，请检查服务状态" },
-    "ECONNRESET": { type: "connection", message: "连接重置", suggestion: "网络不稳定，请稍后重试" },
-    "ENETUNREACH": { type: "connection", message: "网络不可达", suggestion: "检查网络连接" },
-    "ETIMEDOUT": { type: "connection", message: "连接超时", suggestion: "增加超时时间或检查网络" },
-    "socket hang up": { type: "connection", message: "连接挂起", suggestion: "网络不稳定，请稍后重试" },
-    "connection refused": { type: "connection", message: "连接被拒绝", suggestion: "检查后端服务状态" },
+    "ECONNREFUSED": { type: "connection", message: "Connection refused", suggestion: "Backend not started, check service status" },
+    "ECONNRESET": { type: "connection", message: "Connection reset", suggestion: "Unstable network, please retry later" },
+    "ENETUNREACH": { type: "connection", message: "Network unreachable", suggestion: "Check network connection" },
+    "ETIMEDOUT": { type: "connection", message: "Connection timed out", suggestion: "Increase timeout or check network" },
+    "socket hang up": { type: "connection", message: "Connection hung up", suggestion: "Unstable network, please retry later" },
+    "connection refused": { type: "connection", message: "Connection refused", suggestion: "Check backend service status" },
 
     // Authentication
-    "401": { type: "auth", message: "认证失败（Token 无效）", suggestion: "检查配置文件中的 token" },
-    "403": { type: "auth", message: "禁止访问（无权限）", suggestion: "检查 bot token 是否正确" },
-    "invalid token": { type: "auth", message: "Token 无效", suggestion: "重新配置 bot token" },
-    "unauthorized": { type: "auth", message: "未授权（401）", suggestion: "检查 bot token 是否正确" },
-    "authentication failed": { type: "auth", message: "认证失败", suggestion: "检查 bot token 是否正确" },
+    "401": { type: "auth", message: "Authentication failed (invalid token)", suggestion: "Check the token in the config file" },
+    "403": { type: "auth", message: "Access forbidden (no permission)", suggestion: "Check if the bot token is correct" },
+    "invalid token": { type: "auth", message: "Invalid token", suggestion: "Reconfigure the bot token" },
+    "unauthorized": { type: "auth", message: "Unauthorized (401)", suggestion: "Check if the bot token is correct" },
+    "authentication failed": { type: "auth", message: "Authentication failed", suggestion: "Check if the bot token is correct" },
 
     // Timeout
-    "timeout": { type: "timeout", message: "请求超时", suggestion: "增加超时时间或检查网络" },
-    "client timeout": { type: "timeout", message: "客户端超时", suggestion: "增加超时时间" },
-    "upstream timeout": { type: "timeout", message: "上游超时", suggestion: "增加超时时间" },
+    "timeout": { type: "timeout", message: "Request timed out", suggestion: "Increase timeout or check network" },
+    "client timeout": { type: "timeout", message: "Client timed out", suggestion: "Increase timeout" },
+    "upstream timeout": { type: "timeout", message: "Upstream timed out", suggestion: "Increase timeout" },
 
     // Backend Unavailable
-    "backend_unavailable": { type: "backend", message: "后端不可用", suggestion: "后端正在维护，请稍后重试" },
+    "backend_unavailable": { type: "backend", message: "Backend unavailable", suggestion: "Backend under maintenance, please retry later" },
 
     // Unknown
-    "unknown": { type: "unknown", message: "未知错误", suggestion: "请稍后重试或降级模型" },
+    "unknown": { type: "unknown", message: "Unknown error", suggestion: "Please retry later or downgrade model" },
 };
 
 /**
@@ -704,10 +704,10 @@ const ERROR_SEVERITY: Record<string, "critical" | "warning" | "info"> = {
  */
 function extractErrorChannel(reason: string): string | undefined {
     const lowerReason = reason.toLowerCase();
-    if (lowerReason.includes('agy')) return 'agy (本地)';
-    if (lowerReason.includes('deepseek')) return 'deepseek-api (代理)';
-    if (lowerReason.includes('web2api')) return 'web2api (代理)';
-    if (lowerReason.includes('opencode')) return 'opencode (本地)';
+    if (lowerReason.includes('agy')) return 'agy (local)';
+    if (lowerReason.includes('deepseek')) return 'deepseek-api (proxy)';
+    if (lowerReason.includes('web2api')) return 'web2api (proxy)';
+    if (lowerReason.includes('opencode')) return 'opencode (local)';
     return undefined;
 }
 
@@ -751,8 +751,8 @@ function parseErrorMessage(reason: string): {
 
     // Build suggestion
     const suggestion = ERROR_CODE_MAP[errorCode]?.suggestion || ERROR_SEVERITY[errorCode] === 'critical'
-        ? ERROR_CODE_MAP['unknown']?.suggestion || '请稍后重试或降级模型'
-        : ERROR_CODE_MAP['unknown']?.suggestion || '请稍后重试';
+        ? ERROR_CODE_MAP['unknown']?.suggestion || 'Please retry later or downgrade the model'
+        : ERROR_CODE_MAP['unknown']?.suggestion || 'Please retry later';
 
     return {
         type: errorType,

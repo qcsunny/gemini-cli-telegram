@@ -99,10 +99,10 @@ export function buildModelKeyboard(
 
   // Tier Quick-Switch Tab Bar
   keyboard
-    .text(currentTier === 0 ? '▶ 🚀 旗舰' : '🚀 旗舰', '/model_tier 0')
-    .text(currentTier === 1 ? '▶ ⚡ 高级' : '⚡ 高级', '/model_tier 1')
-    .text(currentTier === 2 ? '▶ 💡 通用' : '💡 通用', '/model_tier 2')
-    .text(currentTier === 3 ? '▶ 🍃 轻量' : '🍃 轻量', '/model_tier 3')
+    .text(currentTier === 0 ? '▶ 🚀 Flagship' : '🚀 Flagship', '/model_tier 0')
+    .text(currentTier === 1 ? '▶ ⚡ Advanced' : '⚡ Advanced', '/model_tier 1')
+    .text(currentTier === 2 ? '▶ 💡 General' : '💡 General', '/model_tier 2')
+    .text(currentTier === 3 ? '▶ 🍃 Light' : '🍃 Light', '/model_tier 3')
     .row();
 
   const chunkSize = 1;
