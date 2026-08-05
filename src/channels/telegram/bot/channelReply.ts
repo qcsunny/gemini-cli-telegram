@@ -92,28 +92,86 @@ function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming
 }
 
 const draftThrottleTimestamps = new Map<number, number>();
-const DRAFT_THROTTLE_MS = 250;
+
+interface DraftThrottleState {
+  currentMs: number;
+  lastEditTime: number;
+  lastSentLen: number;
+  nextAllowedTime: number;
+}
+const draftThrottleStates = new Map<number, DraftThrottleState>();
+const DRAFT_THROTTLE_MIN_MS = 250;
+const DRAFT_THROTTLE_MAX_MS = 4000;
 
 /**
- * Draft update pacing. The per-chat 250ms fixed spacing is intentionally small:
- * the core messageLoop already debounces stream flushes (debounceIntervalMs,
- * default 350ms), so the two together cap edit rate at ~350ms without stacking.
- * A 429 backoff overrides everything and force-waits until the retry-after
- * window expires (draftBackoffUntil).
+ * Draft update pacing — adaptive version (ported from InlineQueue):
+ *
+ *  • Starts optimistic at DRAFT_THROTTLE_MIN_MS (250ms) for smooth typing.
+ *  • On 429 the per-chat window expands (x2, floored by the server's
+ *    retry-after) up to DRAFT_THROTTLE_MAX_MS, so a rate-limited chat slows
+ *    itself down instead of throwing every edit and killing the stream.
+ *  • On a clean success the window gradually recovers toward the minimum
+ *    (x0.85), mirroring the inline path.
+ *  • Skips the edit entirely when too soon AND the content grew by <15 chars
+ *    (de-dup, avoids meaningless full re-edits of unchanged text).
+ *  • The module-level 429 backoff (draftBackoffUntil) still overrides
+ *    everything and force-waits until the retry-after window expires.
+ *
+ * Returns true when an edit should proceed, false when skipped (no-op).
+ * A `draftThrottleMs: 0` option disables pacing entirely (tests).
  */
-async function throttleDraft(chatId: number, draftThrottleMs: number): Promise<void> {
+async function throttleDraft(chatId: number, contentLen: number, disabled = false): Promise<boolean> {
+  if (disabled) return true;
   const now = Date.now();
+  let st = draftThrottleStates.get(chatId);
+  if (!st) {
+    st = { currentMs: DRAFT_THROTTLE_MIN_MS, lastEditTime: 0, lastSentLen: -1, nextAllowedTime: 0 };
+    draftThrottleStates.set(chatId, st);
+  }
+
+  // Global 429 backoff (retry-after window) overrides everything.
   const backoffUntil = draftBackoffUntil.get(chatId) ?? 0;
   if (now < backoffUntil) {
-    const wait = backoffUntil - now;
-    logger.info(`[429 BACKOFF] Throttling draft update for chatId=${chatId} due to active 429 backoff (${wait}ms left)`);
+    logger.info(`[429 BACKOFF] Throttling draft update for chatId=${chatId} due to active 429 backoff (${backoffUntil - now}ms left)`);
+    await new Promise(r => setTimeout(r, backoffUntil - now));
+  }
+  if (now < st!.nextAllowedTime) {
+    await new Promise(r => setTimeout(r, st!.nextAllowedTime - now));
+  }
+
+  const elapsed = now - st!.lastEditTime;
+  const textDelta = Math.abs(contentLen - st!.lastSentLen);
+
+  // Too soon AND barely changed → skip this edit entirely (no-op).
+  if (elapsed < st!.currentMs && textDelta < 15) {
+    const wait = Math.max(50, st!.currentMs - elapsed);
     await new Promise(r => setTimeout(r, wait));
-  } else {
-    const last = draftThrottleTimestamps.get(chatId) ?? 0;
-    const elapsed = now - last;
-    if (elapsed < draftThrottleMs) {
-      await new Promise(r => setTimeout(r, draftThrottleMs - elapsed));
-    }
+    return false;
+  }
+  // Too soon but meaningful growth → still pace to the window, then edit.
+  if (elapsed < st!.currentMs) {
+    await new Promise(r => setTimeout(r, st!.currentMs - elapsed));
+  }
+  return true;
+}
+
+function markDraftEditSuccess(chatId: number, contentLen: number): void {
+  const st = draftThrottleStates.get(chatId);
+  if (st) {
+    st.lastEditTime = Date.now();
+    st.lastSentLen = contentLen;
+    // Gradually recover the throttle window toward the minimum on clean success.
+    st.currentMs = Math.max(DRAFT_THROTTLE_MIN_MS, Math.floor(st.currentMs * 0.85));
+  }
+}
+
+function markDraft429(chatId: number, retryAfterSec?: number): void {
+  const st = draftThrottleStates.get(chatId);
+  const backoffMs = (retryAfterSec ?? 1) * 1000;
+  if (st) {
+    st.nextAllowedTime = Date.now() + backoffMs;
+    // Adaptively expand the throttle window on 429.
+    st.currentMs = Math.min(DRAFT_THROTTLE_MAX_MS, Math.max(st.currentMs * 2, backoffMs));
   }
   draftThrottleTimestamps.set(chatId, Date.now());
 }
@@ -325,7 +383,7 @@ export function buildChannelReply(
   options?: { draftThrottleMs?: number },
 ): ChannelReply {
   const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
-  const draftThrottleMs = options?.draftThrottleMs ?? DRAFT_THROTTLE_MS;
+  const draftDisabled = options?.draftThrottleMs === 0;
   let localDraftsDisabled = false;
   let localConsecutiveDraftFailures = 0;
 
@@ -541,8 +599,8 @@ export function buildChannelReply(
 
       const cacheMarkdown = getCacheMarkdown(originalText);
 
-      // Throttle to avoid 429 on rapid stream updates
-      await throttleDraft(chatId, draftThrottleMs);
+      // Pace to avoid 429 on rapid stream updates (adaptive throttle).
+      await throttleDraft(chatId, cacheMarkdown.length, draftDisabled);
 
       // Visible streaming: send a REAL persisted message via sendRichMessage so the
       // user's client renders the bubble, then editMessageText updates it in place.
@@ -577,9 +635,6 @@ export function buildChannelReply(
 
       const cacheMarkdown = getCacheMarkdown(originalText);
 
-      // Throttle to avoid 429 on rapid stream updates
-      await throttleDraft(chatId, draftThrottleMs);
-
       // The draft is now a REAL persisted message (created by sendRichDraft via
       // sendRichMessage), so we update it in place with editMessageText for a
       // visible typewriter effect.
@@ -589,19 +644,29 @@ export function buildChannelReply(
       // stutter (see sendRichDraft). Blocks are rendered once at finalize via
       // editRich / editRichBlocks.
       if (isStreaming) {
+        const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
+        // Adaptive pacing: skip when too soon AND content barely changed;
+        // otherwise wait out the current window then edit.
+        const shouldEdit = await throttleDraft(chatId, safeMarkdown.length, draftDisabled);
+        if (!shouldEdit) {
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        }
         try {
-          const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
           logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft streaming - Markdown)`);
           await ctx.api.editMessageText(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown));
           logger.info(`[TRACE-EVIDENCE] editMessageText (edit streaming Markdown) success for messageId=${draftId}.`);
+          markDraftEditSuccess(chatId, safeMarkdown.length);
           messageCache.set(draftId, cacheMarkdown);
           return;
         } catch (err: any) {
           if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+            markDraftEditSuccess(chatId, safeMarkdown.length);
             messageCache.set(draftId, cacheMarkdown);
             return;
           }
           if (is429Error(err)) {
+            markDraft429(chatId, get429RetryAfter(err));
             record429Backoff(chatId, get429RetryAfter(err));
           }
           logger.info(`[TRACE-EVIDENCE] editRichDraft streaming Markdown failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
@@ -688,8 +753,8 @@ export function buildChannelReply(
         activeDraftIds.add(targetDraftId);
         draftIds.set(chatId, targetDraftId);
 
-        // Throttle draft calls
-        await throttleDraft(chatId, draftThrottleMs);
+        // Pace draft calls to avoid 429
+        await throttleDraft(chatId, blocks.length, draftDisabled);
 
         if (!validateBlocksPayload(blocks)) {
           logger.warn(`[BLOCK VALIDATION] sendRichDraftBlocks payload failed validation`);
