@@ -403,7 +403,7 @@ export function fuzzyMatchModels(query: string, models: string[], limit: number 
 }
 
 const TASK_INSTRUCTION: Record<InlineTask, string> = {
-  translate: 'Translate the following content between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting. Reply in the same language as the user\'s message:\n\n',
+  translate: 'Translate the following content between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting:\n\n',
   summarize: 'Summarize the following content concisely and list the key points. Reply in the same language as the user\'s message:\n\n',
   image: IMAGE_TASK_INSTRUCTION,
   compare: '',

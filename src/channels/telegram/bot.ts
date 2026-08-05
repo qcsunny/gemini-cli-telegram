@@ -70,7 +70,7 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
 // ── Media caption task instruction injection (#3) ──
 
 const MEDIA_CAPTION_TASK_MAP: Record<string, string> = {
-  '/translate': 'Translate the content in the image/document below between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting. Reply in the same language as the user\'s message:\n\n',
+  '/translate': 'Translate the content in the image/document below between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting:\n\n',
   '/summarize': 'Summarize the content in the image/document below concisely and list the key points. Reply in the same language as the user\'s message:\n\n',
 };
 
