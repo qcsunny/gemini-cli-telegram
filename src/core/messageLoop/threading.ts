@@ -31,14 +31,14 @@ export async function withTimeout<T>(
 
   // Hard total cap — set once, never reset.
   hardTimer = setTimeout(() => {
-    fire(`模型 \`${modelLabel}\` 单次运行超过 ${HARD_MS / 60000} 分钟被强制终止（疑似模型陷入死循环或上游挂起）。请稍后重试，或拆分问题。`);
+    fire(`Model \`${modelLabel}\` was force-terminated after running for more than ${HARD_MS / 60000} minutes in a single run (possibly stuck in a loop or the upstream hung). Please try again later or split the question.`);
   }, HARD_MS);
 
   // Inactivity timer — reset on activity.
   const armInactivity = () => {
     if (inactTimer) clearTimeout(inactTimer);
     inactTimer = setTimeout(() => {
-      fire(`模型 \`${modelLabel}\` 在 ${INACT_MS / 60000} 分钟内无输出（疑似上游服务挂起）。请稍后重试，或切换到其它模型。`);
+      fire(`Model \`${modelLabel}\` produced no output within ${INACT_MS / 60000} minutes (the upstream service may be hung). Please try again later or switch to another model.`);
     }, INACT_MS);
   };
   armInactivity();

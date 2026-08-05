@@ -147,7 +147,7 @@ describe('privateImageHandler', () => {
     expect(args.markdown.match(/tg:\/\/photo\?id=/g)?.length).toBe(3);
     expect(args.media).toHaveLength(3);
     expect(args.media.map((m) => m.id)).toEqual(['c0_0', 'c0_1', 'c0_2']);
-    expect(args.markdown).toContain('共 3 张');
+    expect(args.markdown).toContain('3 image(s) in total');
   });
 
   it('should split more than 10 images into multiple collages in one message', async () => {
@@ -179,7 +179,7 @@ describe('privateImageHandler', () => {
     expect(args.media[0].id).toBe('c0_0');
     expect(args.media[10].id).toBe('c1_0');
     expect(args.media[20].id).toBe('c2_0');
-    expect(args.markdown).toContain('共 25 张');
+    expect(args.markdown).toContain('25 image(s) in total');
   });
 
   it('should report when no image artifact was produced', async () => {
@@ -201,7 +201,7 @@ describe('privateImageHandler', () => {
     const handled = await handlePrivateImageRequest(ctx, mockSessionManager as SessionManager, defaultOptions);
     expect(handled).toBe(true);
     expect(ctx.reply).toHaveBeenCalledWith(
-      expect.stringContaining('未发现图片文件'),
+      expect.stringContaining('no image files were found'),
       expect.objectContaining({ parse_mode: 'HTML' }),
     );
     expect(ctx.api.sendRichMessage).not.toHaveBeenCalled();

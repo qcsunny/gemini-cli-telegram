@@ -11,6 +11,7 @@ import { InputFile } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { logger } from '../../../utils/logger.js';
+import { getDefaultModel } from '../../../config/userConfig.js';
 import {
   parseInlineModelAndPrompt,
   runModelWithFallbackChain,
@@ -45,7 +46,7 @@ export async function handlePrivateImageRequest(
 
   const rawPrompt = (match[1] ?? '').trim();
   if (!rawPrompt) {
-    await ctx.reply('🖼️ 请提供图片提示词：<code>/img 一只赛博朋克风格的猫</code>', { parse_mode: 'HTML' }).catch(() => {});
+    await ctx.reply('🖼️ Please provide an image prompt: <code>/img a cyberpunk-style cat</code>', { parse_mode: 'HTML' }).catch(() => {});
     return true;
   }
 
@@ -54,7 +55,8 @@ export async function handlePrivateImageRequest(
   const defaultModel = session?.model
     || session?.config?.getModel?.()
     || defaultOptions.model
-    || 'Gemini 3.5 Flash';
+    || getDefaultModel()
+    || '';
 
   const parsed = parseInlineModelAndPrompt(rawPrompt, defaultModel, availableProjects);
   const targetProjectPath = parsed.projectUsed?.path ?? session?.currentProject?.path ?? defaultOptions.cwd;
@@ -74,14 +76,14 @@ export async function handlePrivateImageRequest(
     );
 
     if (!result?.conversationId) {
-      await ctx.reply('🎨 <b>图像生成失败</b>\n模型未返回会话信息，请重试。', { parse_mode: 'HTML' }).catch(() => {});
+      await ctx.reply('🎨 <b>Image generation failed</b>\nThe model returned no session info, please retry.', { parse_mode: 'HTML' }).catch(() => {});
       return true;
     }
 
     const images = await findNewImageArtifacts(result.conversationId, Date.now() - (result.durationMs || 60_000));
     if (images.length === 0) {
       const output = (result.output || '').trim();
-      await ctx.reply(`🎨 图像生成完成，但未发现图片文件。\n\n${output || '模型未生成图片文件。'}`, { parse_mode: 'HTML' }).catch(() => {});
+      await ctx.reply(`🎨 Image generation completed, but no image files were found.\n\n${output || 'The model did not generate image files.'}`, { parse_mode: 'HTML' }).catch(() => {});
       return true;
     }
 
@@ -92,10 +94,10 @@ export async function handlePrivateImageRequest(
       chunks.push(images.slice(i, i + MAX_COLLAGE_IMAGES));
     }
     const displayPrompt = parsed.prompt.length > 300 ? parsed.prompt.slice(0, 300) + '...' : parsed.prompt;
-    const caption = `**🎨 图片生成完成**\n\n**💬 提示词：** ${displayPrompt}\n\n_模型: ${modelUsed} · 共 ${images.length} 张_`;
+    const caption = `**🎨 Image generation complete**\n\n**💬 Prompt:** ${displayPrompt}\n\n_Model: ${modelUsed} · ${images.length} image(s) in total_`;
     // Each collage references its photos via tg://photo?id=, with matching media.
     const collageMarkdown = chunks
-      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![生成的图片](tg://photo?id=c${ci}_${i})`).join('\n')}\n</tg-collage>`)
+      .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![generated image](tg://photo?id=c${ci}_${i})`).join('\n')}\n</tg-collage>`)
       .join('\n\n');
     const media = chunks.flatMap((chunk, ci) =>
       chunk.map((imgPath, i) => ({
@@ -112,7 +114,7 @@ export async function handlePrivateImageRequest(
     return true;
   } catch (e) {
     logger.error(`[PrivateImage] Failed to generate image for chatId=${chatId}: ${e}`);
-    await ctx.reply('🎨 <b>图像生成失败</b>\n请稍后重试。', { parse_mode: 'HTML' }).catch(() => {});
+    await ctx.reply('🎨 <b>Image generation failed</b>\nPlease try again later.', { parse_mode: 'HTML' }).catch(() => {});
     return true;
   }
 }

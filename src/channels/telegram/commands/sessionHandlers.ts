@@ -26,7 +26,7 @@ export function registerSessionHandlers(
       const resultId = match.replace('full_', '');
       const fullData = fullInlineOutputs.get(resultId);
       if (fullData) {
-        const markdown = `<b>💬 问题：</b> ${escapeHtml(fullData.prompt)}\n\n<b>🤖 回答 (${escapeHtml(fullData.model)})：</b>\n\n${escapeHtml(fullData.output)}`;
+        const markdown = `<b>💬 Question:</b> ${escapeHtml(fullData.prompt)}\n\n<b>🤖 Answer (${escapeHtml(fullData.model)}):</b>\n\n${escapeHtml(fullData.output)}`;
         await ctx.reply(markdown, { parse_mode: 'HTML' });
         return;
       }

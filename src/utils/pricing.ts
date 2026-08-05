@@ -230,7 +230,7 @@ export function formatFooterMarker(
     const outputTokens = estimateTokens(outputText);
     const { totalCost, currency } = calculateCost(modelName, inputTokens, outputTokens);
     const sym = currency === 'CNY' ? '¥' : '$';
-    return `[footer: ${modelName} (Estimated / 预估) | ${inputTokens} | ${outputTokens} | ${sym}${totalCost.toFixed(6)}]`;
+    return `[footer: ${modelName} (Estimated) | ${inputTokens} | ${outputTokens} | ${sym}${totalCost.toFixed(6)}]`;
   }
 }
 

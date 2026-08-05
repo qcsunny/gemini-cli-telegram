@@ -701,9 +701,9 @@ export function formatSummaryWithMetadata(time?: string, tokens?: string, isStre
   }
   if (!time && !tokens) {
     if (isStreaming) {
-      parts.push('正在思考...');
+      parts.push('Thinking...');
     } else {
-      parts.push('(点击展开)');
+      parts.push('(click to expand)');
     }
   }
   return parts.join(' · ');
@@ -1077,7 +1077,7 @@ export function normalizeMarkdownStructure(markdown: string): string {
   // Convert model-emitted collapsible details prompts like `点击展开...` / `▶ ...` / `▼ ...`
   // followed by a blockquote `> ...` into `> [details] Summary\n> Content` so they render
   // as native Telegram <details> elements instead of being rendered as plain text + quote.
-  text = text.replace(/^([ \t]*(?:点击展开|▶|▼|\[details\])[^\n]*)\n+[ \t]*>\s*([^\n]+)/gm, (match, summaryLine, firstQuoteLine) => {
+  text = text.replace(/^([ \t]*(?:点击展开|Click to expand|▶|▼|\[details\])[^\n]*)\n+[ \t]*>\s*([^\n]+)/gm, (match, summaryLine, firstQuoteLine) => {
     const cleanSummary = summaryLine.trim();
     return `> [details] ${cleanSummary}\n> ${firstQuoteLine}`;
   });

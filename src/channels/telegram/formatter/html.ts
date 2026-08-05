@@ -113,7 +113,7 @@ export function splitDetails(detailsHtml: string, maxLength: number): string[] {
   const innerContent = match[2];
   
   const summaryMatch = innerContent.match(/<summary>([\s\S]*?)<\/summary>/i);
-  const summaryText = summaryMatch ? summaryMatch[1] : '点击展开';
+  const summaryText = summaryMatch ? summaryMatch[1] : 'Click to expand';
   
   const bodyStartIdx = summaryMatch ? innerContent.indexOf(summaryMatch[0]) + summaryMatch[0].length : 0;
   const bodyContent = innerContent.substring(bodyStartIdx);
@@ -129,7 +129,7 @@ export function splitDetails(detailsHtml: string, maxLength: number): string[] {
   
   const bodyChunks = chunkAnswerBody(bodyContent, subMaxLength);
   return bodyChunks.map((chunk, idx) => {
-    const suffix = idx > 0 ? ' (续)' : '';
+    const suffix = idx > 0 ? ' (cont.)' : '';
     const newSummary = `<summary>${summaryText}${suffix}</summary>`;
     return `<details${attrs}>${newSummary}${chunk}${detailsEnd}`;
   });
@@ -458,7 +458,7 @@ export const telegramFormatter: MessageFormatter = {
     const head = text.substring(0, headLen);
     const tail = text.substring(text.length - tailLen);
     const omitted = text.length - headLen - tailLen;
-    return `${head}\n\n︙ …（中间省略约 ${omitted} 字，生成中）… ︙\n\n${tail}`;
+    return `${head}\n\n︙ … (about ${omitted} chars omitted while generating) … ︙\n\n${tail}`;
   },
 
   findSafeCutPoint(markdown: string, maxLen: number): number {
@@ -500,7 +500,7 @@ function markdownToHtmlSnippet(markdown: string): string {
     if (/\[details\]/i.test(innerContent)) {
       const detailsMatch = innerContent.match(/\[details\]\s*([^\n<]*)(?:<br\s*\/?>|\n)?([\s\S]*)/i);
       if (detailsMatch) {
-        const summary = detailsMatch[1].trim() || '点击展开';
+        const summary = detailsMatch[1].trim() || 'Click to expand';
         const content = detailsMatch[2].replace(/<\/?blockquote>/gi, '').trim();
         return `<details><summary>${summary}</summary>${content}</details>`;
       }
@@ -561,16 +561,16 @@ function renderThoughtBlockToHtml(
 
   let finalContent = trimHtmlBr(markdownToHtmlSnippet(content));
   if (isStreaming) {
-    const maxThoughtLength = Math.max(200, 3900 - nonThoughtHtmlLength);
+    const maxThoughtLength = Math.max(200, 3850 - nonThoughtHtmlLength);
     const { sliced, wasTruncated } = safeHtmlSlice(finalContent, maxThoughtLength);
     finalContent = sliced;
     if (wasTruncated) {
-      finalContent += '\n\n……（已省略后续内容，超长思考摘要已被截断）';
+      finalContent += '\n\n… (truncated: overlong thinking summary)';
     }
   }
 
   const innerHtml = finalContent;
-  let summary = '🧠 思考过程 (Thinking Process)';
+  let summary = '🧠 Thinking Process';
   let infoBlock = '';
 
   if (time !== undefined || tokens !== undefined) {
@@ -586,7 +586,7 @@ function renderThoughtBlockToHtml(
       infoBlock = `<i>${infoLines.join('\n')}</i>\n\n`;
     }
   } else {
-    summary = isOpen ? '🧠 正在思考... (Thinking...)' : '🧠 思考过程 (Thinking Process)';
+    summary = isOpen ? '🧠 Thinking...' : '🧠 Thinking Process';
   }
 
   return `${detailsTag}<summary>${summary}</summary>${infoBlock}${innerHtml}</details>`;

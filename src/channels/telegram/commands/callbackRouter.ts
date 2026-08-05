@@ -131,9 +131,9 @@ export function registerCallbackRouter(
 
     if (data.startsWith('/model_tier ')) {
       const tier = parseInt(data.replace('/model_tier ', ''), 10);
-      const tierNames = ['🚀 旗舰推理', '⚡ 高级推理', '💡 通用能力', '🍃 轻量与免费'];
-      const tierName = tierNames[tier] || '模型分类';
-      ctx.answerCallbackQuery(`✨ 切换分类: ${tierName}`).catch(e => logger.error(`Failed callback: ${e}`));
+      const tierNames = ['🚀 Flagship Reasoning', '⚡ Advanced Reasoning', '💡 General Capability', '🍃 Light & Free'];
+      const tierName = tierNames[tier] || 'Model category';
+      ctx.answerCallbackQuery(`✨ Switched category: ${tierName}`).catch(e => logger.error(`Failed callback: ${e}`));
 
       const session = sessionManager.getSession(chatId);
       const currentModel = session?.config?.getModel() || 'unknown';
