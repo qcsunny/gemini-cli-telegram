@@ -45,6 +45,13 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
  * typewriter render never shows raw tags. Body content renders as markdown;
  * while only thinking, show a short "thinking..." placeholder so the bubble
  * is never empty (mirrors the inline path, which streams raw accumulated text).
+ *
+ * Collapsible blocks (<details> / `> [details]` blockquotes) are collapsed to
+ * their plain-text summary during streaming: the client re-renders the whole
+ * message on every edit, which resets the <details> open state each time, so a
+ * folded block appears "stuck" and can never be opened. Only the summary line
+ * (plus a short hint) is streamed; the full folded content is restored at
+ * finalize (editRich → buildFinalBlocks).
  */
 function getStreamingMarkdown(text: string | StructuredMessage): string {
   const strip = (s: string) => s
@@ -54,11 +61,22 @@ function getStreamingMarkdown(text: string | StructuredMessage): string {
     .replace(/<\/?thinking[^>]*>/gi, '')
     .replace(/<\/?think[^>]*>/gi, '')
     .trim();
+
+  // Replace collapsible blocks with their plain summary during streaming so the
+  // typewriter never shows an un-openable <details> (every edit resets state).
+  const collapseDetails = (s: string) => s
+    .replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '<b>[Details]</b>')
+    .replace(/(^|\n)(?:[ \t]*> *)+\[details\]\s*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
+      const sTrim = (summary || '').trim();
+      if (!sTrim) return `${lead}${m}`;
+      return `${lead}${sTrim} <i>[content available after response]</i>`;
+    });
+
   if (typeof text === 'string') {
-    const content = strip(text);
+    const content = collapseDetails(strip(text));
     return content || '🧠 Thinking...';
   }
-  const content = strip(text.content || '');
+  const content = collapseDetails(strip(text.content || ''));
   const thought = strip(text.thought || '');
   if (content) return content;
   if (thought) return '🧠 Thinking...';
