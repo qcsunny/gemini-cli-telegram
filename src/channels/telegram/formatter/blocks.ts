@@ -429,6 +429,17 @@ function tryHtmlBlockToRichBlock(
     }
   }
 
+  // `<tg-collage>...</tg-collage>` → native collage block containing the media
+  // blocks parsed from the inner `<img>/<video>/<audio>` tags (same structure
+  // as slideshow; the only difference is the block `type` value).
+  const collageMatch = content.match(/^<tg-collage>([\s\S]*?)<\/tg-collage>\s*$/i);
+  if (collageMatch) {
+    const mediaBlocks = parseMediaBlocksFromHtml(collageMatch[1]);
+    if (mediaBlocks.length > 0) {
+      return { block: { type: 'collage', blocks: mediaBlocks } as RichBlock, advance: 1 };
+    }
+  }
+
   // `<tg-map ...>...</tg-map>` → native map block.
   const mapMatch = content.match(/^<tg-map\s+([^>]*)>\s*(?:<\/tg-map>)?\s*$/i);
   if (mapMatch) {
@@ -463,8 +474,9 @@ function mediaBlockFromUrl(tagName: 'img' | 'video' | 'audio', src: string): Ric
 }
 
 /**
- * Parse media blocks out of the inner HTML of a `<tg-slideshow>` container.
- * Supports `<img>`, `<video>` and `<audio>` tags with `src="https://..."`.
+ * Parse media blocks out of the inner HTML of a `<tg-slideshow>`/`<tg-collage>`
+ * container. Supports `<img>`, `<video>` and `<audio>` tags with `src="https://..."`
+ * plus markdown image syntax `![alt](https://...)`.
  */
 function parseMediaBlocksFromHtml(html: string): RichBlock[] {
   const blocks: RichBlock[] = [];
@@ -476,6 +488,13 @@ function parseMediaBlocksFromHtml(html: string): RichBlock[] {
     const src = attrs.match(/src="([^"]*)"/)?.[1] ?? '';
     if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
       blocks.push(mediaBlockFromUrl(tagName, src));
+    }
+  }
+  const mdImgRe = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
+  while ((m = mdImgRe.exec(html)) !== null) {
+    const src = m[1];
+    if (!blocks.some(b => b.type === 'photo' && (b as any).photo?.media === src)) {
+      blocks.push(mediaBlockFromUrl('img', src));
     }
   }
   return blocks;
@@ -912,7 +931,7 @@ function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
     }
     return items.some(item => item.blocks.length > 0);
   }
-  if (type === 'slideshow') {
+  if (type === 'slideshow' || type === 'collage') {
     const innerBlocks = (b['blocks'] as RichBlock[]) ?? [];
     const filtered = innerBlocks.filter(child => isMeaningfulBlock(child, depth + 1));
     if (filtered.length === 0) return false;
@@ -951,10 +970,10 @@ function flattenDepth(blk: RichBlock, depth: number): RichBlock {
       return [flattenDepth(child, depth + 1)];
     });
   }
-  if (blk.type === 'slideshow') {
+  if (blk.type === 'slideshow' || blk.type === 'collage') {
     const inner = (blk as any).blocks as RichBlock[];
     (blk as any).blocks = inner.flatMap(child => {
-      if (child.type === 'slideshow') return (child as any).blocks as RichBlock[];
+      if (child.type === 'slideshow' || child.type === 'collage') return (child as any).blocks as RichBlock[];
       return [flattenDepth(child, depth + 1)];
     });
   }
@@ -1236,6 +1255,7 @@ function getBlockLength(block: RichBlock): number {
     case 'blockquote':
       return (b.blocks || []).reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
     case 'slideshow':
+    case 'collage':
       return (b.blocks || []).reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
     case 'details':
       return richTextLength(b.summary) + (b.blocks || [])
