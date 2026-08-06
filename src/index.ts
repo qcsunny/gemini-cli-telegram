@@ -48,6 +48,17 @@ export async function startTelegramDaemon(
     );
   }
 
+  // Global safety net: log unhandled promise rejections / exceptions instead
+  // of letting them crash the daemon. Real errors are still visible in error.log.
+  process.on('unhandledRejection', (reason: unknown) => {
+    logger.error(`[unhandledRejection] ${reason instanceof Error ? reason.stack || reason.message : String(reason)}`);
+  });
+  process.on('uncaughtException', (err: Error) => {
+    logger.error(`[uncaughtException] ${err.stack || err.message}`);
+    // Do NOT re-throw — keep the daemon alive. Severe internal errors are
+    // still surfaced in error.log for human review.
+  });
+
   const bot = new TelegramBot(options.token, options);
 
   // Start the optional health HTTP server if configured

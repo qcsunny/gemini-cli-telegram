@@ -165,7 +165,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
         finalOutput = contentBuf;
       }
       resolve({ conversationId: convId, output: finalOutput, exitCode: 1, stderr: 'Aborted' });
-    });
+    }, { once: true });
 
     req.write(body);
     req.end();

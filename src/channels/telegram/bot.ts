@@ -584,6 +584,23 @@ export class TelegramBot {
     this.runStartupChecks();
     this.startHealthCheck();
 
+    // Clean up temp media files left over from previous crashes.
+    // Only delete files older than 1 hour to avoid removing ones in active use.
+    const tempDir = path.join(os.tmpdir(), 'gemini-cli-telegram-media');
+    fs.readdir(tempDir).then(async (files) => {
+      const now = Date.now();
+      for (const file of files) {
+        try {
+          const filePath = path.join(tempDir, file);
+          const stat = await fs.stat(filePath);
+          if (now - stat.mtimeMs > 3_600_000) {
+            await fs.unlink(filePath).catch(() => {});
+          }
+        } catch { /* ignore */ }
+      }
+      logger.info(`[startup] Cleaned up stale temp media files in ${tempDir}`);
+    }).catch(() => { /* tempDir may not exist yet — ignore */ });
+
     // Use @grammyjs/runner for concurrent update processing.
     // This allows /cancel to run even while a message handler is busy.
     this.runner = run(this.bot, {
