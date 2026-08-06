@@ -53,7 +53,7 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
  * (plus a short hint) is streamed; the full folded content is restored at
  * finalize (editRich → buildFinalBlocks).
  */
-function getStreamingMarkdown(text: string | StructuredMessage): string {
+export function getStreamingMarkdown(text: string | StructuredMessage): string {
   const strip = (s: string) => s
     .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
     .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
@@ -62,15 +62,52 @@ function getStreamingMarkdown(text: string | StructuredMessage): string {
     .replace(/<\/?think[^>]*>/gi, '')
     .trim();
 
-  // Replace collapsible blocks with their plain summary during streaming so the
-  // typewriter never shows an un-openable <details> (every edit resets state).
-  const collapseDetails = (s: string) => s
-    .replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '<b>[Details]</b>')
-    .replace(/(^|\n)(?:[ \t]*> *)+\[details\]\s*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
+  // During streaming the <details> open/close tags are stripped and the folded
+  // block is FLATTENED into visible content (summary bold + body markdown).
+  // A real <details> can't be opened mid-stream because every editMessageText
+  // re-renders and resets its open state, so we show the body inline instead of
+  // a placeholder. At finalize (buildFinalBlocks) the raw text is re-parsed and
+  // the blocks are restored as native collapsible details.
+  // NOTE: streaming uses rich MARKDOWN mode (`sendRichMessage({ markdown })`),
+  // which only understands `**bold**` / `*italic*` — not `<b>`/`<i>` HTML tags.
+  const collapseDetails = (s: string) => {
+    let t = s;
+    // `<details>` may be unclosed mid-stream: strip the opening tag and turn
+    // `<summary>...</summary>` into a bold heading. The following body lines
+    // (if any) are kept verbatim so folded content is visible while streaming.
+    t = t.replace(/<details[^>]*>\s*<summary>([\s\S]*?)<\/summary>/gi, (m, summaryHtml) => {
+      const summary = summaryHtml.replace(/<[^>]*>/g, '').trim() || 'Details';
+      return `**${summary}**\n`;
+    });
+    // A bare unclosed `<details>` (summary may be emitted later): drop the tag,
+    // keep whatever follows.
+    t = t.replace(/<details[^>]*>/gi, '\n');
+    // Drop every closing tag — body content before it is preserved.
+    t = t.replace(/<\/details>/gi, '');
+    // A `> [details] summary` blockquote → flatten to bold summary + body lines.
+    t = t.replace(/(^|\n)(?:[ \t]*> *)+\[details\]\s*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
       const sTrim = (summary || '').trim();
       if (!sTrim) return `${lead}${m}`;
-      return `${lead}${sTrim} <i>[content available after response]</i>`;
+      // Keep the quoted body (indented lines) but drop the `> [details]` marker
+      // and unquote the lines so they render as plain body text.
+      const body = m
+        .replace(/(^|\n)[ \t]*> *\[details\]\s*[^\n]*/, '')
+        .replace(/(^|\n)[ \t]*> */g, '$1')
+        .trim();
+      return `${lead}**${sTrim}**${body ? `\n${body}` : ''}`;
     });
+    // Model-native collapsible prompts: `> 点击展开...` / `> ▶ ...` / a bare
+    // `[details]` line followed by a blockquote line. Flatten to bold summary.
+    t = t.replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
+      const sTrim = (summary || '').trim();
+      const body = m
+        .replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*[^\n]*/, '')
+        .replace(/(^|\n)[ \t]*> */g, '$1')
+        .trim();
+      return `${lead}${sTrim ? `**${sTrim}**` : ''}${body ? `\n${body}` : ''}`;
+    });
+    return t;
+  };
 
   if (typeof text === 'string') {
     const content = collapseDetails(strip(text));

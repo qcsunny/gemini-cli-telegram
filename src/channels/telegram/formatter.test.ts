@@ -260,7 +260,7 @@ Thanks for reading! 🚀
   it('should preserve raw Telegram Bot API 10.1 details HTML tags', () => {
     const rawDetailsInput = '<details open><summary>官方 API 折叠框</summary>展开内容</details>';
     const html = markdownToHtml(rawDetailsInput);
-    expect(html).toContain('<details open><summary>官方 API 折叠框</summary>');
+    expect(html).toContain('<details><summary>官方 API 折叠框</summary>');
     expect(html).toContain('展开内容</details>');
   });
 
@@ -368,6 +368,27 @@ Thanks for reading! 🚀
     const detailsBlock = blocks.find(b => b.type === 'details') as any;
     expect(detailsBlock).toBeDefined();
     expect(detailsBlock.summary).toBe('仅标题折叠');
+  });
+
+  it('should convert raw <details> HTML emitted by the model into a details block in blocks path', () => {
+    const input = '# 标题\n\n<details>\n<summary><b> Telegram Bot API 10.2 富文本渲染测试规范与背景说明</b></summary>\n\n# 正文标题\n\n普通段落内容。\n\n- 列表项一\n- 列表项二\n\n</details>\n\n结尾正文';
+    const blocks = markdownToRichBlocks(input);
+    const detailsBlock = blocks.find(b => b.type === 'details') as any;
+    expect(detailsBlock).toBeDefined();
+    // <b> wrapper is stripped; summary keeps the clean text.
+    expect(detailsBlock.summary).toBe('Telegram Bot API 10.2 富文本渲染测试规范与背景说明');
+    // Folded body keeps nested block structure (heading, paragraph, list).
+    expect(detailsBlock.blocks[0].type).toBe('heading');
+    expect(detailsBlock.blocks[1].type).toBe('paragraph');
+    expect(detailsBlock.blocks[2].type).toBe('list');
+  });
+
+  it('should keep <details> HTML as a native details element in HTML path', () => {
+    const input = '# 开头\n\n<details>\n<summary>标题</summary>\n\n正文内容\n\n</details>\n\n结尾';
+    const html = markdownToHtml(input);
+    expect(html).toContain('<details><summary>标题</summary>');
+    expect(html).toContain('正文内容');
+    expect(html).toContain('</details>');
   });
 
   it('should preserve bold tags in buildFooterBlocksFromHtml for thinking details', () => {
