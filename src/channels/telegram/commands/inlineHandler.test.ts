@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, displayModelName } from './inlineHandler.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
@@ -44,6 +44,22 @@ vi.mock('../formatter/blocks.js', () => ({
   ])),
   buildFooterBlocksFromHtml: vi.fn().mockReturnValue([]),
 }));
+
+describe('displayModelName', () => {
+  it('should strip version number from Claude Opus', () => {
+    expect(displayModelName('Claude Opus 4.6 (Thinking)')).toBe('Claude Opus (Thinking)');
+  });
+
+  it('should strip version number from Claude Sonnet', () => {
+    expect(displayModelName('Claude Sonnet 4.6 (Thinking)')).toBe('Claude Sonnet (Thinking)');
+  });
+
+  it('should leave other model names unchanged', () => {
+    expect(displayModelName('Gemini 3.6 Flash (High)')).toBe('Gemini 3.6 Flash (High)');
+    expect(displayModelName('Web2API: Gemini 3.1 Pro Enhanced')).toBe('Web2API: Gemini 3.1 Pro Enhanced');
+    expect(displayModelName('DeepSeek: Pro Thinking')).toBe('DeepSeek: Pro Thinking');
+  });
+});
 
 describe('parseInlineModelAndPrompt', () => {
   it('should parse any @keyword as family search', () => {
