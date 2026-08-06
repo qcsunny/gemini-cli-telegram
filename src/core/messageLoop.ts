@@ -260,7 +260,7 @@ export async function processMessage(
 
           logger.info(`[messageLoop] Attempt ${attempts}/${maxAttempts}: Running prompt with model="${modelToUse}" (model retry ${failsForModel + 1}/${retriesPerModel})`);
           turnStartTime = Date.now();
-          const { result, resetInactivity } = await withTimeout(runAgyPrint({
+          const result = await withTimeout((resetInactivity) => runAgyPrint({
             prompt: finalPrompt,
             cwd,
             conversationId: session.conversationId,
@@ -268,13 +268,13 @@ export async function processMessage(
             proxy: session.proxy,
             signal,
             extraDirs: mediaExtraDirs,
-            onActivity: () => resetInactivity?.(),
+            onActivity: () => resetInactivity(),
             onSpawn: (pid) => { session.childPid = pid; },
             onEvent: (event) => {
               // Any streamed event counts as progress: reset both the model-run
               // inactivity timer and the bot's stuck-session watchdog (_busySince)
               // so a slow-but-active long reply is never killed mid-stream.
-              resetInactivity?.();
+              resetInactivity();
               session._busySince = Date.now();
               if (event.type === 'thought') {
                 thoughtEventCount++;
@@ -315,7 +315,6 @@ export async function processMessage(
               });
             }
           }), modelToUse || session.model || 'unknown',
-          /* onActivity */ undefined,
           /* onTimeout */ () => {
             // Abort the session signal so the child process (agy/opencode) is killed
             // immediately and cannot produce late events that would pollute the next attempt.
