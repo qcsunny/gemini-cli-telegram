@@ -179,6 +179,7 @@ describe('Utils Test Suite', () => {
     beforeEach(async () => {
       vi.resetModules();
       vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('LOG_LEVEL', 'info');
       // Point the logger at a temp dir so tests never unlink the live
       // daemon.log/error.log the running service holds open (which orphans
       // its writes to a deleted inode).
