@@ -6,15 +6,16 @@
       "priority": 0,
       "models": [
         "Claude Opus 4.6 (Thinking)",
-        "Claude Sonnet 4.6 (Thinking)"
+        "Gemini 3.1 Pro (High)"
       ]
     },
     {
       "name": "高级推理",
       "priority": 1,
       "models": [
+        "Claude Sonnet 4.6 (Thinking)",
         "Web2API: Gemini 3.1 Pro Enhanced",
-        "Gemini 3.1 Pro (High)",
+        "DeepSeek: Flash Thinking Search",
         "Web2API: Gemini 3.1 Pro",
         "DeepSeek: Pro Thinking",
         "Gemini 3.1 Pro (Low)",
@@ -27,7 +28,6 @@
       "models": [
         "Gemini 3.6 Flash (High)",
         "Web2API: Gemini 3.6 Flash Thinking",
-        "DeepSeek: Flash Thinking Search",
         "DeepSeek: Pro",
         "Gemini 3.6 Flash (Medium)",
         "DeepSeek: Flash Thinking",
