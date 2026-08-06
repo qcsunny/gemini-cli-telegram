@@ -11,6 +11,9 @@ import { extractThoughtAndContent } from '../../../agy/agyCli.js';
 import { loadUserConfig, getNotebookPath } from '../../../config/userConfig.js';
 import { ICONS, buildMainKeyboard, escapeHtml } from '../ui.js';
 import { htmlToMarkdown, extractTitleFromMarkdown } from './helpers.js';
+import { getDb } from '../../../db/index.js';
+import { modelOutputs } from '../../../db/schema.js';
+import { eq, and, desc } from 'drizzle-orm';
 
 export function registerContentHandlers(
   bot: Bot,
@@ -29,13 +32,43 @@ export function registerContentHandlers(
     try {
       if (replyToMessage) {
         // Option A: Save specific replied message
-        const replyContext: ReplyContext | null = messageCache.getReplyContext(replyToMessage.message_id);
+        let replyContext: ReplyContext | null = messageCache.getReplyContext(replyToMessage.message_id);
+        
+        // If cache missed (e.g. bot restarted), try loading from database
+        if (!replyContext) {
+          try {
+            const db = getDb();
+            const record = await db.select()
+              .from(modelOutputs)
+              .where(
+                and(
+                  eq(modelOutputs.chatId, String(chatId)),
+                  eq(modelOutputs.messageId, replyToMessage.message_id)
+                )
+              )
+              .limit(1)
+              .then(rows => rows[0]);
+            
+            if (record) {
+              replyContext = {
+                title: record.title || undefined,
+                answerMarkdown: record.answerMarkdown,
+                thinkingMarkdown: record.thinkingMarkdown || '',
+              };
+              // Backfill the in-memory cache so subsequent reads are instant
+              messageCache.set(replyToMessage.message_id, record.answerMarkdown, replyContext);
+            }
+          } catch (dbErr) {
+            logger.warn(`[saveCommand] Failed to retrieve from model_outputs DB: ${dbErr}`);
+          }
+        }
+
         if (replyContext) {
           answerMarkdown = replyContext.answerMarkdown;
           thinkingMarkdown = replyContext.thinkingMarkdown;
           title = replyContext.title || extractTitleFromMarkdown(answerMarkdown);
         } else {
-          let textToSave = messageCache.get(replyToMessage.message_id) || replyToMessage.text || '';
+          let textToSave = messageCache.get(replyToMessage.message_id) || replyToMessage.text || replyToMessage.caption || '';
           if (textToSave.startsWith('___RAW_HTML___')) {
             textToSave = textToSave.substring('___RAW_HTML___'.length);
           }
@@ -49,7 +82,30 @@ export function registerContentHandlers(
         }
       } else {
         // Option B: Auto-save latest AI response in session
-        const lastContext = messageCache.getLastReplyContext();
+        let lastContext: ReplyContext | null = messageCache.getLastReplyContext();
+        if (!lastContext) {
+          // If cache missed, try loading the most recent output from database for this chat
+          try {
+            const db = getDb();
+            const record = await db.select()
+              .from(modelOutputs)
+              .where(eq(modelOutputs.chatId, String(chatId)))
+              .orderBy(desc(modelOutputs.id))
+              .limit(1)
+              .then(rows => rows[0]);
+            
+            if (record) {
+              lastContext = {
+                title: record.title || undefined,
+                answerMarkdown: record.answerMarkdown,
+                thinkingMarkdown: record.thinkingMarkdown || '',
+              };
+            }
+          } catch (dbErr) {
+            logger.warn(`[saveCommand] Failed to retrieve latest from model_outputs DB: ${dbErr}`);
+          }
+        }
+
         if (lastContext) {
           answerMarkdown = lastContext.answerMarkdown;
           thinkingMarkdown = lastContext.thinkingMarkdown;

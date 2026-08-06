@@ -92,3 +92,41 @@ describe('conversationStore with Drizzle ORM', () => {
     expect(convId).toBeNull();
   });
 });
+
+describe('modelOutputs schema & messageCache integration', () => {
+  beforeEach(() => {
+    closeDb();
+    getDb(':memory:');
+  });
+
+  afterEach(() => {
+    closeDb();
+  });
+
+  it('should save model outputs to sqlite database via messageCache.set and allow retrieval', async () => {
+    const db = getDb();
+    const { messageCache } = await import('../utils/messageCache.js');
+
+    // Call messageCache.set with optional parameters including chatId
+    messageCache.set(
+      12345, // messageId
+      'This is answer content\n\n<thought>\nThinking step by step...\n</thought>', // raw text
+      undefined, // replyContext (autodetect)
+      999, // chatId
+      'Gemini Pro', // model
+      'conv-uuid-123' // conversationId
+    );
+
+    // Wait a brief moment for async DB write to finish
+    await new Promise(r => setTimeout(r, 50));
+
+    // Verify row was inserted into model_outputs table
+    const row = db.select().from(schema.modelOutputs).where(eq(schema.modelOutputs.messageId, 12345)).get();
+    expect(row).toBeDefined();
+    expect(row?.chatId).toBe('999');
+    expect(row?.model).toBe('Gemini Pro');
+    expect(row?.answerMarkdown).toBe('This is answer content');
+    expect(row?.thinkingMarkdown).toBe('Thinking step by step...');
+    expect(row?.conversationId).toBe('conv-uuid-123');
+  });
+});

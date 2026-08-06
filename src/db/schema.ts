@@ -40,4 +40,20 @@ export const messages = sqliteTable('messages', {
   usage: text('usage'),
 });
 
+/**
+ * ModelOutputs table persists the original unformatted markdown, title,
+ * and thinking block of AI assistant messages keyed by Telegram chat/message IDs.
+ */
+export const modelOutputs = sqliteTable('model_outputs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  chatId: text('chat_id').notNull(),
+  messageId: integer('message_id').notNull(),
+  conversationId: text('conversation_id'),
+  model: text('model'),
+  title: text('title'),
+  answerMarkdown: text('answer_markdown').notNull(),
+  thinkingMarkdown: text('thinking_markdown'),
+  createdAt: text('created_at').notNull(),
+});
+
 
