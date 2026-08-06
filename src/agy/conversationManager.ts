@@ -14,7 +14,7 @@ export interface Web2ApiMessage {
 
 export const web2apiHistories = new Map<string, Web2ApiMessage[]>();
 export const deepseekHistories = new Map<string, Web2ApiMessage[]>();
-export const geminiDirectHistories = new Map<string, any[]>();
+
 
 export const opencodeHistories = new Map<string, Web2ApiMessage[]>();
 
@@ -48,7 +48,4 @@ export function clearWeb2ApiHistory(conversationId: string): void {
   web2apiHistories.delete(conversationId);
 }
 
-/** Clear the gemini-direct history for a given conversationId (called on /new). */
-export function clearGeminiDirectHistory(conversationId: string): void {
-  geminiDirectHistories.delete(conversationId);
-}
+

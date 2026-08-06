@@ -174,7 +174,7 @@ describe('processMessage', () => {
   it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
     // Chain from Web2API: Gemini Flash Lite is 4 models long under monotonic downgrade tier system (Tier 3 models from index 7 to end).
     // Each model is retried 3x, then downgraded. When the LAST model in the chain
-    // (OpenCode: North Mini Code Free) also fails its 3 retries, the session must
+    // (DeepSeek: Flash) also fails its 3 retries, the session must
     // terminate — it must NOT wrap back to higher tiers.
     mockSession.model = 'Web2API: Gemini Flash Lite';
     const input: MultimodalInput = { text: 'hello full loop' };
@@ -193,9 +193,9 @@ describe('processMessage', () => {
     // First 3 attempts: original model.
     expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
     expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
-    // Last 3 attempts: downgraded last model (OpenCode: North Mini Code Free).
-    expect(runAgyPrint).toHaveBeenNthCalledWith(10, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
-    expect(runAgyPrint).toHaveBeenNthCalledWith(12, expect.objectContaining({ model: 'OpenCode: North Mini Code Free' }));
+    // Last 3 attempts: downgraded last model (DeepSeek: Flash).
+    expect(runAgyPrint).toHaveBeenNthCalledWith(10, expect.objectContaining({ model: 'DeepSeek: Flash' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(12, expect.objectContaining({ model: 'DeepSeek: Flash' }));
     // NO 13th call.
     // Session model is unchanged (it never succeeded).
     expect(mockSession.model).toBe('Web2API: Gemini Flash Lite');

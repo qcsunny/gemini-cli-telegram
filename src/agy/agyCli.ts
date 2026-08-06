@@ -19,9 +19,8 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
-import { loadUserConfig } from '../config/userConfig.js';
+
 import { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel } from './modelDetection.js';
-import { runGeminiDirect } from './backends/geminiDirect.js';
 import { runWeb2Api } from './backends/web2api.js';
 import { runDeepSeek } from './backends/deepseek.js';
 
@@ -32,15 +31,14 @@ import type { AgyRunOptions, AgyRunResult } from './types.js';
 // Re-export all types and functions for backward compatibility
 export type { AgyRunOptions, AgyRunResult, AgyStreamEvent, ConversationTurn } from './types.js';
 export { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
-export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearGeminiDirectHistory, clearOpenCodeHistory } from './conversationManager.js';
+export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearOpenCodeHistory } from './conversationManager.js';
 export { extractUsageFromProto, extractMetadataFromProto, readUsageFromDatabase, readConversationHistory } from './protobuf.js';
 export { normalizeThinkingTags, extractThoughtBlocksAndSegments, extractThoughtAndContent } from './thoughtParser.js';
 export { getConversationsDir } from './protobuf.js';
 
-// Re-export runDeepSeek, runWeb2Api, runGeminiDirect, runOpenCode for direct callers
+// Re-export runDeepSeek, runWeb2Api, runOpenCode for direct callers
 export { runDeepSeek } from './backends/deepseek.js';
 export { runWeb2Api } from './backends/web2api.js';
-export { runGeminiDirect } from './backends/geminiDirect.js';
 export { runOpenCode } from './backends/opencode.js';
 
 let _agyPath: string | undefined;
@@ -157,12 +155,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     return runDeepSeek(opts);
   }
 
-  // Route direct Gemini requests to Gemini API if geminiApiKey is present
-  const config = loadUserConfig();
-  if (config?.geminiApiKey && opts.model && (opts.model.toLowerCase().includes('gemini') || opts.model.startsWith('gemini-'))) {
-    logger.info(`[agyCli] Routing directly to Gemini API: model=${opts.model}`);
-    return runGeminiDirect(opts, config.geminiApiKey);
-  }
+
 
   // Route OpenCode models to the local opencode binary
   if (opts.model && isOpenCodeModel(opts.model)) {
