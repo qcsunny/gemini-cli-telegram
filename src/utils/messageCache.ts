@@ -12,6 +12,19 @@
 
 import { LRUCache } from 'lru-cache';
 import { getTuningConfig } from '../config/userConfig.js';
+import { getDb } from '../db/index.js';
+import { modelOutputs } from '../db/schema.js';
+import { logger } from '../utils/logger.js';
+
+function extractThoughtAndContent(text: string): { thought: string; content: string } {
+  const match = text.match(/<thought[^>]*>([\s\S]*?)<\/thought>/i) || text.match(/<think[^>]*>([\s\S]*?)<\/think>/i);
+  if (match) {
+    const thought = match[1].trim();
+    const content = text.replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '').trim();
+    return { thought, content };
+  }
+  return { thought: '', content: text };
+}
 
 /**
  * Contextual metadata associated with a saved message reply, including title and separate thinking/answer blocks.
@@ -59,11 +72,63 @@ export class MessageCache {
    * @param messageId - Telegram message ID or draft ID.
    * @param text - Raw Markdown content string.
    * @param replyContext - Optional structured reply context (thinking & answer parts).
+   * @param chatId - Optional Telegram chat ID to trigger SQLite persistence.
+   * @param model - Optional model name for database record.
+   * @param conversationId - Optional conversation UUID for database record.
    */
-  set(messageId: number, text: string, replyContext?: ReplyContext): void {
-    this.cache.set(messageId, { text, replyContext });
-    if (replyContext) {
-      this.lastReplyContext = replyContext;
+  set(
+    messageId: number,
+    text: string,
+    replyContext?: ReplyContext,
+    chatId?: number,
+    model?: string,
+    conversationId?: string
+  ): void {
+    let finalContext = replyContext;
+    if (!finalContext && text) {
+      const parsed = extractThoughtAndContent(text);
+      finalContext = {
+        answerMarkdown: parsed.content,
+        thinkingMarkdown: parsed.thought,
+      };
+    }
+    this.cache.set(messageId, { text, replyContext: finalContext });
+    if (finalContext) {
+      this.lastReplyContext = finalContext;
+    }
+
+    if (chatId !== undefined) {
+      void (async () => {
+        try {
+          const db = getDb();
+          const nowStr = new Date().toISOString();
+          await db.insert(modelOutputs)
+            .values({
+              chatId: String(chatId),
+              messageId,
+              conversationId: conversationId || null,
+              model: model || null,
+              title: finalContext?.title || null,
+              answerMarkdown: finalContext?.answerMarkdown || text,
+              thinkingMarkdown: finalContext?.thinkingMarkdown || null,
+              createdAt: nowStr,
+            })
+            .onConflictDoUpdate({
+              target: [modelOutputs.chatId, modelOutputs.messageId],
+              set: {
+                conversationId: conversationId || null,
+                model: model || null,
+                title: finalContext?.title || null,
+                answerMarkdown: finalContext?.answerMarkdown || text,
+                thinkingMarkdown: finalContext?.thinkingMarkdown || null,
+                createdAt: nowStr,
+              }
+            });
+          logger.debug(`[messageCache] Persisted model output for message ${messageId} in chat ${chatId} to database.`);
+        } catch (err) {
+          logger.error(`[messageCache] Failed to persist model output to database: ${err}`);
+        }
+      })();
     }
   }
 

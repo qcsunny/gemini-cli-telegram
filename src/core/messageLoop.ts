@@ -532,7 +532,7 @@ export async function processMessage(
                 : answerBuffer.trim();
               await reply.edit!(currentMessageId, finalText);
             }
-            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext);
+            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
           } catch (e) {
             logger.warn(`[messageLoop] Finalize failed: ${e}`);
             try {
@@ -546,7 +546,7 @@ export async function processMessage(
               } else {
                 currentMessageId = await reply.sendRich!(finalContent);
               }
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
             } catch (e2) {
               logger.warn(`[messageLoop] editRich/sendRich fallback failed: ${e2}`);
             }
@@ -560,12 +560,12 @@ export async function processMessage(
             if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
             if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
             currentMessageId = await reply.sendRich!(finalContent);
-            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext);
+            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
           } catch (e) {
             logger.warn(`[messageLoop] sendRich (no-draft path) failed: ${e}`);
             try {
               currentMessageId = await reply.send!(answerBuffer.trim());
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext);
+              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
             } catch (e2) {
               logger.warn(`[messageLoop] send fallback failed: ${e2}`);
             }
