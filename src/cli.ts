@@ -72,6 +72,33 @@ program
       options.live ||
       process.env['_GEMINI_CLI_TELEGRAM_DAEMON'] === '1';
 
+    // Unified singleton check for both live and background modes
+    if (fs.existsSync(pidPath)) {
+      try {
+        const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+        try {
+          process.kill(existingPid, 0); // Check if process is alive
+          if (!isLive) {
+            console.error(`Daemon is already running (pid ${existingPid}). Use 'gemini-cli-telegram stop' first.`);
+            process.exit(1);
+          }
+        } catch (killErr: any) {
+          if (killErr.code === 'ESRCH') {
+            console.error(`[PID CHECK] Stale pid file detected: ${pidPath}, content: ${existingPid}`);
+            console.error(`[PID CHECK] Removing stale pid file and continuing...`);
+            try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
+          } else {
+            console.error(`[PID CHECK] Failed to check process status: ${killErr.code}`);
+            throw killErr;
+          }
+        }
+      } catch (err) {
+        console.error(`[PID CHECK] Error reading pid file: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
+    }
+
+
     // Atomic PID lock: only one process can ever hold it
     if (isLive) {
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
@@ -166,8 +193,51 @@ program
     }
   });
 
-program
-  .command('stop')
+  program
+    .command('check-pid')
+    .description('Check daemon.pid status without starting')
+    .action(() => {
+      const pidPath = getPidPath();
+      if (!fs.existsSync(pidPath)) {
+        console.log('[PID CHECK] No daemon.pid file found. Daemon is not running.');
+        process.exit(0);
+      }
+
+      try {
+        const pidContent = fs.readFileSync(pidPath, 'utf-8').trim();
+        const pid = parseInt(pidContent, 10);
+
+        if (isNaN(pid)) {
+          console.error(`[PID CHECK] Invalid pid file content: "${pidContent}"`);
+          process.exit(1);
+        }
+
+        console.log(`[PID CHECK] Found daemon.pid: ${pid}`);
+
+        try {
+          process.kill(pid, 0);
+          console.log(`[PID CHECK] Process ${pid} is running (verified)`);
+          console.log(`[PID CHECK] Daemon is running. Use 'gemini-cli-telegram stop' to stop it.`);
+          process.exit(0);
+        } catch (killErr: any) {
+          if (killErr.code === 'ESRCH') {
+            console.error(`[PID CHECK] Process ${pid} is not running (ESRCH)`);
+            console.error(`[PID CHECK] Stale pid file detected. Remove it manually: rm ${pidPath}`);
+            console.error(`[PID CHECK] Or run: gemini-cli-telegram stop`);
+            process.exit(1);
+          } else {
+            console.error(`[PID CHECK] Failed to check process status: ${killErr.code}`);
+            process.exit(1);
+          }
+        }
+      } catch (err) {
+        console.error(`[PID CHECK] Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('stop')
   .description('Stop the running daemon')
   .action(() => {
     const pidPath = getPidPath();
