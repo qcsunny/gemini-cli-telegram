@@ -289,7 +289,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       settled = true;
       logger.debug('[agyCli] Aborting — sending SIGINT to agy process');
       child.kill('SIGINT');
-    });
+    }, { once: true });
 
     child.on('error', err => {
       logger.error(`[agyCli] Spawn error: ${err.message}`);

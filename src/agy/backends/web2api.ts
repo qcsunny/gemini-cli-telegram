@@ -160,7 +160,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
       logger.debug('[web2api] Aborting request');
       req.destroy();
       resolve({ conversationId: convId, output: outputBuf, exitCode: 1, stderr: 'Aborted' });
-    });
+    }, { once: true });
 
     req.write(body);
     req.end();

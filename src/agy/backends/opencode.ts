@@ -86,6 +86,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       env['HTTP_PROXY'] = proxy;
       env['HTTPS_PROXY'] = proxy;
     }
+    let settled = false;
 
     const child = spawn(opencode, args, {
       cwd,
@@ -149,12 +150,13 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
     signal?.addEventListener('abort', () => {
       logger.debug('[opencode] Aborting');
+      settled = true;
       child.kill('SIGINT');
-    });
+    }, { once: true });
 
     child.on('error', (err) => {
       logger.error(`[opencode] Spawn error: ${err.message}`);
-      reject(err);
+      if (!settled) { settled = true; reject(err); }
     });
 
     child.on('close', (code) => {
@@ -164,6 +166,13 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (!stepFinished) {
         opts.onEvent?.({ type: 'done' });
       }
+
+      // If abort already settled the promise, skip DB side-effects
+      if (settled) {
+        resolve({ conversationId: convId, output: stdoutBuf.trim(), exitCode: code ?? 1, stderr: errBuf });
+        return;
+      }
+      settled = true;
 
       const trimmedOutput = stdoutBuf.trim();
 

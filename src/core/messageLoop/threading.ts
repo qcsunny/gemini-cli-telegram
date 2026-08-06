@@ -12,6 +12,8 @@ import { getTuningConfig } from '../../config/userConfig.js';
  *  - a HARD total cap (never reset), and
  *  - an INACTIVITY timer that resets on each streamed chunk/event.
  * `onActivity` lets the caller report progress to reset the inactivity timer.
+ * `onTimeout` is called when either timer fires — use it to abort the child
+ * process so it doesn't become an orphan and pollute the next attempt.
  *
  * Both timeouts are read from `config.json` → `tuning` (see userConfig.ts).
  */
@@ -19,6 +21,7 @@ export async function withTimeout<T>(
   promise: Promise<T>,
   modelLabel: string,
   onActivity?: () => void,
+  onTimeout?: () => void,
 ): Promise<{ result: T; resetInactivity: () => void }> {
   const { modelRunHardTimeoutMs: HARD_MS, modelRunInactivityMs: INACT_MS } = getTuningConfig();
   let hardTimer: NodeJS.Timeout | undefined;
@@ -26,6 +29,7 @@ export async function withTimeout<T>(
   let reject: (reason?: any) => void;
 
   const fire = (msg: string) => {
+    onTimeout?.();
     if (reject) reject(new Error(msg));
   };
 

@@ -79,8 +79,9 @@ program
         try {
           const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
           process.kill(existingPid, 0);
-          console.error(`Daemon already running (pid ${existingPid}). Waiting for graceful handover...`);
-          while (true) {
+          console.error(`Daemon already running (pid ${existingPid}). Waiting up to 60s for graceful handover...`);
+          const deadline = Date.now() + 60_000;
+          while (Date.now() < deadline) {
             if (acquirePidLock(pidPath)) break;
             try {
               const content = fs.readFileSync(pidPath, 'utf-8').trim();
@@ -92,6 +93,10 @@ program
               try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
               if (acquirePidLock(pidPath)) break;
             }
+          }
+          if (!acquirePidLock(pidPath)) {
+            console.error('Could not acquire PID lock within 60s. Another instance may still be running.');
+            process.exit(1);
           }
           console.log('PID lock acquired. Starting daemon...');
         } catch {
