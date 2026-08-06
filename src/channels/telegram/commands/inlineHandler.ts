@@ -11,7 +11,7 @@ import { findSafeCutPoint, formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
-import { buildTierAwareChain, getEffectiveModelOrder } from '../../../core/modelRegistry.js';
+import { buildTierAwareChain, getEffectiveModelOrder, loadModelsConfig } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
@@ -656,7 +656,11 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
 
   if (cmp.currentPage === 0) {
     // Cover mode: ZERO model buttons on page 0 for maximum privacy
-    rows.push([{ text: '🚀 Default group compare (Opus + Gemini Pro + DeepSeek)', callback_data: `inline_cmp_default:${cmp.resultId}` }]);
+    const configDefaults = loadModelsConfig()?.compareDefaults;
+    const defaultLabel = configDefaults && configDefaults.length >= 2
+      ? `🚀 Default group compare (${configDefaults.map(m => m.replace(/^(Web2API|DeepSeek|OpenCode)\s*:\s*/i, '').split(' ')[0].split('：')[0]).join(' + ')})`
+      : '🚀 Default group compare (Opus + Gemini Pro + DeepSeek)';
+    rows.push([{ text: defaultLabel, callback_data: `inline_cmp_default:${cmp.resultId}` }]);
     rows.push([{ text: '▶️ Browse/select models (full list)', callback_data: `inline_cmp_page:${cmp.resultId}:1` }]);
     if (cmp.selectedIdx.length >= 2) {
       rows.push([{ text: '🚀 Start comparison', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
@@ -947,19 +951,35 @@ export function registerInlineHandler(
         compareContexts.set(resultId, cmp);
       }
       const activeCmp = cmp!;
-      const preferred = [
-        activeCmp.candidates[0], // First model (Opus)
-        'Web2API: Gemini 3.1 Pro Enhanced',
-        'DeepSeek: Flash Thinking Search'
-      ];
+      const configDefaults = loadModelsConfig()?.compareDefaults || [];
       const selectedIndices: number[] = [];
-      for (const modelName of preferred) {
-        if (!modelName) continue;
+      
+      // 1. Try mapping the compareDefaults from config
+      for (const modelName of configDefaults) {
         const idx = activeCmp.candidates.indexOf(modelName);
         if (idx !== -1) {
           selectedIndices.push(idx);
         }
       }
+      
+      // 2. Fall back to the default group if config yielded less than 2 valid models
+      if (selectedIndices.length < 2) {
+        selectedIndices.length = 0; // reset
+        const defaultGroup = [
+          activeCmp.candidates[0], // First model (Opus)
+          'Web2API: Gemini 3.1 Pro Enhanced',
+          'DeepSeek: Flash Thinking Search'
+        ];
+        for (const modelName of defaultGroup) {
+          if (!modelName) continue;
+          const idx = activeCmp.candidates.indexOf(modelName);
+          if (idx !== -1) {
+            selectedIndices.push(idx);
+          }
+        }
+      }
+      
+      // 3. Fall back to index-based [0, 1, 2] if still less than 2 models
       if (selectedIndices.length >= 2) {
         activeCmp.selectedIdx = selectedIndices.slice(0, 3);
       } else {

@@ -15,6 +15,7 @@ export interface ModelsConfig {
   defaultOrder?: string[];
   routing: Record<string, string>;
   tiers?: Array<{ name: string; priority: number; models: string[] }>;
+  compareDefaults?: string[];
 }
 
 let _parsedModels: ModelsConfig | null | undefined;
@@ -30,6 +31,7 @@ export function loadModelsConfig(): ModelsConfig | null {
       defaultOrder: userCfg.modelsConfig.tiers?.flatMap(t => t.models) ?? [],
       routing: userCfg.modelsConfig.routing,
       tiers: userCfg.modelsConfig.tiers,
+      compareDefaults: userCfg.modelsConfig.compareDefaults,
     };
     logger.info(`[modelRegistry] Using modelsConfig from user config (${_parsedModels.defaultOrder?.length ?? 0} models, ${_parsedModels.tiers?.length ?? 0} tiers)`);
     return _parsedModels;

@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
 import { ICONS, escapeHtml } from '../channels/telegram/ui.js';
 import { runAgyPrint, extractThoughtAndContent } from '../agy/agyCli.js';
+import type { AgyRunResult } from '../agy/types.js';
 import { readThoughtFromTranscript } from './messageLoop/transcript.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
@@ -322,6 +323,12 @@ export async function processMessage(
               });
             }
           }), modelToUse || session.model || 'unknown', signal);
+          } finally {
+            // Mark the attempt as settled: any late events (e.g. a 'done' emitted
+            // by the close-handler of a child we just SIGINT-killed on timeout)
+            // must be ignored so they can't touch the next attempt's buffers.
+            attemptStale = true;
+          }
 
           lastResult = result;
 
