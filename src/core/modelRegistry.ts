@@ -229,3 +229,11 @@ export function buildTierAwareChain(startModel: string, skipModels?: Set<string>
 
   return chain;
 }
+
+/**
+ * Display model name: strip the version number from Claude Opus / Sonnet,
+ * everything else stays as configured.
+ */
+export function displayModelName(model: string): string {
+  return model.replace(/^(Claude (?:Opus|Sonnet)) \d+(?:\.\d+)*/, '$1');
+}

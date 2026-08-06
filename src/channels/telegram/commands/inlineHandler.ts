@@ -11,7 +11,7 @@ import { findSafeCutPoint, formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
-import { buildTierAwareChain, getEffectiveModelOrder, loadModelsConfig } from '../../../core/modelRegistry.js';
+import { buildTierAwareChain, getEffectiveModelOrder, loadModelsConfig, displayModelName } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
@@ -596,11 +596,7 @@ function anySignal(...signals: AbortSignal[]): { signal: AbortSignal; cleanup: (
 const PAGE_CHARS = 2500;
 const PAGE_THRESHOLD = 6000;
 
-/** Display model name: strip the version number from Claude Opus / Sonnet,
- *  everything else stays as configured. */
-export function displayModelName(model: string): string {
-  return model.replace(/^(Claude (?:Opus|Sonnet)) \d+(?:\.\d+)*/, '$1');
-}
+
 
 function splitIntoPages(text: string, pageChars: number = PAGE_CHARS): string[] {
   if (text.length <= pageChars) return [text];
