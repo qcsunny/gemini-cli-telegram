@@ -42,6 +42,8 @@ export const modelsConfigSchema = z.object({
   tiers: z.array(modelTierSchema),
   /** Mapping from display model name to backend API model ID */
   routing: z.record(z.string(), z.string()),
+  /** Default models selected when starting a /v comparison query. */
+  compareDefaults: z.array(z.string()).optional(),
 });
 
 /** Zod schema for individual project configurations */
