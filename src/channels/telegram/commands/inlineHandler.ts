@@ -36,7 +36,7 @@ interface PendingResult {
   lastActiveTime: number;
 }
 
-const pendingResults = new Map<string, PendingResult>();
+export const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
 
@@ -1252,12 +1252,12 @@ export function registerInlineHandler(
           return {
             type: 'article' as const,
             id: candidateId,
-            title: `🧠 ${candidateModel}`,
-            description: `Answer with ${candidateModel}`,
+            title: `🧠 ${displayModelName(candidateModel)}`,
+            description: `Answer with ${displayModelName(candidateModel)}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
               rich_message: {
-                markdown: `${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${candidateModel}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
+                markdown: `${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
               },
             } as any,
             // An inline keyboard is REQUIRED for Telegram to return
@@ -1277,16 +1277,16 @@ export function registerInlineHandler(
       }
 
       const initTitle = task === 'image'
-        ? `🖼️ Click to generate image [${modelToUse}]`
-        : task === 'translate' ? `🌐 Click to translate [${modelToUse}]`
-        : task === 'summarize' ? `📋 Click to summarize [${modelToUse}]`
+        ? `🖼️ Click to generate image [${displayModelName(modelToUse)}]`
+        : task === 'translate' ? `🌐 Click to translate [${displayModelName(modelToUse)}]`
+        : task === 'summarize' ? `📋 Click to summarize [${displayModelName(modelToUse)}]`
         : task === 'compare' ? '⚖️ Click to select models to compare'
-        : `🤔 Click to send and start thinking [${modelToUse}]`;
+        : `🤔 Click to send and start thinking [${displayModelName(modelToUse)}]`;
       let initMarkdown: string;
       if (task === 'image') {
         initMarkdown = `**🎨 Image generation mode**\n\n**💬 Prompt:**\n> ${displayPrompt}\n\n*🚀 Generating images; will update in place when complete.*`;
       } else {
-        const modelLine = `**🧠 Target model:** \`${modelToUse}\`\n`;
+        const modelLine = `**🧠 Target model:** \`${displayModelName(modelToUse)}\`\n`;
         initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI inference engine started**\n\n${modelLine}**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`;
       }
 
@@ -1300,12 +1300,12 @@ export function registerInlineHandler(
           suggestionCards.push({
             type: 'article' as const,
             id: candidateId,
-            title: `🧠 Answer with ${candidateModel}`,
-            description: `Switch to model ${candidateModel}`,
+            title: `🧠 Answer with ${displayModelName(candidateModel)}`,
+            description: `Switch to model ${displayModelName(candidateModel)}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
               rich_message: {
-                markdown: `**🧠 Model switch:** \`${candidateModel}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
+                markdown: `**🧠 Model switch:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
               },
             } as any,
             reply_markup: {
@@ -1342,11 +1342,11 @@ export function registerInlineHandler(
           type: 'article' as const,
           id: `prompt-${Date.now()}`,
           title: `💬 Send question card (default model)`,
-          description: `Model: ${modelToUse} | "${prompt.slice(0, 40)}..."`,
+          description: `Model: ${displayModelName(modelToUse)} | "${prompt.slice(0, 40)}..."`,
           thumbnail_url: THUMBNAILS.chat,
           input_message_content: {
             rich_message: {
-              markdown: `**💬 AI question card**\n\n**Model:** \`${modelToUse}\`\n**Question:** ${displayPrompt}\n\n*${ICONS.sparkles} Question card sent.*`,
+              markdown: `**💬 AI question card**\n\n**Model:** \`${displayModelName(modelToUse)}\`\n**Question:** ${displayPrompt}\n\n*${ICONS.sparkles} Question card sent.*`,
             },
           } as any,
         },

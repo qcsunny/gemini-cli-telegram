@@ -634,8 +634,9 @@ describe('registerInlineHandler', () => {
 
     const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
     const mCards = callArg.filter((r: any) => r.id.startsWith('m-'));
-    const chosenModel = mCards[1].title.replace('🧠 ', '');
     const mResultId = mCards[1].id;
+    const { pendingResults } = await import('./inlineHandler.js');
+    const chosenModel = pendingResults.get(mResultId)!.model;
 
     const mockChosenCtx = {
       me: { username: 'testbot' },
@@ -693,6 +694,10 @@ describe('registerInlineHandler', () => {
       },
     });
 
+    const { pendingResults } = await import('./inlineHandler.js');
+    const modelA = pendingResults.get(cardA.id)!.model;
+    const modelB = pendingResults.get(cardB.id)!.model;
+
     // Choose both cards without awaiting: they must run in parallel.
     const ctxA = chosenFor(cardA.id, 'inline_msg_A');
     const ctxB = chosenFor(cardB.id, 'inline_msg_B');
@@ -704,8 +709,6 @@ describe('registerInlineHandler', () => {
       expect(runAgyPrint).toHaveBeenCalledTimes(2);
     });
 
-    const modelA = cardA.title.replace('🧠 ', '');
-    const modelB = cardB.title.replace('🧠 ', '');
     const calls = (runAgyPrint as any).mock.calls.map((c: any[]) => c[0].model);
     expect(calls).toContain(modelA);
     expect(calls).toContain(modelB);
