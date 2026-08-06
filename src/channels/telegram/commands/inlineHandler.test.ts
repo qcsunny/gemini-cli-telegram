@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain } from './inlineHandler.js';
 import { displayModelName } from '../../../core/modelRegistry.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
@@ -61,6 +61,59 @@ describe('displayModelName', () => {
     expect(displayModelName('DeepSeek: Pro Thinking')).toBe('DeepSeek: Pro Thinking');
   });
 });
+
+describe('runModelWithFallbackChain', () => {
+  const defaultOptions: SessionOptions = { cwd: '/tmp', model: 'Gemini 3.5 Flash (Medium)' };
+
+  it('should NOT return partial output as success when the user stops mid-stream', async () => {
+    // web2api/deepseek/opencode backends RESOLVE (not reject) with partial
+    // output and exitCode 1 on abort, leaving isTimeout undefined. The chain
+    // must treat that as a stopped/failed run, not a "successful" answer.
+    const originalImpl = (runAgyPrint as any).getMockImplementation();
+    (runAgyPrint as any).mockImplementation(async (opts: any) => {
+      if (opts?.signal?.aborted) {
+        return { conversationId: 'conv', output: '部分回答', exitCode: 1, stderr: 'Aborted' };
+      }
+      return { conversationId: 'conv', output: '这是完整回答。', exitCode: 0 };
+    });
+
+    try {
+      const ctrl = new AbortController();
+      const result = await runModelWithFallbackChain('test', 'Gemini 3.5 Flash (Medium)', defaultOptions, ctrl.signal);
+      // Signal not yet aborted → normal full answer.
+      expect(result.result?.output).toBe('这是完整回答。');
+
+      ctrl.abort();
+      const stopped = await runModelWithFallbackChain('test', 'Gemini 3.5 Flash (Medium)', defaultOptions, ctrl.signal);
+      expect(stopped.result).toBeNull();
+      expect(stopped.modelUsed).toBe('Gemini 3.5 Flash (Medium)');
+    } finally {
+      (runAgyPrint as any).mockImplementation(originalImpl);
+    }
+  });
+
+  it('should return full output when an aborted attempt yields empty partial output', async () => {
+    const originalImpl = (runAgyPrint as any).getMockImplementation();
+    let callCount = 0;
+    (runAgyPrint as any).mockImplementation(async (opts: any) => {
+      callCount++;
+      // First attempt aborted by inactivity timeout (isTimeout set, no user stop).
+      if (callCount === 1) {
+        return { conversationId: 'conv', output: '', exitCode: 1, isTimeout: true, stderr: 'timeout' };
+      }
+      return { conversationId: 'conv', output: '重试后的完整回答。', exitCode: 0 };
+    });
+
+    try {
+      const result = await runModelWithFallbackChain('test', 'Gemini 3.5 Flash (Medium)', defaultOptions);
+      expect(result.result?.output).toBe('重试后的完整回答。');
+      expect(callCount).toBe(2);
+    } finally {
+      (runAgyPrint as any).mockImplementation(originalImpl);
+    }
+  });
+});
+
 
 describe('parseInlineModelAndPrompt', () => {
   it('should parse any @keyword as family search', () => {
