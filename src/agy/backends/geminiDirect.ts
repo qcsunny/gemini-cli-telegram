@@ -57,9 +57,12 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
     signal,
   };
 
+  let dispatcherToClose: ProxyAgent | undefined;
+
   if (proxy) {
     const dispatcher = new ProxyAgent(proxy);
     (fetchOptions as Record<string, unknown>)['dispatcher'] = dispatcher;
+    dispatcherToClose = dispatcher;
   }
 
   let outputBuf = '';
@@ -246,5 +249,11 @@ export async function runGeminiDirect(opts: AgyRunOptions, apiKey: string): Prom
       exitCode: 1,
       stderr: err.message || String(err),
     };
+  } finally {
+    // BUG-FIX: Close the per-call ProxyAgent so undici sockets are released
+    // instead of leaking a connection pool on every request.
+    if (dispatcherToClose) {
+      try { await dispatcherToClose.close(); } catch { /* ignore */ }
+    }
   }
 }
