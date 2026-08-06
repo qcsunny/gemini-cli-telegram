@@ -17,6 +17,7 @@
         "Web2API: Gemini 3.1 Pro Enhanced",
         "DeepSeek: Flash Thinking Search",
         "Web2API: Gemini 3.1 Pro",
+        "OpenCode: DeepSeek V4 Flash Free",
         "Gemini 3.1 Pro (Low)",
         "OpenCode: Nemotron 3 Ultra Free",
         "DeepSeek: Pro Thinking"
@@ -29,12 +30,12 @@
         "Gemini 3.6 Flash (High)",
         "Web2API: Gemini 3.6 Flash Thinking",
         "Gemini 3.6 Flash (Medium)",
-        "DeepSeek: Flash Thinking",
         "Gemini 3.6 Flash (Low)",
         "GPT-OSS 120B (Medium)",
         "OpenCode: Laguna S 2.1 Free",
         "OpenCode: MiMo V2.5 Free",
-        "DeepSeek: Pro"
+        "DeepSeek: Pro",
+        "DeepSeek: Flash Thinking"
       ]
     },
     {
@@ -44,14 +45,13 @@
         "Gemini 3.5 Flash (High)",
         "DeepSeek: Flash Search",
         "Gemini 3.5 Flash (Medium)",
-        "DeepSeek: Flash",
         "Web2API: Gemini Auto",
         "Gemini 3.5 Flash (Low)",
         "Web2API: Gemini 3.5 Flash Thinking Lite",
         "Web2API: Gemini Flash Lite",
-        "OpenCode: DeepSeek V4 Flash Free",
         "OpenCode: Ling 3.0 Flash Free",
-        "OpenCode: North Mini Code Free"
+        "OpenCode: North Mini Code Free",
+        "DeepSeek: Flash"
       ]
     }
   ],
