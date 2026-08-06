@@ -1103,10 +1103,10 @@ export function registerInlineHandler(
           type: 'article' as const,
           id: 'help-main',
           title: `🤖 Ask AI — Gemini / DeepSeek / OpenCode`,
-          description: `Type a question to ask AI (model: ${modelToUse})`,
+          description: `Type a question to ask AI (model: ${displayModelName(modelToUse)})`,
           thumbnail_url: THUMBNAILS.bot,
           input_message_content: {
-            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${modelToUse}.\n\n<b>Model switches (@keyword):</b>\n• <code>@flash ask</code> — list all Flash models\n• <code>@pro ask</code> — list all Pro models\n• <code>@deep ask</code> — list all DeepSeek models\n• <code>@think ask</code> — list all Thinking models\n\n<b>Project switches (/pN):</b>\n${projectHelpList || "• inherits the bot's currently bound project"}`,
+            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${displayModelName(modelToUse)}.\n\n<b>Model switches (@keyword):</b>\n• <code>@flash ask</code> — list all Flash models\n• <code>@pro ask</code> — list all Pro models\n• <code>@deep ask</code> — list all DeepSeek models\n• <code>@think ask</code> — list all Thinking models\n\n<b>Project switches (/pN):</b>\n${projectHelpList || "• inherits the bot's currently bound project"}`,
             parse_mode: 'HTML' as const,
           },
         },

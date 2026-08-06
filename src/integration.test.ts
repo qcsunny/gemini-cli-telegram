@@ -90,7 +90,6 @@ vi.mock('./utils/messageCache.js', () => ({
 
 vi.mock('./agy/conversationManager.js', () => ({
   deepseekHistories: new Map(),
-  geminiDirectHistories: new Map(),
   web2apiHistories: new Map(),
   opencodeHistories: new Map(),
   makeDeepSeekConvId: vi.fn(() => 'deepseek-test-conv'),
@@ -98,7 +97,6 @@ vi.mock('./agy/conversationManager.js', () => ({
   makeOpenCodeConvId: vi.fn(() => 'opencode-test-conv'),
   clearDeepSeekHistory: vi.fn(),
   clearWeb2ApiHistory: vi.fn(),
-  clearGeminiDirectHistory: vi.fn(),
   clearOpenCodeHistory: vi.fn(),
   restoreHistoriesFromDb: vi.fn(),
 }));
@@ -125,7 +123,6 @@ import { processMessage } from './core/messageLoop.js';
 import { buildChannelReply, forceReleaseDraft } from './channels/telegram/bot/channelReply.js';
 import { touchPendingResult } from './channels/telegram/commands/inlineHandler.js';
 import { runDeepSeek } from './agy/backends/deepseek.js';
-import { runGeminiDirect } from './agy/backends/geminiDirect.js';
 import { runAgyPrint } from './agy/agyCli.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -444,85 +441,9 @@ describe('[Integration] BUG-04: History Map size cap prevents OOM', () => {
     expect(deepseekHistories.size).toBeLessThanOrEqual(503);
   });
 
-  it('geminiDirectHistories stays bounded after exceeding 500 entries', async () => {
-    const { geminiDirectHistories } = await import('./agy/conversationManager.js');
-    for (let i = 0; i < 501; i++) {
-      geminiDirectHistories.set(`gemini-conv-${i}`, [{ role: 'user', parts: [{ text: `msg${i}` }] }]);
-    }
-
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true, status: 200,
-      body: {
-        getReader: () => {
-          let done = false;
-          return {
-            read: async () => {
-              if (!done) {
-                done = true;
-                return { done: false, value: new TextEncoder().encode('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }) + '\n') };
-              }
-              return { done: true, value: undefined };
-            },
-          };
-        },
-      },
-    } as any);
-
-    await runGeminiDirect({ prompt: 'overflow', model: 'gemini-2.0-flash', cwd: '/tmp' }, 'fake-key');
-    // After the cap kicks in: 501 pre-filled + 1 new write - 1 eviction = 501 max
-    expect(geminiDirectHistories.size).toBeLessThanOrEqual(503);
-  });
 });
 
-// =============================================================================
-// SUITE 7: BUG-06 — GeminiDirect API error JSON surfacing
-// =============================================================================
 
-describe('[Integration] BUG-06: GeminiDirect API error surfacing', () => {
-  function mockFetch(sse: string) {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true, status: 200,
-      body: {
-        getReader: () => {
-          let done = false;
-          return {
-            read: async () => {
-              if (!done) { done = true; return { done: false, value: new TextEncoder().encode(sse) }; }
-              return { done: true, value: undefined };
-            },
-          };
-        },
-      },
-    } as any);
-  }
-
-  it('returns exitCode=0 and output for a valid SSE stream', async () => {
-    mockFetch('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Hello world' }] } }] }) + '\n');
-    const result = await runGeminiDirect({ prompt: 'hello', model: 'gemini-2.0-flash', cwd: '/tmp' }, 'key');
-    expect(result.exitCode).toBe(0);
-    expect(result.output).toContain('Hello world');
-  });
-
-  it('surfaces 429 Quota error JSON in SSE stream instead of silently swallowing (BUG-06)', async () => {
-    const errorJson = JSON.stringify({ error: { code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED' } });
-    mockFetch(`data: ${errorJson}\n`);
-
-    const result = await runGeminiDirect({ prompt: 'test', model: 'gemini-2.0-flash', cwd: '/tmp' }, 'key');
-    const errorSurfaced = result.exitCode !== 0 || (typeof result.stderr === 'string' && result.stderr.length > 0);
-    expect(errorSurfaced).toBe(true);
-  });
-
-  it('returns exitCode=1 for HTTP 401 Unauthorized (pre-stream error)', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false, status: 401, statusText: 'Unauthorized',
-      text: async () => 'API key invalid',
-    } as any);
-
-    const result = await runGeminiDirect({ prompt: 'test', model: 'gemini-2.0-flash', cwd: '/tmp' }, 'bad-key');
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('401');
-  });
-});
 
 // =============================================================================
 // SUITE 8: InlineStreamQueue throttling and 429 backoff
