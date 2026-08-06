@@ -260,17 +260,24 @@ export async function processMessage(
 
           logger.info(`[messageLoop] Attempt ${attempts}/${maxAttempts}: Running prompt with model="${modelToUse}" (model retry ${failsForModel + 1}/${retriesPerModel})`);
           turnStartTime = Date.now();
-          const result = await withTimeout((resetInactivity) => runAgyPrint({
-            prompt: finalPrompt,
-            cwd,
-            conversationId: session.conversationId,
-            model: modelToUse,
-            proxy: session.proxy,
-            signal,
-            extraDirs: mediaExtraDirs,
-            onActivity: () => resetInactivity(),
-            onSpawn: (pid) => { session.childPid = pid; },
-            onEvent: (event) => {
+          // Stale-event guard: once this attempt settles (resolves OR rejects),
+          // ignore any late events from the just-killed child (SIGINT on timeout)
+          // so they never pollute the next attempt's shared stream buffers.
+          let attemptStale = false;
+          let result: AgyRunResult;
+          try {
+            result = await withTimeout((resetInactivity, runSignal) => runAgyPrint({
+              prompt: finalPrompt,
+              cwd,
+              conversationId: session.conversationId,
+              model: modelToUse,
+              proxy: session.proxy,
+              signal: runSignal,
+              extraDirs: mediaExtraDirs,
+              onActivity: () => resetInactivity(),
+              onSpawn: (pid) => { session.childPid = pid; },
+              onEvent: (event) => {
+                if (attemptStale) return;
               // Any streamed event counts as progress: reset both the model-run
               // inactivity timer and the bot's stuck-session watchdog (_busySince)
               // so a slow-but-active long reply is never killed mid-stream.
@@ -314,13 +321,7 @@ export async function processMessage(
                 logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
               });
             }
-          }), modelToUse || session.model || 'unknown',
-          /* onTimeout */ () => {
-            // Abort the session signal so the child process (agy/opencode) is killed
-            // immediately and cannot produce late events that would pollute the next attempt.
-            logger.warn(`[messageLoop] Timeout fired for model="${modelToUse}" — aborting child process`);
-            session.abortController.abort('withTimeout fired');
-          });
+          }), modelToUse || session.model || 'unknown', signal);
 
           lastResult = result;
 
