@@ -171,8 +171,12 @@ const cleanupTimer = setInterval(() => {
   }
   for (const [resultId, ctrl] of userControllers) {
     // Only abort controllers whose pendingResult has already been cleaned up
-    // (i.e. truly inactive/expired), never abort an active stream.
-    if (!pendingResults.has(resultId)) {
+    // (i.e. truly inactive/expired), never abort an active stream. Compare and
+    // regenerate runs never enter pendingResults (compare returns early in
+    // inline_query; regenerate only re-arms userControllers), so guard on their
+    // context maps too — otherwise the timer would kill a long-running
+    // comparison or regeneration after one RESULTS_TTL tick.
+    if (!pendingResults.has(resultId) && !compareContexts.has(resultId) && !regenerateContexts.has(resultId)) {
       try { ctrl.abort(); } catch {}
       userControllers.delete(resultId);
     }
@@ -549,8 +553,10 @@ export async function runModelWithFallbackChain(
         });
         clearTimers();
         // A timed-out run may carry partial stdout; treat it as a failure rather
-        // than returning a truncated "successful" answer.
-        if (result?.output && !result.isTimeout) {
+        // than returning a truncated "successful" answer. Same for a user stop:
+        // web2api/deepseek/opencode backends resolve with partial output (isTimeout
+        // stays undefined) when their request is aborted, so guard on the signal too.
+        if (result?.output && !result.isTimeout && !signal?.aborted) {
           return {
             result,
             modelUsed: modelToUse,
