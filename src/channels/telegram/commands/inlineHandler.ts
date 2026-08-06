@@ -534,10 +534,11 @@ export async function runModelWithFallbackChain(
             onChunk(chunk);
           }
         : undefined;
+      let combined: ReturnType<typeof anySignal> | undefined;
       try {
         logger.info(`[InlineQuery] Attempting model="${modelToUse}" (${attempt}/2) for initial="${initialModel}"`);
         if (onModelStart) onModelStart(modelToUse);
-        const combined = signal ? anySignal(signal, timeoutCtrl.signal) : undefined;
+        combined = signal ? anySignal(signal, timeoutCtrl.signal) : undefined;
         const result = await runAgyPrint({
           prompt,
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
@@ -547,7 +548,6 @@ export async function runModelWithFallbackChain(
           signal: combined ? combined.signal : timeoutCtrl.signal,
         });
         clearTimers();
-        combined?.cleanup();
         // A timed-out run may carry partial stdout; treat it as a failure rather
         // than returning a truncated "successful" answer.
         if (result?.output && !result.isTimeout) {
@@ -567,6 +567,8 @@ export async function runModelWithFallbackChain(
           return { result: null, modelUsed: initialModel, isFallback: false };
         }
         logger.warn(`[Agent] Attempt ${attempt}/2 failed for model="${modelToUse}": ${err}`);
+      } finally {
+        combined?.cleanup();
       }
     }
   }
