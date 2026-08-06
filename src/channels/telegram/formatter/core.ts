@@ -980,6 +980,22 @@ export function normalizeMarkdownStructure(markdown: string): string {
   if (!markdown) return markdown;
   markdown = normalizeNestedCodeFences(markdown);
 
+  // Convert raw `<details>...<summary>...</summary>...</details>` HTML that models
+  // emit (e.g. the Telegram Bot API 10.2 rich-text renderer) into a
+  // `> [details] Summary\n> body` blockquote so BOTH the blocks path
+  // (blockquote_open → native details block) and the HTML path (html.ts
+  // `[details]` detection) render a native Telegram <details> element.
+  markdown = markdown.replace(/<details(?:\s+open)?>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gi, (m, summaryHtml, bodyHtml) => {
+    const summary = summaryHtml.replace(/<[^>]*>/g, '').trim() || 'Click to expand';
+    const body = bodyHtml
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<p[^>]*>/gi, '')
+      .replace(/<\/p>/gi, '\n\n')
+      .trim();
+    const quotedBody = body.split('\n').map((line: string) => `> ${line.trim()}`).join('\n');
+    return `> [details] ${summary}\n${quotedBody}`;
+  });
+
   // Process line-by-line to extract fenced code blocks (````) into placeholders so
   // subsequent normalizations (heading spacing, HR isolation, etc.) never corrupt code.
   // Uses backtick-count-aware matching: a ````markdown` fence (4+ backticks) correctly
@@ -996,7 +1012,7 @@ export function normalizeMarkdownStructure(markdown: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const fenceMatch = line.match(/^([ \t]*)(`{3,}|~{3,})(.*)$/);
+    const fenceMatch = line.match(/^([ \t]*)(?:> ?)?(`{3,}|~{3,})(.*)$/);
 
     if (fenceMatch) {
       const fenceStr = fenceMatch[2];
