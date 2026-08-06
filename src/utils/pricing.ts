@@ -13,6 +13,7 @@
  */
 
 import { getCachedUsdToCnyRate } from './exchangeRate.js';
+import { displayModelName } from '../core/modelRegistry.js';
 
 // Re-export for callers that want to pre-warm the cache
 
@@ -249,7 +250,9 @@ export function parseFooterMarker(marker: string): string[] {
   const cached = parts[4];
   const thinking = parts[5];
   const out: string[] = [];
-  if (model) out.push(model);
+  if (model) {
+    out.push(displayModelName(model));
+  }
   if (input || output) {
     let s = `In: ${input ?? ''}`;
     if (cached && cached !== '0') s += ` (Cached: ${cached})`;

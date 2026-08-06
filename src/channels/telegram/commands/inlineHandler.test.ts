@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, displayModelName } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels } from './inlineHandler.js';
+import { displayModelName } from '../../../core/modelRegistry.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';

@@ -10,7 +10,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { MessageCache } from './messageCache.js';
-import { formatFooterMarker, estimateTokens, calculateCost } from './pricing.js';
+import { formatFooterMarker, parseFooterMarker, estimateTokens, calculateCost } from './pricing.js';
 import { startHealthServer, stopHealthServer } from './healthServer.js';
 
 describe('Utils Test Suite', () => {
@@ -108,6 +108,18 @@ describe('Utils Test Suite', () => {
       const cost = calculateCost('unknown-model-xyz', 100, 100, 0, 0);
       expect(cost).toBeDefined();
       expect(typeof cost.totalCost).toBe('number');
+    });
+
+    it('should strip version numbers from Claude Opus and Claude Sonnet in parseFooterMarker', async () => {
+      const parsedOpus = parseFooterMarker('[footer: Claude Opus 4.6 (Thinking) | 100 | 50 | $0.001234 | 0 | 0]');
+      expect(parsedOpus[0]).toBe('Claude Opus (Thinking)');
+
+      const parsedSonnet = parseFooterMarker('[footer: Claude Sonnet 4.6 (Thinking) | 100 | 50 | $0.001234 | 0 | 0]');
+      expect(parsedSonnet[0]).toBe('Claude Sonnet (Thinking)');
+
+      // Other models should not be changed
+      const parsedGemini = parseFooterMarker('[footer: Gemini 3.6 Flash (High) | 100 | 50 | $0.001234 | 0 | 0]');
+      expect(parsedGemini[0]).toBe('Gemini 3.6 Flash (High)');
     });
 
     it('should not charge thinking tokens for models with thinkingMultiplier=none', async () => {
