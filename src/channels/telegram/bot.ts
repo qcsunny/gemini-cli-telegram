@@ -58,6 +58,19 @@ const DOWNLOAD_RETRY_BASE_MS = 1000;
 const MAX_MESSAGE_PROCESSING_MS = 960_000;
 const HEALTH_CHECK_INTERVAL_MS = 60_000;
 
+// Runner must subscribe to the same update types on every (re)start, otherwise
+// an auto-restart after a dropped getUpdates connection would silently lose
+// e.g. inline_query / callback_query handling.
+const RUNNER_ALLOWED_UPDATES = {
+  allowed_updates: [
+    'message',
+    'edited_message',
+    'callback_query',
+    'inline_query',
+    'chosen_inline_result',
+  ] as const,
+};
+
 // ── Helper: getHtmlPayload (used by TelegramBot.setupScheduler) ──
 
 function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = false): string {
@@ -116,15 +129,31 @@ function getSequentialKey(ctx: Context): string | undefined {
 
 /**
  * Combine multiple AbortSignals into one (polyfill for AbortSignal.any).
- * The combined signal aborts when any input signal aborts.
+ * The combined signal aborts when any input signal aborts. Listeners are
+ * added with `{ once: true }` and removed by the returned cleanup so a
+ * long-lived input signal (e.g. grammy's) never accumulates listeners.
  */
-function combineSignals(...signals: AbortSignal[]): AbortSignal {
+function combineSignals(
+  ...signals: AbortSignal[]
+): { signal: AbortSignal; cleanup: () => void } {
   const ctrl = new AbortController();
+  const listeners: Array<{ sig: AbortSignal; fn: () => void }> = [];
   for (const s of signals) {
-    if (s.aborted) { ctrl.abort(s.reason); return ctrl.signal; }
-    s.addEventListener('abort', () => ctrl.abort(s.reason), { once: true });
+    if (!s) continue;
+    if (s.aborted) {
+      ctrl.abort(s.reason);
+      break;
+    }
+    const fn = () => ctrl.abort(s.reason);
+    s.addEventListener('abort', fn, { once: true });
+    listeners.push({ sig: s, fn });
   }
-  return ctrl.signal;
+  const cleanup = () => {
+    for (const { sig, fn } of listeners) {
+      sig.removeEventListener('abort', fn);
+    }
+  };
+  return { signal: ctrl.signal, cleanup };
 }
 
 /**
@@ -397,13 +426,16 @@ export class TelegramBot {
           const timer = setTimeout(() => ctrl.abort('pollAgent timeout (60s)'), 60000);
           const combined = init?.signal && !init.signal.aborted
             ? combineSignals(ctrl.signal, init.signal)
-            : ctrl.signal;
+            : undefined;
           try {
-            const r = await undiciFetch(url, { ...init, dispatcher: this.pollAgent, signal: combined });
+            const signal = combined ? combined.signal : ctrl.signal;
+            const r = await undiciFetch(url, { ...init, dispatcher: this.pollAgent, signal });
             clearTimeout(timer);
+            combined?.cleanup();
             return r;
           } catch (e: any) {
             clearTimeout(timer);
+            combined?.cleanup();
             logger.warn(`[pollAgent] getUpdates connection reset or timeout: ${e?.message || e}`);
             throw e;
           }
@@ -430,20 +462,24 @@ export class TelegramBot {
         // Normal API calls: keep grammy's signal, add 25s safety timeout
         let lastErr: any;
         for (let attempt = 0; attempt < 3; attempt++) {
+          let combined: ReturnType<typeof combineSignals> | undefined;
           try {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), 25000);
-            const combined = init?.signal && !init.signal.aborted
+            combined = init?.signal && !init.signal.aborted
               ? combineSignals(ctrl.signal, init.signal)
-              : ctrl.signal;
+              : undefined;
+            const signal = combined ? combined.signal : ctrl.signal;
             const res = await undiciFetch(url, {
               ...init,
               dispatcher: this.proxyAgent,
-              signal: combined,
+              signal,
             });
             clearTimeout(timer);
+            combined?.cleanup();
             return res;
           } catch (e: any) {
+            combined?.cleanup();
             if (init?.signal?.aborted) throw e;
             lastErr = e;
             await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
@@ -607,13 +643,7 @@ export class TelegramBot {
       runner: {
         fetch: {
           timeout: 60,
-          allowed_updates: [
-            'message',
-            'edited_message',
-            'callback_query',
-            'inline_query',
-            'chosen_inline_result',
-          ],
+          ...RUNNER_ALLOWED_UPDATES,
         },
         silent: true,
       },
@@ -705,8 +735,8 @@ export class TelegramBot {
         try {
           this.runner = run(this.bot, {
             runner: {
-              fetch: { timeout: 60 },
-        silent: false,
+              fetch: { timeout: 60, ...RUNNER_ALLOWED_UPDATES },
+              silent: false,
             },
           });
           // Catch runner errors to prevent unhandled rejection
