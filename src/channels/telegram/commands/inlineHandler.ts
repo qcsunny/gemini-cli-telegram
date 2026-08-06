@@ -537,15 +537,17 @@ export async function runModelWithFallbackChain(
       try {
         logger.info(`[InlineQuery] Attempting model="${modelToUse}" (${attempt}/2) for initial="${initialModel}"`);
         if (onModelStart) onModelStart(modelToUse);
+        const combined = signal ? anySignal(signal, timeoutCtrl.signal) : undefined;
         const result = await runAgyPrint({
           prompt,
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
           model: modelToUse,
           proxy: defaultOptions.proxy,
           onChunk: wrappedChunk,
-          signal: signal ? anySignal(signal, timeoutCtrl.signal) : timeoutCtrl.signal,
+          signal: combined ? combined.signal : timeoutCtrl.signal,
         });
         clearTimers();
+        combined?.cleanup();
         // A timed-out run may carry partial stdout; treat it as a failure rather
         // than returning a truncated "successful" answer.
         if (result?.output && !result.isTimeout) {
@@ -572,13 +574,21 @@ export async function runModelWithFallbackChain(
   return { result: null, modelUsed: initialModel, isFallback: false };
 }
 
-function anySignal(...signals: AbortSignal[]): AbortSignal {
+function anySignal(...signals: AbortSignal[]): { signal: AbortSignal; cleanup: () => void } {
   const ctrl = new AbortController();
+  const listeners: Array<{ sig: AbortSignal; fn: () => void }> = [];
   for (const s of signals) {
-    if (s.aborted) { ctrl.abort(s.reason); return ctrl.signal; }
-    s.addEventListener('abort', () => ctrl.abort(s.reason), { once: true });
+    if (s.aborted) { ctrl.abort(s.reason); break; }
+    const fn = () => ctrl.abort(s.reason);
+    s.addEventListener('abort', fn, { once: true });
+    listeners.push({ sig: s, fn });
   }
-  return ctrl.signal;
+  const cleanup = () => {
+    for (const { sig, fn } of listeners) {
+      sig.removeEventListener('abort', fn);
+    }
+  };
+  return { signal: ctrl.signal, cleanup };
 }
 
 const PAGE_CHARS = 2500;
