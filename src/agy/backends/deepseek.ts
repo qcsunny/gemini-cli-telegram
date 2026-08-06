@@ -40,7 +40,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
   const url = new URL(`${backendUrl}/chat/completions`);
   const reqOptions: http.RequestOptions = {
     hostname: url.hostname,
-    port: url.port || 80,
+    port: url.port || (url.protocol === 'https:' ? 443 : 80),
     path: url.pathname,
     method: 'POST',
     headers: {
