@@ -596,6 +596,12 @@ function anySignal(...signals: AbortSignal[]): { signal: AbortSignal; cleanup: (
 const PAGE_CHARS = 2500;
 const PAGE_THRESHOLD = 6000;
 
+/** Display model name: strip the version number from Claude Opus / Sonnet,
+ *  everything else stays as configured. */
+export function displayModelName(model: string): string {
+  return model.replace(/^(Claude (?:Opus|Sonnet)) \d+(?:\.\d+)*/, '$1');
+}
+
 function splitIntoPages(text: string, pageChars: number = PAGE_CHARS): string[] {
   if (text.length <= pageChars) return [text];
   const pages: string[] = [];
@@ -802,7 +808,7 @@ export function registerInlineHandler(
         if (regen.task === 'image') return;
         if (accumulatedText.trim().length > 0) {
           const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
-          const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${activeModelName}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
+          const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(activeModelName)}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
           streamQueue.enqueueStream(streamMarkdown);
         }
       };
@@ -1409,7 +1415,7 @@ export function registerInlineHandler(
       touchPendingResult(chosen.result_id);
       if (accumulatedText.trim().length > 0) {
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
-        const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${activeModelName}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
+        const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(activeModelName)}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
         streamQueue.enqueueStream(streamMarkdown);
       }
     };
@@ -1529,7 +1535,7 @@ async function runInlineGeneration(
         // Long answer → paginate with collapsible fold
         const pages = splitIntoPages(cleanOutput);
         pageCount = pages.length;
-        const header = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${modelUsed}):**`;
+        const header = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**`;
         const pageItems: InlinePage[] = pages.map((page) => {
           const summaryTitle = `💡 ${page.length}-char full answer`;
           const details = `> [details] ${summaryTitle}\n> \n` + page.split('\n').map(line => `> ${line}`).join('\n');
@@ -1558,7 +1564,7 @@ async function runInlineGeneration(
         const summaryTitle = `💡 Click to expand full AI answer (${rawOutputLen} chars)`;
         const bodyMarkdown = `> [details] ${summaryTitle}\n> \n` + cleanOutput.split('\n').map(line => `> ${line}`).join('\n');
         isCollapsible = true;
-        fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${modelUsed}):**\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
+        fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
         const blocks = markdownToRichBlocks(fullMarkdown);
         finalBlocks = blocks.length > 0 ? blocks : undefined;
         replyMarkup = {
@@ -1567,7 +1573,7 @@ async function runInlineGeneration(
       }
     } else {
       // Short answer → plain text
-      fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${modelUsed}):**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
+      fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
       replyMarkup = {
         inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
       };
@@ -1631,9 +1637,9 @@ async function runCompareGeneration(
   const renderStatus = (): string => {
     const lines = statuses.map((s, i) => {
       const num = ['1.', '2.', '3.'][i] ?? `${i + 1}.`;
-      if (s.error) return `${num} \`${s.model}\`\n❌ Generation failed`;
-      if (s.done) return `${num} \`${s.model}\`\n✅ Done`;
-      return `${num} \`${s.model}\`\n⏳ Thinking...`;
+      if (s.error) return `${num} \`${displayModelName(s.model)}\`\n❌ Generation failed`;
+      if (s.done) return `${num} \`${displayModelName(s.model)}\`\n✅ Done`;
+      return `${num} \`${displayModelName(s.model)}\`\n⏳ Thinking...`;
     }).join('\n\n');
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
     return `**⚖️ Multi-model comparison in progress...**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${lines}\n\n_⏱️ elapsed ${elapsed}s, will update in place when complete._`;
@@ -1657,7 +1663,7 @@ async function runCompareGeneration(
     );
     if (result?.output) {
       statuses[i] = {
-        model: `${modelUsed}${isFallback ? ' (downgraded)' : ''}`,
+        model: `${displayModelName(modelUsed)}${isFallback ? ' (downgraded)' : ''}`,
         done: true,
         output: result.output,
         usage: result.usage ?? undefined,
@@ -1696,8 +1702,8 @@ async function runCompareGeneration(
   const pageItems: InlinePage[] = doneModels.map((s, i) => {
     const clean = stripWholeMessageCodeFence(s.output || '');
     const num = ['1.', '2.', '3.'][i] ?? `${i + 1}.`;
-    const modelLine = `**${num} ${s.model}**\n\n`;
-    const summaryTitle = `💡 Click to expand full answer of ${s.model.split(' ')[0] || s.model} (${s.model})`;
+    const modelLine = `**${num} ${displayModelName(s.model)}**\n\n`;
+    const summaryTitle = `💡 Click to expand full answer of ${s.model.split(' ')[0] || s.model} (${displayModelName(s.model)})`;
     const bodyMarkdown = `> [details] ${summaryTitle}\n> \n` + clean.split('\n').map(line => `> ${line}`).join('\n');
     const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
     const fullMd = `${header}${modelLine}${bodyMarkdown}${footer}`;
@@ -1709,8 +1715,8 @@ async function runCompareGeneration(
   const pageCount = pageItems.length;
 
   const allSucceeded = failedModels.length === 0;
-  const doneStr = doneModels.map((s) => s.model).join(', ');
-  const failNote = failedModels.length > 0 ? `\n\n_⚠️ Failed: ${failedModels.map((s) => s.model).join(', ')}_` : '';
+  const doneStr = doneModels.map((s) => displayModelName(s.model)).join(', ');
+  const failNote = failedModels.length > 0 ? `\n\n_⚠️ Failed: ${failedModels.map((s) => displayModelName(s.model)).join(', ')}_` : '';
 
   // First page + pagination keyboard + regenerate.
   const footerText = `${allSucceeded ? 'Comparison complete' : 'Partially complete'}: ${doneStr}${failNote}`;
@@ -1827,7 +1833,7 @@ async function finalizeImageResult(
     }
   }
 
-  const caption = `**💬 Prompt:** ${displayPrompt}\n\n_Model: ${modelUsed} · ${images.length} image(s) total_`;
+  const caption = `**💬 Prompt:** ${displayPrompt}\n\n_Model: ${displayModelName(modelUsed)} · ${images.length} image(s) total_`;
   const regenButton = {
     inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
   };
