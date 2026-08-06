@@ -424,7 +424,7 @@ export class TelegramBot {
         if (isGetUpdates) {
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort('pollAgent timeout (60s)'), 60000);
-          const combined = init?.signal && !init.signal.aborted
+          const combined = init?.signal
             ? combineSignals(ctrl.signal, init.signal)
             : undefined;
           try {
@@ -466,7 +466,7 @@ export class TelegramBot {
           try {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), 25000);
-            combined = init?.signal && !init.signal.aborted
+            combined = init?.signal
               ? combineSignals(ctrl.signal, init.signal)
               : undefined;
             const signal = combined ? combined.signal : ctrl.signal;
