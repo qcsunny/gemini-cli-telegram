@@ -193,6 +193,7 @@ export async function processMessage(
       let success = false;
       let lastResult: any = null;
       let lastErrorMessage = '';
+      let didTimeout = false;
 
       // Advance to the next model in the fallback chain. The chain is circular:
       // after the last (weakest) model, it wraps to the first (strongest) model.
@@ -233,7 +234,7 @@ export async function processMessage(
 
       let turnStartTime = 0;
 
-      while (attempts < maxAttempts && !success) {
+      while (attempts < maxAttempts && !success && !signal.aborted) {
         attempts++;
         // Reset per-attempt buffers AND the single-draft streaming state so a
         // new attempt starts from a clean slate (otherwise a failed attempt's
@@ -374,12 +375,19 @@ export async function processMessage(
           }
 
           failsForModel++;
+          // User cancelled (e.g. /cancel): stop retrying immediately instead of
+          // burning through the retry/downgrade budget pointlessly.
+          if (signal.aborted) break;
           if (failsForModel < retriesPerModel) continue; // retry same model
           if (await advanceModel(reason)) continue;          // downgrade to next
           break;                                            // last model failed → terminate
         } catch (e: any) {
           logger.error(`[messageLoop] Attempt ${attempts} error: ${e?.message || e}`);
           if (signal.aborted) throw e;
+          // Remember whether the final failure was a hard/inactivity timeout so
+          // the terminal error message can still say "timed out" even though
+          // withTimeout rejects (no AgyRunResult carries isTimeout=true).
+          if (e?.isTimeout) didTimeout = true;
 
           // Backend health: mark backend failed on connection-level errors
           if (isConnectionError(e)) {
@@ -411,6 +419,8 @@ export async function processMessage(
           }
 
           failsForModel++;
+          // User cancelled (e.g. /cancel): stop retrying immediately.
+          if (signal.aborted) break;
           if (failsForModel < retriesPerModel) continue; // retry same model
           if (await advanceModel(reason)) continue;          // downgrade to next
           break;                                            // last model failed → terminate
@@ -589,7 +599,7 @@ export async function processMessage(
         let errorReason = 'Execution failed';
         if (isAuthError) errorReason = 'Authentication expired or not logged in';
         if (isTerminated) errorReason = 'Agent process terminated abnormally';
-        if (finalResult.isTimeout || signal.aborted) errorReason = 'Execution cancelled or timed out';
+        if (finalResult.isTimeout || signal.aborted || didTimeout) errorReason = 'Execution cancelled or timed out';
 
         let detailMsg = '';
 
@@ -618,7 +628,7 @@ export async function processMessage(
           : `Please check that the ${failingChannel} backend service is reachable and configured correctly.`;
         const errorHtml = isFriendlyUpstreamMsg
           ? `${escapeHtml(stderrStr.trim())}`
-          : `${ICONS.error} <b>${errorReason}</b> (exit code: ${finalResult.exitCode}). ${signal.aborted || finalResult.isTimeout ? 'Task was cancelled or timed out (possibly by the system watchdog or the user).' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : channelHint)}${detailMsg}`;
+          : `${ICONS.error} <b>${errorReason}</b> (exit code: ${finalResult.exitCode}). ${signal.aborted || finalResult.isTimeout || didTimeout ? 'Task was cancelled or timed out (possibly by the system watchdog or the user).' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : channelHint)}${detailMsg}`;
         if (currentMessageId) {
           try {
             await reply.edit(currentMessageId, errorHtml);
