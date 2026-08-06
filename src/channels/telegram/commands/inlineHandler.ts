@@ -648,7 +648,7 @@ export async function findNewImageArtifacts(conversationId: string, turnStartTim
 /** Renders the compare picker (selection screen) markdown for a /v result. */
 function renderComparePicker(cmp: CompareContext): string {
   const displayPrompt = cmp.prompt.length > 300 ? cmp.prompt.slice(0, 300) + '...' : cmp.prompt;
-  const picked = cmp.selectedIdx.map((idx, i) => `**${i + 1}.** ${cmp.candidates[idx]}`).join('\n');
+  const picked = cmp.selectedIdx.map((idx, i) => `**${i + 1}.** ${displayModelName(cmp.candidates[idx])}`).join('\n');
   const pickedBlock = picked ? `\n✅ **Selected models:**\n${picked}\n` : '';
 
   if (cmp.currentPage === 0) {
@@ -669,7 +669,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
 
   // Add selected models display (compact, no buttons)
   if (cmp.selectedIdx.length > 0) {
-    rows.push([{ text: `Selected ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}: ${cmp.selectedIdx.map(i => cmp.candidates[i].slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
+    rows.push([{ text: `Selected ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}: ${cmp.selectedIdx.map(i => displayModelName(cmp.candidates[i]).slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
   }
 
   if (cmp.currentPage === 0) {
@@ -699,7 +699,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
   for (let i = startIdx; i < endIdx; i++) {
     if (cmp.selectedIdx.includes(i)) continue;
     const model = cmp.candidates[i];
-    const display = model.length > 20 ? model.slice(0, 20) + '…' : model;
+    const display = displayModelName(model).length > 20 ? displayModelName(model).slice(0, 20) + '…' : displayModelName(model);
     row.push({ text: display, callback_data: `inline_cmp_pick:${cmp.resultId}:${i}` });
     if (row.length >= 2) {
       rows.push(row);
@@ -889,7 +889,7 @@ export function registerInlineHandler(
         return;
       }
       cmp.selectedIdx.push(idx);
-      await ctx.answerCallbackQuery({ text: `✅ Selected ${cmp.candidates[idx]}`, show_alert: true }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: `✅ Selected ${displayModelName(cmp.candidates[idx])}`, show_alert: true }).catch(() => {});
       await ctx.api.raw.editMessageText({
         inline_message_id: inlineMessageId,
         rich_message: { markdown: renderComparePicker(cmp) },
