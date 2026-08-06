@@ -25,6 +25,7 @@
     "moduleResolution": "nodenext",
     "target": "es2022",
     "outDir": "dist",
+    "rootDir": "src",
     "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "types": ["node", "vitest/globals"]
   },
