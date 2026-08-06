@@ -656,7 +656,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
 
   if (cmp.currentPage === 0) {
     // Cover mode: ZERO model buttons on page 0 for maximum privacy
-    rows.push([{ text: '🚀 Default group compare (Opus + R1 + Gemini)', callback_data: `inline_cmp_default:${cmp.resultId}` }]);
+    rows.push([{ text: '🚀 Default group compare (Opus + Gemini Pro + DeepSeek)', callback_data: `inline_cmp_default:${cmp.resultId}` }]);
     rows.push([{ text: '▶️ Browse/select models (full list)', callback_data: `inline_cmp_page:${cmp.resultId}:1` }]);
     if (cmp.selectedIdx.length >= 2) {
       rows.push([{ text: '🚀 Start comparison', callback_data: `inline_cmp_start:${cmp.resultId}` }]);
@@ -947,9 +947,26 @@ export function registerInlineHandler(
         compareContexts.set(resultId, cmp);
       }
       const activeCmp = cmp!;
-      activeCmp.selectedIdx = [0, 1, 2].filter(i => i < activeCmp.candidates.length);
-      if (activeCmp.selectedIdx.length < 2) {
-        activeCmp.selectedIdx = activeCmp.candidates.map((_, i) => i).slice(0, 3);
+      const preferred = [
+        activeCmp.candidates[0], // First model (Opus)
+        'Web2API: Gemini 3.1 Pro Enhanced',
+        'DeepSeek: Flash Thinking Search'
+      ];
+      const selectedIndices: number[] = [];
+      for (const modelName of preferred) {
+        if (!modelName) continue;
+        const idx = activeCmp.candidates.indexOf(modelName);
+        if (idx !== -1) {
+          selectedIndices.push(idx);
+        }
+      }
+      if (selectedIndices.length >= 2) {
+        activeCmp.selectedIdx = selectedIndices.slice(0, 3);
+      } else {
+        activeCmp.selectedIdx = [0, 1, 2].filter(i => i < activeCmp.candidates.length);
+        if (activeCmp.selectedIdx.length < 2) {
+          activeCmp.selectedIdx = activeCmp.candidates.map((_, i) => i).slice(0, 3);
+        }
       }
       const models = activeCmp.selectedIdx.map((idx: number) => activeCmp.candidates[idx]);
       await ctx.answerCallbackQuery({ text: '🚀 Starting default top-tier comparison...' }).catch(() => {});
