@@ -203,6 +203,8 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
     let isTimeout = false;
+    // Prevent close handler from executing DB side-effects after abort already settled the promise
+    let settled = false;
 
     const cleanEnv: Record<string, string | undefined> = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', CI: '1' };
     delete cleanEnv['ANTIGRAVITY_AGENT'];
@@ -284,13 +286,14 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     // Kill agy when the AbortController fires
     signal?.addEventListener('abort', () => {
       isTimeout = true;
+      settled = true;
       logger.debug('[agyCli] Aborting — sending SIGINT to agy process');
       child.kill('SIGINT');
     });
 
     child.on('error', err => {
       logger.error(`[agyCli] Spawn error: ${err.message}`);
-      reject(err);
+      if (!settled) { settled = true; reject(err); }
     });
 
     child.on('close', async (code, signal) => {
@@ -309,6 +312,13 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       const exitCode = code ?? 1;
       const sigStr = signal ? String(signal) : undefined;
       logger.debug(`[agyCli] Process exited with code ${exitCode} (signal: ${sigStr}). duration: ${durationMs}ms, stderr: ${errBuf.slice(0, 200)}`);
+
+      // If abort already settled the promise, skip expensive DB side-effects
+      if (settled) {
+        resolve({ conversationId: conversationId ?? '', output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage: undefined });
+        return;
+      }
+      settled = true;
 
       let resolvedConvId = conversationId ?? '';
 

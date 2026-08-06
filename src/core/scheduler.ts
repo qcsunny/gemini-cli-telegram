@@ -269,7 +269,10 @@ export class ChatScheduler {
   private async saveTasks(): Promise<void> {
     try {
       const data = JSON.stringify(Array.from(this.tasks.values()), null, 2);
-      await fs.writeFile(this.tasksFile, data, 'utf-8');
+      // Atomic write: write to .tmp then rename to prevent data loss on crash mid-write
+      const tmpFile = this.tasksFile + '.tmp';
+      await fs.writeFile(tmpFile, data, 'utf-8');
+      await fs.rename(tmpFile, this.tasksFile);
     } catch (e) {
       logger.error(`Failed to save scheduled tasks: ${e}`);
     }

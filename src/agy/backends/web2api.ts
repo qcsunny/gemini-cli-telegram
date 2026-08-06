@@ -43,7 +43,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
   const url = new URL(`${backendUrl}/chat/completions`);
   const reqOptions: http.RequestOptions = {
     hostname: url.hostname,
-    port: url.port || 80,
+    port: url.port || (url.protocol === 'https:' ? 443 : 80),
     path: url.pathname,
     method: 'POST',
     headers: {
@@ -122,6 +122,12 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
           const maxMessages = getTuningConfig().maxHistoryMessages;
           const trimmed = history.length > maxMessages ? history.slice(history.length - maxMessages) : history;
           web2apiHistories.set(convId, trimmed);
+          // BUG-fix: Prevent unbounded Map growth (OOM risk). Evict oldest entry
+          // when the map exceeds 500 active conversations.
+          if (web2apiHistories.size > 500) {
+            const firstKey = web2apiHistories.keys().next().value;
+            if (firstKey !== undefined) web2apiHistories.delete(firstKey);
+          }
         }
         // Persist to SQLite for restart survival
         saveMessage(convId, 'user', prompt, 'web2api');

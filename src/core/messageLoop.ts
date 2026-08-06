@@ -750,9 +750,10 @@ function parseErrorMessage(reason: string): {
     const channel = extractErrorChannel(reason);
 
     // Build suggestion
-    const suggestion = ERROR_CODE_MAP[errorCode]?.suggestion || ERROR_SEVERITY[errorCode] === 'critical'
-        ? ERROR_CODE_MAP['unknown']?.suggestion || 'Please retry later or downgrade the model'
-        : ERROR_CODE_MAP['unknown']?.suggestion || 'Please retry later';
+    const suggestion = ERROR_CODE_MAP[errorCode]?.suggestion ||
+        (ERROR_SEVERITY[errorCode] === 'critical'
+            ? 'Please retry later or downgrade the model'
+            : 'Please retry later');
 
     return {
         type: errorType,
