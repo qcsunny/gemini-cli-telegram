@@ -11,6 +11,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { logger } from '../../../utils/logger.js';
+import { getDefaultModels } from '../../../config/userConfig.js';
 import {
   parseInlineModelAndPrompt,
   runModelWithFallbackChain,
@@ -64,7 +65,7 @@ async function handlePrivateTask(
   const session = sessionManager.getSession(chatId);
   const availableProjects = sessionManager.getProjectsInConfigOrder() as any[];
   const defaultModel =
-    session?.model || session?.config?.getModel?.() || defaultOptions.model || 'Gemini 3.5 Flash';
+    session?.model || session?.config?.getModel?.() || defaultOptions.model || getDefaultModels()?.taskModel || '';
 
   const parsed = parseInlineModelAndPrompt(`/${task} ${arg}`, defaultModel, availableProjects);
   const targetProjectPath = parsed.projectUsed?.path ?? session?.currentProject?.path ?? defaultOptions.cwd;

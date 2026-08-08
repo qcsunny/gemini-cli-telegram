@@ -441,11 +441,12 @@ export class TelegramBot {
           }
         }
 
-        // answerInlineQuery: dedicated agent + fast retry with 1.5s timeout
+        // answerInlineQuery: dedicated agent + fast retry with 4s timeout
+        // (Telegram's inline answer hard limit is ~10s; 4s×2 = 8s stays inside it)
         if (isInlineAnswer) {
           for (let attempt = 0; attempt < 2; attempt++) {
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 1500);
+            const timer = setTimeout(() => ctrl.abort(), 4000);
             try {
               return await undiciFetch(url, {
                 ...init,
@@ -604,7 +605,7 @@ export class TelegramBot {
       { command: 'new', description: 'Start a fresh session' },
       { command: 'model', description: 'Switch model (starts new session)' },
       { command: 'status', description: 'Show session statistics' },
-      { command: 'save', description: 'Save formatted response to inbox' },
+      { command: 'save', description: 'Save formatted response to answer save dir' },
       { command: 'resume', description: 'List or resume a previous session' },
       { command: 'cancel', description: 'Cancel current operation' },
       { command: 'projects', description: 'Browse and select projects' },

@@ -1,14 +1,14 @@
 {
   "telegramBotToken": "YOUR_BOT_TOKEN",
   "allowedUsers": [123456789],
-  "model": "Gemini 3.5 Flash (Medium)",
+  "model": "Your Default Model Display Name",
   "defaultProject": "Example Project",
   "proxy": "http://127.0.0.1:7890",
-  "notebookPath": "",
   "geminiApiKey": "",
   "deepseekApiKey": "",
   "paths": {
-    "opencodeDb": "/home/user/.local/share/opencode/opencode.db"
+    "opencodeDb": "/home/user/.local/share/opencode/opencode.db",
+    "answerSaveDir": "/home/user/Documents/Obsidian/Inbox"
   },
   "projects": [
     {
@@ -20,16 +20,24 @@
   ],
   "modelsConfig": {
     "tiers": [
-      { "name": "Flagship Reasoning", "priority": 0, "models": ["Claude Opus 4.6 (Thinking)", "DeepSeek: Pro Thinking"] },
-      { "name": "Advanced Reasoning", "priority": 1, "models": ["Web2API: Gemini 3.1 Pro Enhanced", "Gemini 3.1 Pro (High)"] },
-      { "name": "General Purpose", "priority": 2, "models": ["Gemini 3.6 Flash (High)", "Web2API: Gemini 3.6 Flash Thinking"] },
-      { "name": "Light & Fast", "priority": 3, "models": ["Web2API: Gemini Flash Lite"] }
+      { "name": "Your Tier 1 Name", "priority": 0, "models": ["Your Model Display Name A"] },
+      { "name": "Your Tier 2 Name", "priority": 1, "models": ["Your Model Display Name B"] }
     ],
     "routing": {
-      "Web2API: Gemini 3.1 Pro Enhanced": "gemini-3.1-pro-enhanced",
-      "Web2API: Gemini 3.6 Flash": "gemini-3.6-flash",
-      "Web2API: Gemini 3.6 Flash Thinking": "gemini-3.6-flash-thinking",
-      "Web2API: Gemini Flash Lite": "gemini-flash-lite"
+      "Your Model Display Name A": "your-backend-model-id-a",
+      "Your Model Display Name B": "your-backend-model-id-b"
     }
+  },
+  "defaultModels": {
+    "deepseekId": "your-deepseek-backend-model-id",
+    "taskModel": "Your Task Default Model Display Name",
+    "inlineSuggestions": [
+      "Your Model Display Name A",
+      "Your Model Display Name B"
+    ],
+    "compareGroup": [
+      "Your Model Display Name A",
+      "Your Model Display Name B"
+    ]
   }
 }

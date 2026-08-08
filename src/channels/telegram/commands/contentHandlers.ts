@@ -8,9 +8,8 @@ import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
 import type { ReplyContext } from '../../../utils/messageCache.js';
 import { extractThoughtAndContent } from '../../../agy/agyCli.js';
-import { loadUserConfig, getNotebookPath } from '../../../config/userConfig.js';
 import { ICONS, buildMainKeyboard, escapeHtml } from '../ui.js';
-import { htmlToMarkdown, extractTitleFromMarkdown } from './helpers.js';
+import { htmlToMarkdown, extractTitleFromMarkdown, saveMarkdownToAnswerSaveDir } from './helpers.js';
 import { getDb } from '../../../db/index.js';
 import { modelOutputs } from '../../../db/schema.js';
 import { eq, and, desc } from 'drizzle-orm';
@@ -118,53 +117,10 @@ export function registerContentHandlers(
         return;
       }
 
-      // Reassemble the Markdown according to the required Obsidian-friendly structure
-      let reassembledMarkdown = '';
-      if (title) {
-        reassembledMarkdown += `# ${title}\n\n`;
-      }
-      reassembledMarkdown += `${answerMarkdown}\n`;
+      // Save content via shared helper (uses configured answer save dir)
+      const filePath = saveMarkdownToAnswerSaveDir({ title, answerMarkdown, thinkingMarkdown });
 
-      if (thinkingMarkdown.trim()) {
-        reassembledMarkdown += `\n---\n\n<details>\n<summary>🤔 AI Thinking (click to expand)</summary>\n\n${thinkingMarkdown.trim()}\n\n</details>\n`;
-      }
-
-      // Sanitize title for filename: Windows illegal characters are \/:*?"<>|
-      let sanitizedTitle = title.replace(/[\/\\:*?"<>|]/g, '').trim();
-      // Truncate length
-      if (sanitizedTitle.length > 50) {
-        sanitizedTitle = sanitizedTitle.substring(0, 50).trim();
-      }
-      // Replace whitespace/tabs with underscores
-      sanitizedTitle = sanitizedTitle.replace(/\s+/g, '_');
-
-      // Date prefix
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const date = String(now.getDate()).padStart(2, '0');
-      const dateStr = `${year}${month}${date}`;
-
-      let fileName = '';
-      if (!sanitizedTitle) {
-        const timestamp = Math.floor(Date.now() / 1000);
-        fileName = `Untitled_${timestamp}.md`;
-      } else {
-        fileName = `${dateStr}_${sanitizedTitle}.md`;
-      }
-
-      // Resolve notebook path from user config or fallback to a default safe path
-      const userConfig = loadUserConfig();
-      const folderPath = userConfig?.notebookPath || getNotebookPath(userConfig);
-      const filePath = path.join(folderPath, fileName);
-
-      // Ensure directory exists
-      await fsPromises.mkdir(folderPath, { recursive: true });
-
-      // Save content
-      await fsPromises.writeFile(filePath, reassembledMarkdown, 'utf8');
-
-      await ctx.reply(`${ICONS.success} <b>Saved to Notebook</b>\n\nSaved successfully to:\n<code>${escapeHtml(filePath)}</code>`, {
+      await ctx.reply(`${ICONS.success} <b>Saved</b>\n\nSaved successfully to:\n<code>${escapeHtml(filePath)}</code>`, {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });

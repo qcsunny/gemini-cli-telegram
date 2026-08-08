@@ -17,7 +17,7 @@ vi.mock('../../../agy/agyCli.js', () => ({
 }));
 vi.mock('../../../config/userConfig.js', () => ({
   getBrowseRoot: vi.fn().mockReturnValue('/tmp/browse'),
-  getInboxDir: vi.fn().mockReturnValue('/tmp/inbox'),
+  getAnswerSaveDir: vi.fn().mockReturnValue('/tmp/inbox'),
   loadUserConfig: vi.fn().mockReturnValue({}),
 }));
 vi.mock('../../../core/modelRegistry.js', () => ({

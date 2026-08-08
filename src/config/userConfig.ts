@@ -46,6 +46,22 @@ export const modelsConfigSchema = z.object({
   compareDefaults: z.array(z.string()).optional(),
 });
 
+/**
+ * Zod schema for default model names used as runtime fallbacks.
+ * All fields are optional; when absent the callers degrade gracefully
+ * (e.g. empty suggestion list, no extra comparison group).
+ */
+export const defaultModelsSchema = z.object({
+  /** DeepSeek backend API model ID used when routing lookup misses. */
+  deepseekId: z.string().optional(),
+  /** Default model display name for /task runs when nothing else is set. */
+  taskModel: z.string().optional(),
+  /** Extra model display names suggested on inline queries without a model. */
+  inlineSuggestions: z.array(z.string()).optional(),
+  /** Fixed challengers appended after the dynamic first model in default /v group. */
+  compareGroup: z.array(z.string()).optional(),
+});
+
 /** Zod schema for individual project configurations */
 export const projectInfoSchema = z.object({
   id: z.string(),
@@ -61,16 +77,10 @@ export const userConfigSchema = z.object({
   allowedUsers: z.array(z.number()),
   model: z.string().optional(),
   proxy: z.string().optional(),
-  notebookPath: z.string().optional(),
   geminiApiKey: z.string().optional(),
   deepseekApiKey: z.string().optional(),
   /** HTTP health endpoint port (optional). If set, starts a /health HTTP server. */
   healthPort: z.number().optional(),
-  /**
-   * Directory path for the /save command output (optional).
-   * If not set, defaults to ~/Documents/Obsidian/Inbox.
-   */
-  savePath: z.string().optional(),
   /** Solidified project list (id/name/path/description). Kept in the local,
    *  gitignored config so personal directory paths never reach the remote repo. */
   projects: z.array(projectInfoSchema).optional(),
@@ -90,8 +100,6 @@ export const userConfigSchema = z.object({
     errorLog: z.string().optional(),
     /** Process ID file. Default: CONFIG_DIR/daemon.pid */
     pid: z.string().optional(),
-    /** Notebook directory for /save output. Default: CONFIG_DIR/notebook */
-    notebook: z.string().optional(),
     /** Scheduled tasks JSON file. Default: CONFIG_DIR/scheduled-tasks.json */
     scheduledTasks: z.string().optional(),
     /** Legacy agy conversations JSON file. Default: CONFIG_DIR/agy-conversations.json */
@@ -102,8 +110,8 @@ export const userConfigSchema = z.object({
     opencodeDb: z.string().optional(),
     /** Default browse root directory for /project_browse. Default: ~/Documents */
     browseRoot: z.string().optional(),
-    /** Default inbox directory for saving responses. Default: ~/Documents/Obsidian/Inbox */
-    inboxDir: z.string().optional(),
+    /** Directory where /save and save-latest write markdown answer files. Required. */
+    answerSaveDir: z.string().optional(),
   }).optional(),
   /**
    * Custom model fallback order (optional). When set, overrides the hardcoded
@@ -120,6 +128,12 @@ export const userConfigSchema = z.object({
    * degrades tier-by-tier rather than model-by-model.
    */
   modelsConfig: modelsConfigSchema.optional(),
+  /**
+   * Default model names used as runtime fallbacks (optional).
+   * All fields are optional; omitted fields degrade gracefully instead of
+   * falling back to hardcoded model names.
+   */
+  defaultModels: defaultModelsSchema.optional(),
   /**
    * Backend service URLs for local proxy services.
    * Foreign users can skip by omitting the key entirely (the corresponding
@@ -228,6 +242,11 @@ export const userConfigSchema = z.object({
  */
 export type UserConfig = z.infer<typeof userConfigSchema>;
 
+/**
+ * Default model names block inferred from Zod schema.
+ */
+export type DefaultModels = z.infer<typeof defaultModelsSchema>;
+
 // ── Path Resolvers ─────────────────────────────────────────────────────────
 // All paths resolve from config.json `paths.*` fields, falling back to CONFIG_DIR.
 
@@ -245,10 +264,6 @@ export function getLogPath(config?: UserConfig | null): string {
 
 export function getPidPath(config?: UserConfig | null): string {
   return resolvePath(config?.paths?.pid, 'daemon.pid');
-}
-
-export function getNotebookPath(config?: UserConfig | null): string {
-  return resolvePath(config?.paths?.notebook, 'notebook');
 }
 
 export function getScheduledTasksPath(config?: UserConfig | null): string {
@@ -331,6 +346,14 @@ export function getDefaultProjectName(): string | null {
   return loadUserConfig()?.defaultProject ?? null;
 }
 
+/**
+ * Returns the configured default model names block (config.json "defaultModels").
+ * Returns null when unset so callers degrade gracefully.
+ */
+export function getDefaultModels(): DefaultModels | null {
+  return loadUserConfig()?.defaultModels ?? null;
+}
+
 const BROWSE_ROOT_DEFAULT = path.join(os.homedir(), 'Documents');
 
 export function getBrowseRoot(): string {
@@ -351,14 +374,12 @@ export function getOpenCodeDbPath(): string {
   return OPENCODE_DB_DEFAULT;
 }
 
-const OBSIDIAN_INBOX_DEFAULT = path.join(os.homedir(), 'Documents', 'Obsidian', 'Inbox');
-const GENERIC_INBOX_DEFAULT = path.join(os.homedir(), 'Documents', 'Inbox');
-
-export function getInboxDir(): string {
-  const cfg = loadUserConfig();
-  if (cfg?.paths?.inboxDir || cfg?.savePath) return cfg.paths?.inboxDir || cfg.savePath!;
-  if (fs.existsSync(OBSIDIAN_INBOX_DEFAULT)) return OBSIDIAN_INBOX_DEFAULT;
-  return GENERIC_INBOX_DEFAULT;
+export function getAnswerSaveDir(): string {
+  const answerSaveDir = loadUserConfig()?.paths?.answerSaveDir;
+  if (!answerSaveDir) {
+    throw new Error('paths.answerSaveDir is not configured. Set it in config.json (e.g. "~/Documents/Obsidian/Inbox").');
+  }
+  return answerSaveDir;
 }
 
 /**

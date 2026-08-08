@@ -5,18 +5,17 @@
  */
 
 import { Bot, InlineKeyboard } from 'grammy';
-import * as fs from 'node:fs';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
-import { getBrowseRoot, getInboxDir, getDefaultProjectName, loadUserConfig } from '../../../config/userConfig.js';
+import { getBrowseRoot, getDefaultProjectName, loadUserConfig } from '../../../config/userConfig.js';
 import { loadModelsConfig } from '../../../core/modelRegistry.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { loadMessages } from '../../../agy/messageStore.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
-import { extractTitleFromMarkdown } from './helpers.js';
+import { extractTitleFromMarkdown, saveMarkdownToAnswerSaveDir } from './helpers.js';
 import { PROJECTS_PER_PAGE } from './projectHandlers.js';
 
 export function registerCallbackRouter(
@@ -220,16 +219,8 @@ export function registerCallbackRouter(
           const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
           if (lastAssistant) {
             const msgTitle = extractTitleFromMarkdown(lastAssistant.content);
-            let reassembled = '';
-            if (msgTitle) reassembled += `# ${msgTitle}\n\n`;
-            reassembled += lastAssistant.content;
-            const dateStr = new Date().toISOString().slice(0, 10);
-            const sanitizeTitle = (msgTitle || 'untitled').replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, '_').substring(0, 30);
-            const filename = `${dateStr}_${sanitizeTitle}.md`;
-            const inboxDir = getInboxDir();
-            if (!fs.existsSync(inboxDir)) fs.mkdirSync(inboxDir, { recursive: true });
-            fs.writeFileSync(`${inboxDir}/${filename}`, reassembled, 'utf8');
-            await ctx.reply(`${ICONS.save} <b>Saved Latest Response</b>\n\nFile: <code>${escapeHtml(filename)}</code>`, { parse_mode: 'HTML' });
+            const filePath = saveMarkdownToAnswerSaveDir({ title: msgTitle, answerMarkdown: lastAssistant.content });
+            await ctx.reply(`${ICONS.save} <b>Saved Latest Response</b>\n\nFile: <code>${escapeHtml(filePath)}</code>`, { parse_mode: 'HTML' });
             return;
           }
         }
@@ -240,24 +231,9 @@ export function registerCallbackRouter(
         const answerMarkdown = lastContext.answerMarkdown;
         const thinkingMarkdown = lastContext.thinkingMarkdown;
         const title = lastContext.title || extractTitleFromMarkdown(answerMarkdown);
-        let reassembledMarkdown = '';
-        if (title) reassembledMarkdown += `# ${title}\n\n`;
-        if (thinkingMarkdown && thinkingMarkdown.trim()) {
-          reassembledMarkdown += `<details>\n<summary>Thinking Process</summary>\n\n${thinkingMarkdown.trim()}\n\n</details>\n\n`;
-        }
-        reassembledMarkdown += answerMarkdown;
+        const filePath = saveMarkdownToAnswerSaveDir({ title, answerMarkdown, thinkingMarkdown });
 
-        const dateStr = new Date().toISOString().slice(0, 10);
-        const sanitizeTitle = (title || 'untitled').replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, '_').substring(0, 30);
-        const filename = `${dateStr}_${sanitizeTitle}.md`;
-        const inboxDir = getInboxDir();
-        if (!fs.existsSync(inboxDir)) {
-          fs.mkdirSync(inboxDir, { recursive: true });
-        }
-        const filePath = `${inboxDir}/${filename}`;
-        fs.writeFileSync(filePath, reassembledMarkdown, 'utf8');
-
-        await ctx.reply(`${ICONS.save} <b>Saved Latest Response</b>\n\nFile: <code>${escapeHtml(filename)}</code>`, { parse_mode: 'HTML' });
+        await ctx.reply(`${ICONS.save} <b>Saved Latest Response</b>\n\nFile: <code>${escapeHtml(filePath)}</code>`, { parse_mode: 'HTML' });
       } catch (e) {
         logger.error(`Error saving message via callback: ${e}`);
         await ctx.reply(`${ICONS.error} <b>Failed to save:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
