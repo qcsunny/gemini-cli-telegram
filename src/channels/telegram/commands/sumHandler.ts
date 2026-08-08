@@ -17,7 +17,8 @@ import { getDefaultModel, getSummarizationConfig } from '../../../config/userCon
 import { logger } from '../../../utils/logger.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { runModelWithFallbackChain } from './inlineHandler.js';
-import { markdownToIR, renderIRToHtml } from '../formatter.js';
+import { buildChannelReply } from '../bot/channelReply.js';
+import type { SessionManager } from '../../../core/session.js';
 
 const SUMMARY_INSTRUCTION =
   'Summarize the following chat messages concisely and list the key points. ' +
@@ -128,21 +129,23 @@ export function trimChatMessages(chatId: number, keepCount: number): void {
 
 export function registerSumHandler(
   bot: Bot,
-  _sessionManager: unknown,
+  sessionManager: SessionManager,
   defaultOptions: { cwd?: string; proxy?: string },
 ): void {
   bot.command('sum', async (ctx: Context) => {
-    await handleSum(ctx, defaultOptions);
+    await handleSum(ctx, sessionManager, defaultOptions);
   });
 }
 
 async function handleSum(
   ctx: Context,
+  sessionManager: SessionManager,
   defaultOptions: { cwd?: string; proxy?: string },
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
+  const session = await sessionManager.getOrCreate(chatId, defaultOptions);
   const config = getSummarizationConfig();
   const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
 
@@ -217,12 +220,9 @@ async function handleSum(
       : `**📋 Chat Summary (last ${messages.length} messages)**`;
 
     const replyMarkdown = `${header}\n\n${cleanOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
-    const replyHtml = renderIRToHtml(markdownToIR(replyMarkdown, false));
-
-    await ctx.reply(replyHtml, { parse_mode: 'HTML' }).catch(async (err) => {
-      logger.warn(`[sum] Failed to send HTML summary: ${err.message || err}. Falling back to plain text.`);
-      await ctx.reply(replyMarkdown).catch(() => {});
-    });
+    const parseMode = session?.settings?.telegram?.parseMode || 'RichText';
+    const replyObj = buildChannelReply(ctx, chatId, parseMode, session, ctx.message?.message_id);
+    await replyObj.send(replyMarkdown);
     logger.info(`[sum] Delivered summary (${cleanOutput.length} chars) to chatId=${chatId}`);
   } catch (e) {
     logger.error(`[sum] Failed for chatId=${chatId}: ${e}`);

@@ -16,6 +16,15 @@ import type { Message } from '@grammyjs/types';
 vi.mock('../../../config/userConfig.js', () => ({
   getDefaultModel: () => 'Test Model',
   getSummarizationConfig: () => ({ defaultCount: 100, maxCount: 500 }),
+  getTuningConfig: () => ({
+    cacheTtlMs: 86400000,
+    cacheMaxSize: 1000,
+    debounceIntervalMs: 350,
+    modelRunHardTimeoutMs: 900000,
+    modelRunInactivityMs: 600000,
+    retriesPerModel: 3,
+    maxHistoryMessages: 40,
+  }),
 }));
 
 function makeMsg(overrides: Partial<Message>): Message {
