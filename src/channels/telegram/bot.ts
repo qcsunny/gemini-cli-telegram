@@ -345,6 +345,36 @@ interface TelegramMediaInfo {
   fileName?: string;
 }
 
+/** Extract media info from a Telegram message if it carries one. */
+function extractMediaFromMessage(
+  msg: any
+): {
+  type: TelegramMediaType;
+  fileId: string;
+  mimeType: string;
+  fileName?: string;
+  caption?: string;
+} | undefined {
+  if (!msg) return undefined;
+  if (msg.photo && msg.photo.length > 0) {
+    const photo = msg.photo[msg.photo.length - 1];
+    return { type: 'photo', fileId: photo.file_id, mimeType: 'image/jpeg', caption: msg.caption };
+  }
+  if (msg.voice) {
+    return { type: 'voice', fileId: msg.voice.file_id, mimeType: msg.voice.mime_type || 'audio/ogg', caption: msg.caption };
+  }
+  if (msg.audio) {
+    return { type: 'audio', fileId: msg.audio.file_id, mimeType: msg.audio.mime_type || 'audio/mpeg', caption: msg.caption, fileName: msg.audio.file_name };
+  }
+  if (msg.video) {
+    return { type: 'video', fileId: msg.video.file_id, mimeType: msg.video.mime_type || 'video/mp4', caption: msg.caption, fileName: msg.video.file_name };
+  }
+  if (msg.document) {
+    return { type: 'document', fileId: msg.document.file_id, mimeType: msg.document.mime_type || 'application/octet-stream', caption: msg.caption, fileName: msg.document.file_name };
+  }
+  return undefined;
+}
+
 /**
  * Extract file ID, MIME type, and optional file name from a Telegram media message.
  */
@@ -932,7 +962,33 @@ export class TelegramBot {
         logger.info(`[ReplyContext] Augmented prompt with quoted/reply text (len=${cleanRef.length}) for chatId=${chatId}`);
       }
 
-      await this.processUserMessage(ctx, { text: promptText }, ctx.message.message_id);
+      // Check if the replied message contains a media file (photo/video/etc.)
+      const repliedMedia = extractMediaFromMessage(replyToMessage);
+      let tempFilePath: string | undefined;
+
+      try {
+        const input: MultimodalInput = { text: promptText };
+        if (repliedMedia) {
+          logger.info(`[ReplyMedia] Replying to media type=${repliedMedia.type} in chatId=${chatId}`);
+          tempFilePath = await downloadTelegramFile(ctx, repliedMedia.fileId, this.proxyAgent);
+          input.media = [
+            {
+              type: repliedMedia.type,
+              path: tempFilePath,
+              mimeType: repliedMedia.mimeType,
+              fileName: repliedMedia.fileName,
+            },
+          ];
+        }
+
+        await this.processUserMessage(ctx, input, ctx.message.message_id);
+      } finally {
+        if (tempFilePath) {
+          await fs.unlink(tempFilePath).catch((e) =>
+            logger.warn(`Failed to clean up temp file ${tempFilePath}: ${e}`),
+          );
+        }
+      }
     });
 
     this.bot.on('message:photo', async (ctx) => {
