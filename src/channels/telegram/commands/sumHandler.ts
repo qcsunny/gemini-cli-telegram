@@ -47,17 +47,21 @@ export function persistChatMessage(msg: Message | undefined, now = new Date().to
       .onConflictDoNothing()
       .run();
 
-    // Asynchronously trim old messages to keep database size bounded
-    try {
-      const config = getSummarizationConfig();
-      const keepCount = Math.max(1000, (config.maxCount || 200) * 2);
-      Promise.resolve().then(() => {
-        trimChatMessages(msg.chat.id, keepCount);
-      }).catch((e) => {
-        logger.warn(`[sumHandler] Async trim execution error: ${e}`);
-      });
-    } catch (e) {
-      logger.warn(`[sumHandler] Failed to initiate async trim: ${e}`);
+    // Asynchronously trim old messages to keep database size bounded.
+    // To avoid high CPU overhead and DB locking on active group chats,
+    // we only execute the trim subquery with a 1% probability (roughly once every 100 messages).
+    if (Math.random() < 0.01) {
+      try {
+        const config = getSummarizationConfig();
+        const keepCount = Math.max(500000, (config.maxCount || 200) * 2);
+        Promise.resolve().then(() => {
+          trimChatMessages(msg.chat.id, keepCount);
+        }).catch((e) => {
+          logger.warn(`[sumHandler] Async trim execution error: ${e}`);
+        });
+      } catch (e) {
+        logger.warn(`[sumHandler] Failed to initiate async trim: ${e}`);
+      }
     }
   } catch (e) {
     logger.warn(`[sumHandler] Failed to persist chat message: ${e}`);
