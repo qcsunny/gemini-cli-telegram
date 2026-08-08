@@ -216,7 +216,8 @@ async function handleSum(
     const thinkingCount = result.usage?.thinking || 0;
 
     if (inCount > 0 || cachedCount > 0) {
-      let inText = `📥 In: ${inCount}`;
+      const totalIn = inCount + cachedCount;
+      let inText = `📥 In: ${totalIn}`;
       if (cachedCount > 0) {
         inText += ` (Cached: ${cachedCount})`;
       }

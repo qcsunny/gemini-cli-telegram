@@ -254,8 +254,11 @@ export function parseFooterMarker(marker: string): string[] {
     out.push(displayModelName(model));
   }
   if (input || output) {
-    let s = `In: ${input ?? ''}`;
-    if (cached && cached !== '0') s += ` (Cached: ${cached})`;
+    const inVal = parseInt(input ?? '0', 10) || 0;
+    const cachedVal = parseInt(cached ?? '0', 10) || 0;
+    const totalIn = inVal + cachedVal;
+    let s = `In: ${totalIn}`;
+    if (cachedVal > 0) s += ` (Cached: ${cached})`;
     s += ` · Out: ${output ?? ''}`;
     if (thinking && thinking !== '0') s += ` (Reasoning: ${thinking})`;
     out.push(s);
