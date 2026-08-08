@@ -37,7 +37,7 @@ function getDefaultModels(): string[] {
 
 let _cachedAvailableModels: string[] | undefined;
 
-export function clearAvailableModelsCache(): void {
+function clearAvailableModelsCache(): void {
   _cachedAvailableModels = undefined;
   _defaultModels = undefined;
   clearModelOrderCache();

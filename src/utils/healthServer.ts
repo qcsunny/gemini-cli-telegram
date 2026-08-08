@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 let server: http.Server | null = null;
 const startTime = Date.now();
 
-export interface HealthStatus {
+interface HealthStatus {
   status: 'ok';
   uptime: number;
   uptimeHuman: string;

@@ -6,7 +6,7 @@
 
 import { restoreAllHistories } from './messageStore.js';
 
-export interface Web2ApiMessage {
+interface Web2ApiMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt?: string;

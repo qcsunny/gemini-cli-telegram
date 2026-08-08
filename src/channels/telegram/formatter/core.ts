@@ -19,7 +19,7 @@ export const TELEGRAM_RICH_MAX_LENGTH = 30000;
 
 // ── Types ──
 
-export type MarkdownStyle =
+type MarkdownStyle =
   | 'bold'
   | 'italic'
   | 'strikethrough'
@@ -29,9 +29,9 @@ export type MarkdownStyle =
   | 'blockquote'
   | 'spoiler';
 
-export type StyleSpan = { start: number; end: number; style: MarkdownStyle; info?: string };
-export type LinkSpan = { start: number; end: number; href: string };
-export type MarkdownIR = { text: string; styles: StyleSpan[]; links: LinkSpan[]; tables?: string[] };
+type StyleSpan = { start: number; end: number; style: MarkdownStyle; info?: string };
+type LinkSpan = { start: number; end: number; href: string };
+type MarkdownIR = { text: string; styles: StyleSpan[]; links: LinkSpan[]; tables?: string[] };
 
 export type MarkdownToken = {
   type: string;
@@ -60,7 +60,7 @@ type RenderState = RenderTarget & {
   listStack: ListState[];
 };
 
-export function getAlignAttr(token: MarkdownToken): string | null {
+function getAlignAttr(token: MarkdownToken): string | null {
   const style = getAttr(token, 'style');
   if (style) {
     if (style.includes('text-align:center') || style.includes('text-align: center')) return 'center';
@@ -76,11 +76,11 @@ export function getAlignAttr(token: MarkdownToken): string | null {
 // ── HTML escaping ──
 // escapeHtml is imported from ui.ts; escapeHtmlAttr extends it with quote escaping.
 
-export function escapeMarkdownV2(text: string): string {
+function escapeMarkdownV2(text: string): string {
   return text.replace(/([\\_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 }
 
-export function escapeHtmlAttr(text: string): string {
+function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, '&quot;');
 }
 
@@ -218,7 +218,7 @@ function handleLinkClose(state: RenderState) {
 
 const MAX_TOKEN_DEPTH = 64;
 
-export function renderTokens(tokens: MarkdownToken[], state: RenderState, depth = 0): void {
+function renderTokens(tokens: MarkdownToken[], state: RenderState, depth = 0): void {
   if (depth > MAX_TOKEN_DEPTH) return;
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
@@ -516,7 +516,7 @@ export function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
 
 // ── IR → Telegram HTML ──
 
-export const STYLE_ORDER: MarkdownStyle[] = [
+const STYLE_ORDER: MarkdownStyle[] = [
   'blockquote',
   'code_block',
   'code',
@@ -527,9 +527,9 @@ export const STYLE_ORDER: MarkdownStyle[] = [
   'spoiler',
 ];
 
-export const STYLE_RANK = new Map(STYLE_ORDER.map((s, i) => [s, i]));
+const STYLE_RANK = new Map(STYLE_ORDER.map((s, i) => [s, i]));
 
-export const STYLE_MARKERS: Record<
+const STYLE_MARKERS: Record<
   MarkdownStyle,
   { open: string; close: string }
 > = {

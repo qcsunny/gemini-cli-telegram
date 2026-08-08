@@ -39,7 +39,7 @@ export interface ScheduledTask {
 }
 
 /** Callback signature invoked when a scheduled task triggers */
-export type TaskCallback = (task: ScheduledTask) => Promise<void>;
+type TaskCallback = (task: ScheduledTask) => Promise<void>;
 
 /**
  * Persistent task scheduler for scheduled chats.

@@ -26,7 +26,7 @@ export interface MultimodalInput {
 /**
  * Downloaded media attachment details for prompt input processing.
  */
-export interface MediaPart {
+interface MediaPart {
   type: 'photo' | 'voice' | 'audio' | 'video' | 'document';
   path: string; // Local path to the downloaded file
   mimeType?: string; // Optional: detected mime type
@@ -79,7 +79,7 @@ export interface ProjectInfo {
 /**
  * Thinking step for reasoning process
  */
-export interface ThinkingStep {
+interface ThinkingStep {
   id: string;
   type: 'thinking' | 'tool_call' | 'tool_result' | 'analysis' | 'complete';
   content: string;
@@ -92,7 +92,7 @@ export interface ThinkingStep {
  * Compatibility config object attached to each DaemonSession.
  * Provides backward-compatible accessors for legacy command handlers.
  */
-export interface SessionConfig {
+interface SessionConfig {
   getModel: () => string;
   setModel: (modelName: string, quiet?: boolean) => void;
   getTargetDir: () => string;
@@ -105,7 +105,7 @@ export interface SessionConfig {
 /**
  * Autopilot configuration for self-reply mode
  */
-export interface AutopilotConfig {
+interface AutopilotConfig {
   /** Goal/condition to achieve */
   goal: string;
   /** Maximum number of self-replies */
@@ -125,11 +125,11 @@ export interface AutopilotConfig {
 /**
  * Settings block for telegram chat (such as parseMode)
  */
-export interface TelegramSettings {
+interface TelegramSettings {
   parseMode?: 'HTML' | 'MarkdownV2' | 'RichText';
 }
 
-export interface SessionSettings {
+interface SessionSettings {
   telegram?: TelegramSettings;
 }
 

@@ -24,7 +24,7 @@ import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory } from 
 import { loadUserConfig, saveUserConfig, getDefaultModel, getDefaultProjectName, CONFIG_DIR } from '../config/userConfig.js';
 
 /** Factory function type for building chat-bound media sender functions */
-export type SendMediaFactory = (chatId: number) => SendMediaFn;
+type SendMediaFactory = (chatId: number) => SendMediaFn;
 
 /**
  * Utility class for discovering, caching, and managing local software projects/workspaces.

@@ -16,7 +16,7 @@ import { logger } from '../../../utils/logger.js';
 import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/pricing.js';
 import { ICONS } from '../ui.js';
 
-export interface InlineHandlerOptions {
+interface InlineHandlerOptions {
   allowedUsers?: number[];
 }
 
@@ -55,14 +55,9 @@ const regenerateContexts = new Map<string, RegenerateContext>();
 /** In-progress /v multi-model comparison state, keyed by resultId. */
 const compareContexts = new Map<string, CompareContext>();
 
-/** Check whether a resultId belongs to a multi-model comparison task. */
-export function isCompareInlineResult(resultId: string): boolean {
-  return compareContexts.has(resultId) || regenerateContexts.get(resultId)?.task === 'compare';
-}
-
 import * as fsSync from 'node:fs';
 
-export interface InlinePage {
+interface InlinePage {
   markdown?: string;
   blocks?: RichBlock[];
 }
@@ -131,7 +126,7 @@ function deleteInlinePages(resultId: string): void {
 }
 
 /** Max models user can pick for a /v multi-model comparison. */
-export const MAX_COMPARE_MODELS = 3;
+const MAX_COMPARE_MODELS = 3;
 /** Max candidate models offered per page in the picker. */
 const COMPARE_MODELS_PER_PAGE = 4;
 
@@ -361,7 +356,7 @@ export const IMAGE_TASK_INSTRUCTION =
 export const MAX_COLLAGE_IMAGES = 10;
 
 /** Max model-suggestion cards appended to inline query results. */
-export const MAX_MODEL_SUGGESTIONS = 5;
+const MAX_MODEL_SUGGESTIONS = 5;
 
 /** Fallback model suggestions shown when no model keyword matched. */
 function getFallbackModelSuggestions(): string[] {
@@ -497,7 +492,7 @@ export function parseInlineModelAndPrompt(
   };
 }
 
-export interface FallbackRunResult {
+interface FallbackRunResult {
   result: AgyRunResult | null;
   modelUsed: string;
   isFallback: boolean;

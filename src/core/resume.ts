@@ -18,7 +18,7 @@ import { getAgyDataDir } from '../config/userConfig.js';
 /**
  * Metadata entry representing a resumable agy session in UI lists.
  */
-export interface SessionListEntry {
+interface SessionListEntry {
   index: number;
   id: string;
   fileName: string;

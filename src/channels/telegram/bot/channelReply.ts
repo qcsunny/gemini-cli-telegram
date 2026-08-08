@@ -53,7 +53,7 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
  * (plus a short hint) is streamed; the full folded content is restored at
  * finalize (editRich → buildFinalBlocks).
  */
-export function getStreamingMarkdown(text: string | StructuredMessage): string {
+function getStreamingMarkdown(text: string | StructuredMessage): string {
   const strip = (s: string) => s
     .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
     .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')

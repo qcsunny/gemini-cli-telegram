@@ -226,7 +226,7 @@ export function splitTable(tableHtml: string, maxLength: number): string[] {
   return chunks;
 }
 
-export function splitMathBlock(mathBlockHtml: string, maxLength: number): string[] {
+function splitMathBlock(mathBlockHtml: string, maxLength: number): string[] {
   const match = mathBlockHtml.match(/<tg-math-block>([\s\S]*?)<\/tg-math-block>/i);
   if (!match) return [mathBlockHtml];
   const content = match[1];
@@ -342,7 +342,7 @@ export function splitTextWithOpenTags(htmlText: string, maxLength: number): stri
   return chunks.map(c => c.trim()).filter(Boolean);
 }
 
-export function chunkAnswerBody(htmlText: string, maxLength: number): string[] {
+function chunkAnswerBody(htmlText: string, maxLength: number): string[] {
   if (htmlText.length <= maxLength) {
     return [htmlText];
   }

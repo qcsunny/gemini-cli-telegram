@@ -39,10 +39,7 @@
     "markdown-it": "^14.1.1",
     "markdown-it-cjk-friendly": "^2.0.2",
     "pino": "^10.3.1",
-    "strip-ansi": "^7.1.0",
-    "strip-json-comments": "^3.1.1",
     "undici": "^8.5.0",
-    "uuid": "^14.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -4,7 +4,7 @@
  * Handles multiple tag variants: <thought>, <thinking>, [thought:...], and canonical <think>.
  */
 
-export interface ParsedBlock {
+interface ParsedBlock {
   type: 'thought' | 'thinking' | 'think' | 'bracket';
   startTagIndex: number;
   contentStartIndex: number;
