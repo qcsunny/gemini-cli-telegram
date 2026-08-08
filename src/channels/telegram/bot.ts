@@ -809,6 +809,15 @@ export class TelegramBot {
       }
     });
 
+    // Global persistence middleware — captures all text/media messages for chat summary
+    // before the whitelist middleware blocks unauthorized users.
+    this.bot.use(async (ctx, next) => {
+      if (ctx.message) {
+        persistChatMessage(ctx.message);
+      }
+      await next();
+    });
+
     // Sequentialize: messages in the same chat run serially,
     // but /cancel gets its own key so it bypasses the queue.
     this.bot.use(sequentialize(getSequentialKey));
