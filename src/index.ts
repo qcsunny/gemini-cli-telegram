@@ -30,7 +30,7 @@ export { listAvailableSessions, resumeSession } from './core/resume.js';
 /**
  * Startup configuration options for starting the Telegram daemon process.
  */
-export interface DaemonOptions extends TelegramBotOptions {
+interface DaemonOptions extends TelegramBotOptions {
   token: string;
 }
 

@@ -44,7 +44,7 @@ export { runOpenCode } from './backends/opencode.js';
 let _agyPath: string | undefined;
 
 /** Path to the agy binary — prefer explicit env var, then search PATH, then common fallbacks. Cached after first resolution. */
-export function getAgyPath(): string {
+function getAgyPath(): string {
   if (_agyPath) return _agyPath;
   if (process.env['AGY_PATH']) {
     _agyPath = process.env['AGY_PATH'];

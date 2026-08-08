@@ -25,7 +25,7 @@ export const CONFIG_DIR = PROJECT_ROOT;
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
 /** Zod schema for a single model tier in the tiered fallback system */
-export const modelTierSchema = z.object({
+const modelTierSchema = z.object({
   /** Display name for this tier (e.g. "旗舰推理", "高级推理", "通用能力", "轻量快速") */
   name: z.string(),
   /** Priority level: 0 = highest priority (tried first) */
@@ -35,7 +35,7 @@ export const modelTierSchema = z.object({
 });
 
 /** Zod schema for the complete models configuration (tiers + routing) */
-export const modelsConfigSchema = z.object({
+const modelsConfigSchema = z.object({
   /** Channel display order for /models list (e.g. ["agy","deepseek","opencode","web2api"]) */
   channelOrder: z.array(z.string()).optional(),
   /** Tiered model groups for structured fallback */
@@ -51,7 +51,7 @@ export const modelsConfigSchema = z.object({
  * All fields are optional; when absent the callers degrade gracefully
  * (e.g. empty suggestion list, no extra comparison group).
  */
-export const defaultModelsSchema = z.object({
+const defaultModelsSchema = z.object({
   /** DeepSeek backend API model ID used when routing lookup misses. */
   deepseekId: z.string().optional(),
   /** Default model display name for /task runs when nothing else is set. */
@@ -63,7 +63,7 @@ export const defaultModelsSchema = z.object({
 });
 
 /** Zod schema for individual project configurations */
-export const projectInfoSchema = z.object({
+const projectInfoSchema = z.object({
   id: z.string(),
   name: z.string(),
   path: z.string(),
@@ -72,7 +72,7 @@ export const projectInfoSchema = z.object({
 });
 
 /** Zod schema for overall UserConfig validation */
-export const userConfigSchema = z.object({
+const userConfigSchema = z.object({
   telegramBotToken: z.string(),
   allowedUsers: z.array(z.number()),
   model: z.string().optional(),
@@ -245,7 +245,7 @@ export type UserConfig = z.infer<typeof userConfigSchema>;
 /**
  * Default model names block inferred from Zod schema.
  */
-export type DefaultModels = z.infer<typeof defaultModelsSchema>;
+type DefaultModels = z.infer<typeof defaultModelsSchema>;
 
 // ── Path Resolvers ─────────────────────────────────────────────────────────
 // All paths resolve from config.json `paths.*` fields, falling back to CONFIG_DIR.
@@ -288,7 +288,7 @@ export const TUNING_DEFAULTS = {
 /**
  * Resolved tuning values: config overrides merged with defaults.
  */
-export type TuningConfig = {
+type TuningConfig = {
   debounceIntervalMs: number;
   modelRunHardTimeoutMs: number;
   modelRunInactivityMs: number;

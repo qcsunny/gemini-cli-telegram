@@ -10,7 +10,7 @@ import { logger } from '../utils/logger.js';
 
 // ── ModelsConfig (mirrors the structure in agyCli.ts) ────────────────────────
 
-export interface ModelsConfig {
+interface ModelsConfig {
   channelOrder?: string[];
   defaultOrder?: string[];
   routing: Record<string, string>;
@@ -133,7 +133,7 @@ export function getEffectiveModelOrder(): string[] {
 
 // ── Tier Resolution ──────────────────────────────────────────────────────────
 
-export interface ModelTier {
+interface ModelTier {
   name: string;
   priority: number;
   models: string[];

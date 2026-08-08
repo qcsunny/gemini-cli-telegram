@@ -102,7 +102,7 @@ export function extractTitleFromMarkdown(answerMarkdown: string): string {
   return firstLine;
 }
 
-export interface SaveAnswerInput {
+interface SaveAnswerInput {
   title?: string;
   answerMarkdown: string;
   thinkingMarkdown?: string;

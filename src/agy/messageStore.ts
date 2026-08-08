@@ -11,7 +11,7 @@ import { logger } from '../utils/logger.js';
 
 type Backend = 'web2api' | 'deepseek' | 'gemini-direct' | 'opencode';
 
-export interface StoredMessage {
+interface StoredMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt?: string;
@@ -75,28 +75,8 @@ export function saveMessage(
   }
 }
 
-/**
- * Delete all persisted messages for a conversation (called on /new or session reset).
- */
-export function clearMessages(conversationId: string, backend: Backend): void {
-  try {
-    const db = getDb();
-    db.delete(schema.messages)
-      .where(
-        and(
-          eq(schema.messages.conversationId, conversationId),
-          eq(schema.messages.backend, backend),
-        ),
-      )
-      .run();
-    knownConversationIds.delete(`${backend}|${conversationId}`);
-  } catch (e) {
-    logger.warn(`[messageStore] clearMessages failed: ${e}`);
-  }
-}
-
 /** Known conversation IDs (backend|convId) for lazy loading. */
-export const knownConversationIds = new Set<string>();
+const knownConversationIds = new Set<string>();
 
 /**
  * Register known conversation IDs from database at startup.

@@ -16,7 +16,7 @@ export function getConversationsDir(): string {
   return path.join(getAgyDataDir(), 'conversations');
 }
 
-export function parseVarint(data: Uint8Array, pos: number): { val: number; nextPos: number } {
+function parseVarint(data: Uint8Array, pos: number): { val: number; nextPos: number } {
   let val = 0;
   let shift = 0;
   while (pos < data.length) {
@@ -362,12 +362,12 @@ export function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | u
 }
 
 /** Decode a blob as plain UTF-8 text, with null-bytes stripped and non-printable chars replaced. */
-export function decodePlainText(b: Uint8Array): string {
+function decodePlainText(b: Uint8Array): string {
   const decoded = new TextDecoder().decode(b);
   return decoded.replace(/\0+$/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '?');
 }
 
-export function stepTypeToRole(stepType: number): ConversationTurn['role'] {
+function stepTypeToRole(stepType: number): ConversationTurn['role'] {
   switch (stepType) {
     case 8: return 'user';
     case 9: return 'assistant';
@@ -433,7 +433,7 @@ export function extractTextFromProto(m: Uint8Array): string | null {
 }
 
 /** Quick heuristic: >70% printable / whitespace / common Unicode characters. */
-export function isPlausibleText(s: string): boolean {
+function isPlausibleText(s: string): boolean {
   let printable = 0;
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
