@@ -226,6 +226,9 @@ export async function processMessage(
         } else {
           await reply.send(degradeHtml);
         }
+        // Start the next attempt with a fresh bubble so the downgrade note
+        // above stays visible (reusing it would overwrite the note).
+        currentMessageId = null;
         return true;
       };
 
@@ -236,13 +239,17 @@ export async function processMessage(
 
       while (attempts < maxAttempts && !success && !signal.aborted) {
         attempts++;
-        // Reset per-attempt buffers AND the single-draft streaming state so a
-        // new attempt starts from a clean slate (otherwise a failed attempt's
-        // partial blocks would leak into the next attempt's message).
+        // Reset per-attempt buffers so a new attempt starts from a clean
+        // slate (otherwise a failed attempt's partial blocks would leak into
+        // the next attempt's message). NOTE: currentMessageId is intentionally
+        // NOT reset here — on a same-model retry we reuse the existing draft
+        // bubble (edit it back to "Thinking...") instead of sending a fresh
+        // placeholder, avoiding duplicate "Thinking..." messages in the chat.
+        // advanceModel() nulls it after a downgrade so the downgrade note
+        // stays visible and the next attempt opens a new bubble.
         thoughtBuffer = '';
         answerBuffer = '';
         isDone = false;
-        currentMessageId = null;
         phase = 'thinking';
         thoughtEventCount = 0;
         textEventCount = 0;
