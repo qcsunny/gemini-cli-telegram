@@ -17,7 +17,7 @@ import { getDefaultModel, getSummarizationConfig } from '../../../config/userCon
 import { logger } from '../../../utils/logger.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { runModelWithFallbackChain } from './inlineHandler.js';
-import { markdownToHtml } from '../formatter.js';
+import { markdownToIR, renderIRToHtml } from '../formatter.js';
 
 const SUMMARY_INSTRUCTION =
   'Summarize the following chat messages concisely and list the key points. ' +
@@ -217,7 +217,7 @@ async function handleSum(
       : `**📋 Chat Summary (last ${messages.length} messages)**`;
 
     const replyMarkdown = `${header}\n\n${cleanOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
-    const replyHtml = markdownToHtml(replyMarkdown);
+    const replyHtml = renderIRToHtml(markdownToIR(replyMarkdown, false));
 
     await ctx.reply(replyHtml, { parse_mode: 'HTML' }).catch(async (err) => {
       logger.warn(`[sum] Failed to send HTML summary: ${err.message || err}. Falling back to plain text.`);
