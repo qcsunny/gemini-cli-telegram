@@ -25,7 +25,7 @@ const SUMMARY_INSTRUCTION =
   'Reply in the same language as the messages. ' +
   'Each message is prefixed with a number in brackets, e.g. [3]. ' +
   'When you reference a specific message, cite its number like [3] so readers can jump to the original. ' +
-  'End your reply with a "References" section that lists every cited message number as [N]:\n\n';
+  'Do not add a separate "References" section at the end; the links are appended automatically after your summary.\n\n';
 
 /**
  * Persists an incoming Telegram message into the local chat_messages table so
