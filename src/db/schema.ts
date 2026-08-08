@@ -76,6 +76,7 @@ export const chatMessages = sqliteTable('chat_messages', {
   messageId: integer('message_id').notNull(),
   senderId: integer('sender_id').notNull(),
   senderName: text('sender_name'),
+  senderUsername: text('sender_username'),
   text: text('text').notNull(),
   createdAt: text('created_at').notNull(),
 });

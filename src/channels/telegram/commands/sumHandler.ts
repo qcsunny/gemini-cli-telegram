@@ -10,7 +10,7 @@
 
 import type { Bot, Context } from 'grammy';
 import type { Message } from '@grammyjs/types';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { getDb } from '../../../db/index.js';
 import { chatMessages } from '../../../db/schema.js';
 import { getDefaultModel, getSummarizationConfig } from '../../../config/userConfig.js';
@@ -40,6 +40,7 @@ export function persistChatMessage(msg: Message | undefined, now = new Date().to
         messageId: msg.message_id,
         senderId: msg.from?.id ?? 0,
         senderName: msg.from?.first_name ?? msg.from?.username ?? 'Unknown',
+        senderUsername: msg.from?.username ? msg.from.username.toLowerCase() : null,
         text: text.slice(0, 4000),
         createdAt: now,
       })
@@ -66,20 +67,30 @@ export function persistChatMessage(msg: Message | undefined, now = new Date().to
 /**
  * Reads the most recent `count` messages from chat_messages for a chat,
  * oldest-first (so the summary prompt reads chronologically).
+ * Supports filtering by targetUsername (case-insensitive).
  */
-export function loadRecentMessages(chatId: number, count: number): Array<{
+export function loadRecentMessages(
+  chatId: number,
+  count: number,
+  targetUsername?: string,
+): Array<{
   senderName: string;
   text: string;
 }> {
   try {
     const db = getDb();
+    let whereClause = eq(chatMessages.chatId, String(chatId));
+    if (targetUsername) {
+      whereClause = and(whereClause, eq(chatMessages.senderUsername, targetUsername.toLowerCase())) as any;
+    }
+
     const rows = db
       .select({
         senderName: chatMessages.senderName,
         text: chatMessages.text,
       })
       .from(chatMessages)
-      .where(eq(chatMessages.chatId, String(chatId)))
+      .where(whereClause)
       .orderBy(desc(chatMessages.id))
       .limit(count)
       .all()
@@ -129,22 +140,43 @@ async function handleSum(
 
   const config = getSummarizationConfig();
   const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
-  const parsed = arg ? Number.parseInt(arg, 10) : config.defaultCount;
-  const count = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), config.maxCount) : config.defaultCount;
+
+  let count = config.defaultCount;
+  let targetUsername: string | undefined;
+
+  // Match @username
+  const usernameMatch = /@([a-zA-Z0-9_]+)/.exec(arg);
+  if (usernameMatch) {
+    targetUsername = usernameMatch[1];
+    // Strip the username mention to parse the numeric count
+    const remaining = arg.replace(usernameMatch[0], '').trim();
+    if (remaining) {
+      const parsed = Number.parseInt(remaining, 10);
+      if (Number.isFinite(parsed)) {
+        count = Math.min(Math.max(parsed, 1), config.maxCount);
+      }
+    }
+  } else {
+    if (arg) {
+      const parsed = Number.parseInt(arg, 10);
+      if (Number.isFinite(parsed)) {
+        count = Math.min(Math.max(parsed, 1), config.maxCount);
+      }
+    }
+  }
 
   await ctx.replyWithChatAction('typing').catch(() => {});
 
-  const messages = loadRecentMessages(chatId, count);
+  const messages = loadRecentMessages(chatId, count, targetUsername);
   if (messages.length === 0) {
-    await ctx
-      .reply('📋 <b>Summarize</b>\nNo messages found. /sum works in chats where the bot receives messages (enable group privacy mode off / admin rights).', {
-        parse_mode: 'HTML',
-      })
-      .catch(() => {});
+    const errorText = targetUsername
+      ? `📋 <b>Summarize</b>\nNo messages found for @${targetUsername} in this chat.`
+      : '📋 <b>Summarize</b>\nNo messages found. /sum works in chats where the bot receives messages (enable group privacy mode off / admin rights).';
+    await ctx.reply(errorText, { parse_mode: 'HTML' }).catch(() => {});
     return;
   }
 
-  logger.info(`[sum] chatId=${chatId} requested=${count} loaded=${messages.length}`);
+  logger.info(`[sum] chatId=${chatId} targetUser=${targetUsername ?? '(all)'} requested=${count} loaded=${messages.length}`);
   const body = messages
     .map((m, i) => `[${i + 1}] ${m.senderName}: ${m.text}`)
     .join('\n');
@@ -175,7 +207,11 @@ async function handleSum(
     if (inCount) footerParts.push(`📥 In: ${inCount}`);
     if (outCount) footerParts.push(`📤 Out: ${outCount}`);
 
-    const reply = `**📋 Chat Summary (last ${messages.length} messages)**\n\n${cleanOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
+    const header = targetUsername
+      ? `**📋 Chat Summary for @${targetUsername} (last ${messages.length} messages)**`
+      : `**📋 Chat Summary (last ${messages.length} messages)**`;
+
+    const reply = `${header}\n\n${cleanOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
     await ctx.reply(reply, { parse_mode: 'MarkdownV2' }).catch(async () => {
       await ctx.reply(reply).catch(() => {});
     });
