@@ -128,12 +128,12 @@ describe('readUsageFromDatabase', () => {
     expect(result).toBeUndefined();
   });
 
-  it('should accumulate usage across all steps', async () => {
-    const dbPath = path.join(tmpDir, 'cumulative.db');
+  it('should accumulate usage across all steps by default', async () => {
+    const dbPath = path.join(tmpDir, 'accumulate.db');
 
     const db = new Database(dbPath);
     db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL DEFAULT 0, status INTEGER, metadata BLOB);`);
-    // Two steps with usage — should accumulate both
+    // Two steps — default behavior should sum both
     const step1 = makeUsageBlob(1, 2, 3, 4);
     const step2 = makeUsageBlob(10, 20, 30, 40);
     db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (0, 15, 0, ?)').run(step1);
@@ -141,7 +141,27 @@ describe('readUsageFromDatabase', () => {
     db.close();
 
     const result = readUsageFromDatabase(dbPath);
-    // Should accumulate all steps
+    expect(result).toEqual({ input: 11, output: 22, cached: 33, thinking: 44 });
+  });
+
+  it('should only accumulate steps after fromIdx (per-reply usage)', async () => {
+    const dbPath = path.join(tmpDir, 'fromidx.db');
+
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL DEFAULT 0, status INTEGER, metadata BLOB);`);
+    // Steps from a previous reply (idx 0-1) plus new steps from this reply (idx 2-3)
+    const old1 = makeUsageBlob(100, 100, 100, 100);
+    const old2 = makeUsageBlob(200, 200, 200, 200);
+    const new1 = makeUsageBlob(1, 2, 3, 4);
+    const new2 = makeUsageBlob(10, 20, 30, 40);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (0, 15, 0, ?)').run(old1);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (1, 23, 0, ?)').run(old2);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (2, 15, 0, ?)').run(new1);
+    db.prepare('INSERT INTO steps (idx, step_type, status, metadata) VALUES (3, 23, 0, ?)').run(new2);
+    db.close();
+
+    // Simulate: this reply started when max idx was 1 → only steps with idx > 1 count
+    const result = readUsageFromDatabase(dbPath, 1);
     expect(result).toEqual({ input: 11, output: 22, cached: 33, thinking: 44 });
   });
 });

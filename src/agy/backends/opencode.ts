@@ -133,7 +133,17 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
             opts.onEvent?.({ type: 'text', content: note + '\n' });
           } else if (event.type === 'step_finish') {
             stepFinished = part.reason === 'stop';
-            if (part.tokens) usageTokens = part.tokens;
+            if (part.tokens) {
+              usageTokens = usageTokens ? {
+                input: (usageTokens.input ?? 0) + (part.tokens.input ?? 0),
+                output: (usageTokens.output ?? 0) + (part.tokens.output ?? 0),
+                reasoning: (usageTokens.reasoning ?? 0) + (part.tokens.reasoning ?? 0),
+                cache: {
+                  read: (usageTokens.cache?.read ?? 0) + (part.tokens.cache?.read ?? 0),
+                  write: (usageTokens.cache?.write ?? 0) + (part.tokens.cache?.write ?? 0),
+                },
+              } : part.tokens;
+            }
             if (stepFinished) {
               opts.onEvent?.({ type: 'done' });
             }

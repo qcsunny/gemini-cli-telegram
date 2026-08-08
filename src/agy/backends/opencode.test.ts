@@ -115,6 +115,38 @@ describe('opencode session reuse', () => {
     await p;
   });
 
+  it('runOpenCode accumulates usage across multiple step_finish events (tool-chain replies)', async () => {
+    const { runOpenCode } = await import('./opencode.js');
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const p = runOpenCode({
+      prompt: 'hello',
+      cwd: '/tmp',
+      conversationId: 'conv-usage',
+      model: 'OpenCode: DeepSeek V4 Flash Free',
+    });
+
+    child.stdout.emit('data', JSON.stringify({
+      type: 'step_finish',
+      part: {
+        reason: 'tool_use',
+        tokens: { input: 133, output: 45, reasoning: 10, cache: { read: 23936, write: 0 } },
+      },
+    }) + '\n');
+    child.stdout.emit('data', JSON.stringify({
+      type: 'step_finish',
+      part: {
+        reason: 'stop',
+        tokens: { input: 3888, output: 20, reasoning: 15, cache: { read: 24064, write: 5 } },
+      },
+    }) + '\n');
+    child.emit('close', 0);
+
+    const result = await p;
+    expect(result.usage).toEqual({ input: 4021, output: 65, cached: 48005, thinking: 25 });
+  });
+
   it('runOpenCode tags a new session with --title when none exists', async () => {
     const { runOpenCode } = await import('./opencode.js');
     const child = makeFakeChild();
