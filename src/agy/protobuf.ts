@@ -211,7 +211,7 @@ function tryDecodeNestedProto(bytes: Uint8Array): Record<string, unknown> | null
 /** Exported for testing: full metadata protobuf decoder, extracting all known
  * fields for debugging. Returns a plain object with key/value pairs.
  */
-export function extractMetadataFromProto(m: Uint8Array): Record<string, unknown> {
+function extractMetadataFromProto(m: Uint8Array): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   let pos = 0;
 
@@ -384,7 +384,7 @@ function stepTypeToRole(stepType: number): ConversationTurn['role'] {
  * Generic protobuf-to-text extractor. Walks all length-delimited (wire type 2)
  * fields and returns the longest plausible string.
  */
-export function extractTextFromProto(m: Uint8Array): string | null {
+function extractTextFromProto(m: Uint8Array): string | null {
   let pos = 0;
   const strings: string[] = [];
 

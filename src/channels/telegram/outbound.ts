@@ -15,7 +15,7 @@ import { logger } from '../../utils/logger.js';
 const execAsync = promisify(exec);
 
 /** Supported media categories for Telegram outbound transmission */
-export type MediaType =
+type MediaType =
   | 'photo'
   | 'voice'
   | 'audio'

@@ -13,7 +13,7 @@
 
 import type { SendMediaFn } from '../channels/telegram/outbound.js';
 
-export type { SendMediaFn, MediaType } from '../channels/telegram/outbound.js';
+export type { SendMediaFn } from '../channels/telegram/outbound.js';
 
 /**
  * Multimodal input payload combining text prompt and attached media parts.

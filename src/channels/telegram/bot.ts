@@ -47,7 +47,7 @@ import { startBackoffCleanup } from './bot/rateLimiter.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
 
-export { record429Backoff, reset429Backoff, is429Error, get429RetryAfter, startBackoffCleanup } from './bot/rateLimiter.js';
+export { record429Backoff, reset429Backoff, is429Error, get429RetryAfter } from './bot/rateLimiter.js';
 export { buildChannelReply } from './bot/channelReply.js';
 
 // ── Constants ──

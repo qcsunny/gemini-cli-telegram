@@ -806,5 +806,3 @@ function parseErrorMessage(reason: string): {
 // The channel is detected at runtime by getChannelModel() using model-name
 // prefixes, so cross-channel fallback is fully automatic.
 
-// Re-export from modelRegistry for backward compatibility
-export { clearModelOrderCache } from './modelRegistry.js';
