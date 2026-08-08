@@ -82,6 +82,7 @@ export function loadRecentMessages(
 ): Array<{
   senderName: string;
   text: string;
+  messageId: number;
 }> {
   try {
     const db = getDb();
@@ -94,6 +95,7 @@ export function loadRecentMessages(
       .select({
         senderName: chatMessages.senderName,
         text: chatMessages.text,
+        messageId: chatMessages.messageId,
       })
       .from(chatMessages)
       .where(whereClause)
@@ -101,7 +103,11 @@ export function loadRecentMessages(
       .limit(count)
       .all()
       .reverse();
-    return rows.map((r) => ({ senderName: r.senderName ?? 'Unknown', text: r.text }));
+    return rows.map((r) => ({
+      senderName: r.senderName ?? 'Unknown',
+      text: r.text,
+      messageId: r.messageId,
+    }));
   } catch (e) {
     logger.warn(`[sumHandler] Failed to load recent messages: ${e}`);
     return [];
@@ -185,6 +191,13 @@ async function handleSum(
   }
 
   logger.info(`[sum] chatId=${chatId} targetUser=${targetUsername ?? '(all)'} requested=${count} loaded=${messages.length}`);
+  // Build a clickable deep link to each original message (peer id drops the
+  // leading "-100" / "-" used by Telegram channel/group numeric ids).
+  const peerId = String(chatId).replace(/^-100/, '').replace(/^-/, '');
+  const linkByIndex = new Map<number, string>();
+  messages.forEach((m, i) => {
+    linkByIndex.set(i + 1, `https://t.me/c/${peerId}/${m.messageId}`);
+  });
   const body = messages
     .map((m, i) => `[${i + 1}] ${m.senderName}: ${m.text}`)
     .join('\n');
@@ -208,6 +221,15 @@ async function handleSum(
     }
 
     const cleanOutput = stripWholeMessageCodeFence(result.output).trim();
+    // Turn "[N]" citations in the model output into clickable links to the
+    // original Telegram messages (https://t.me/c/<peerId>/<message_id>).
+    const linkedOutput = cleanOutput.replace(
+      /\[(\d+)\]/g,
+      (match: string, num: string) => {
+        const link = linkByIndex.get(Number(num));
+        return link ? `[${num}](${link})` : match;
+      },
+    );
     const duration = ((result.durationMs || 1000) / 1000).toFixed(1);
     const footerParts: string[] = [`📚 ${messages.length} messages`, `⏱️ ${duration}s`];
     const inCount = result.usage?.input || 0;
@@ -235,11 +257,11 @@ async function handleSum(
       ? `**📋 Chat Summary for @${targetUsername} (last ${messages.length} messages)**`
       : `**📋 Chat Summary (last ${messages.length} messages)**`;
 
-    const replyMarkdown = `${header}\n\n${cleanOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
+    const replyMarkdown = `${header}\n\n${linkedOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
     const parseMode = session?.settings?.telegram?.parseMode || 'RichText';
     const replyObj = buildChannelReply(ctx, chatId, parseMode, session, ctx.message?.message_id);
     await replyObj.send(replyMarkdown);
-    logger.info(`[sum] Delivered summary (${cleanOutput.length} chars) to chatId=${chatId}`);
+    logger.info(`[sum] Delivered summary (${linkedOutput.length} chars) to chatId=${chatId}`);
   } catch (e) {
     logger.error(`[sum] Failed for chatId=${chatId}: ${e}`);
     await ctx.reply('📋 <b>Summarize failed</b>\nPlease try again later.', { parse_mode: 'HTML' }).catch(() => {});

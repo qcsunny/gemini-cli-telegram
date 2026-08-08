@@ -55,8 +55,8 @@ describe('sumHandler chat_messages persistence', () => {
 
     const messages = loadRecentMessages(999, 10);
     expect(messages).toEqual([
-      { senderName: 'Alice', text: 'first' },
-      { senderName: 'Alice', text: 'second' },
+      { senderName: 'Alice', text: 'first', messageId: 1 },
+      { senderName: 'Alice', text: 'second', messageId: 2 },
     ]);
   });
 
@@ -122,13 +122,13 @@ describe('sumHandler chat_messages persistence', () => {
 
     const bobMsgs = loadRecentMessages(999, 10, 'bob_the_builder');
     expect(bobMsgs).toEqual([
-      { senderName: 'Bob', text: 'msg from bob' },
-      { senderName: 'Bob', text: 'another from bob' },
+      { senderName: 'Bob', text: 'msg from bob', messageId: 1 },
+      { senderName: 'Bob', text: 'another from bob', messageId: 3 },
     ]);
 
     const aliceMsgs = loadRecentMessages(999, 10, 'ALICEINWONDERLAND');
     expect(aliceMsgs).toEqual([
-      { senderName: 'Alice', text: 'msg from alice' },
+      { senderName: 'Alice', text: 'msg from alice', messageId: 2 },
     ]);
   });
 });
