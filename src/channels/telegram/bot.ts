@@ -902,9 +902,9 @@ export class TelegramBot {
         return;
       }
       if (promptText.startsWith('/')) return;
-      // Send a welcome message for first-time users
+      // Send a welcome message for first-time users in private chat
       const chatId = ctx.chat?.id;
-      if (chatId) {
+      if (chatId && ctx.chat?.type === 'private') {
         const session = this.sessionManager.getSession(chatId);
         if (!session) {
           // First message - show welcome with keyboard
