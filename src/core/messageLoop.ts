@@ -249,6 +249,14 @@ export async function processMessage(
 
         let rawStreamBuffer = '';
 
+        // Immediately send a placeholder "Thinking..." draft bubble to Telegram
+        // so the user gets instant visual feedback while the model starts up.
+        if (hasRichPrimitives) {
+          await updateMessageStream(false).catch((err) => {
+            logger.warn(`[messageLoop] Failed to send initial placeholder: ${err}`);
+          });
+        }
+
         try {
           // Lazy health check: skip this model if its backend is in cooldown.
           {
