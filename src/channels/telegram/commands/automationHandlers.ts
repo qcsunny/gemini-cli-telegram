@@ -18,11 +18,14 @@ export function registerAutomationHandlers(
     const parts = arg.split(' ');
     const subcommand = parts[0]?.toLowerCase();
 
+    logger.info(`[schedule] cmd received: chatId=${chatId} subcommand="${subcommand}" arg="${arg.slice(0, 200)}"`);
+
     const scheduler = sessionManager.getChatScheduler();
 
     // List schedules
     if (!subcommand || subcommand === 'list') {
       const tasks = scheduler.getTasksForChat(chatId);
+      logger.info(`[schedule] list: chatId=${chatId} tasks=${tasks.length}`);
       if (tasks.length === 0) {
         await ctx.reply(`${ICONS.clock} <b>Schedule Manager</b>\n\nAutomate tasks by scheduling messages to be sent at specific times or intervals.\n\n<b>Commands:</b>\n• <code>/schedule add &lt;time&gt; &lt;msg&gt;</code>\n• <code>/schedule recurring &lt;min&gt; &lt;msg&gt;</code>\n• <code>/schedule list</code>\n• <code>/schedule remove &lt;id&gt;</code>\n• <code>/schedule toggle &lt;id&gt;</code>\n\n<b>Time Formats:</b>\n• <code>in 5m</code>, <code>in 1h</code>, <code>tomorrow</code>\n• <code>14:30</code>, <code>tonight</code>, <code>morning</code>\n\n<b>Example:</b>\n<code>/schedule add in 1h Check build status</code>`, {
           parse_mode: 'HTML',
@@ -63,14 +66,17 @@ export function registerAutomationHandlers(
       const message = scheduleParts.slice(1).join(' ');
 
       if (!timeExpr || !message) {
+        logger.info(`[schedule] add usage error: chatId=${chatId} timeExpr="${timeExpr}"`);
         await ctx.reply(`${ICONS.warning} <b>Usage:</b>\n<code>/schedule add &lt;time&gt; &lt;message&gt;</code>`, {
           parse_mode: 'HTML',
         });
         return;
       }
 
+      logger.info(`[schedule] add: chatId=${chatId} timeExpr="${timeExpr}" message="${message.slice(0, 200)}"`);
       try {
         const task = await scheduler.addTask(chatId, message, 'once', timeExpr);
+        logger.info(`[schedule] add success: chatId=${chatId} taskId=${task.id} nextRun=${task.nextRun}`);
         const nextRun = new Date(task.nextRun);
         await ctx.reply(
           `${ICONS.success} <b>Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nNext run: <b>${nextRun.toLocaleString()}</b>\nMessage: <i>${message}</i>`,
@@ -80,6 +86,7 @@ export function registerAutomationHandlers(
           },
         );
       } catch (e) {
+        logger.error(`[schedule] add failed: chatId=${chatId} error=${e instanceof Error ? e.message : String(e)}`);
         await ctx.reply(`${ICONS.error} <b>Scheduling failed:</b>\n${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
       }
       return;
@@ -93,14 +100,17 @@ export function registerAutomationHandlers(
       const minutes = parseInt(minutesStr, 10);
 
       if (isNaN(minutes) || minutes < 1 || !message) {
+        logger.info(`[schedule] recurring usage error: chatId=${chatId} minutesStr="${minutesStr}"`);
         await ctx.reply(`${ICONS.warning} <b>Usage:</b>\n<code>/schedule recurring &lt;minutes&gt; &lt;message&gt;</code>`, {
           parse_mode: 'HTML',
         });
         return;
       }
 
+      logger.info(`[schedule] recurring: chatId=${chatId} minutes=${minutes} message="${message.slice(0, 200)}"`);
       try {
         const task = await scheduler.addTask(chatId, message, 'recurring', `every ${minutes}m`, minutes);
+        logger.info(`[schedule] recurring success: chatId=${chatId} taskId=${task.id} interval=${minutes}m`);
         await ctx.reply(
           `${ICONS.success} <b>Recurring Task Set</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nInterval: <b>Every ${minutes}m</b>\nMessage: <i>${message}</i>`,
           {
@@ -109,6 +119,7 @@ export function registerAutomationHandlers(
           },
         );
       } catch (e) {
+        logger.error(`[schedule] recurring failed: chatId=${chatId} error=${e instanceof Error ? e.message : String(e)}`);
         await ctx.reply(`${ICONS.error} <b>Scheduling failed:</b>\n${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
       }
       return;
@@ -118,19 +129,23 @@ export function registerAutomationHandlers(
     if (subcommand === 'remove') {
       const idPrefix = parts[1];
       if (!idPrefix) {
+        logger.info(`[schedule] remove usage error: chatId=${chatId}`);
         await ctx.reply(`${ICONS.warning} Usage: <code>/schedule remove &lt;id&gt;</code>`);
         return;
       }
 
+      logger.info(`[schedule] remove: chatId=${chatId} idPrefix="${idPrefix}"`);
       // Find task by prefix
       const tasks = scheduler.getTasksForChat(chatId);
       const task = tasks.find((t) => t.id.startsWith(idPrefix));
       if (!task) {
+        logger.info(`[schedule] remove not found: chatId=${chatId} idPrefix="${idPrefix}"`);
         await ctx.reply(`${ICONS.error} Task not found. Use <code>/schedule list</code> to see task IDs.`);
         return;
       }
 
       const removed = await scheduler.removeTask(task.id);
+      logger.info(`[schedule] remove result: chatId=${chatId} idPrefix="${idPrefix}" removed=${removed}`);
       if (removed) {
         await ctx.reply(`${ICONS.success} Task <code>${idPrefix}</code> removed.`, {
           parse_mode: 'HTML',
@@ -146,18 +161,22 @@ export function registerAutomationHandlers(
     if (subcommand === 'toggle') {
       const idPrefix = parts[1];
       if (!idPrefix) {
+        logger.info(`[schedule] toggle usage error: chatId=${chatId}`);
         await ctx.reply(`${ICONS.warning} <b>Usage:</b>\n<code>/schedule toggle &lt;id&gt;</code>`, { parse_mode: 'HTML' });
         return;
       }
 
+      logger.info(`[schedule] toggle: chatId=${chatId} idPrefix="${idPrefix}"`);
       const tasks = scheduler.getTasksForChat(chatId);
       const task = tasks.find((t) => t.id.startsWith(idPrefix));
       if (!task) {
+        logger.info(`[schedule] toggle not found: chatId=${chatId} idPrefix="${idPrefix}"`);
         await ctx.reply(`${ICONS.error} <b>Task not found.</b>`);
         return;
       }
 
       const newState = await scheduler.toggleTask(task.id);
+      logger.info(`[schedule] toggle result: chatId=${chatId} idPrefix="${idPrefix}" active=${newState}`);
       await ctx.reply(`${ICONS.success} <b>Task ${newState ? 'Activated' : 'Paused'}</b>\n\nID: <code>${idPrefix}</code> ${newState ? '🟢' : '🔴'}`, {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
@@ -165,6 +184,7 @@ export function registerAutomationHandlers(
       return;
     }
 
+    logger.info(`[schedule] unknown subcommand: chatId=${chatId} subcommand="${subcommand}"`);
     await ctx.reply(`${ICONS.warning} <b>Unknown subcommand:</b> <code>${subcommand}</code>\n\nAvailable: <code>list</code>, <code>add</code>, <code>recurring</code>, <code>remove</code>, <code>toggle</code>`, {
       parse_mode: 'HTML',
       reply_markup: buildMainKeyboard(),
