@@ -17,6 +17,7 @@ import { getDefaultModel, getSummarizationConfig } from '../../../config/userCon
 import { logger } from '../../../utils/logger.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { runModelWithFallbackChain } from './inlineHandler.js';
+import { markdownToHtml } from '../formatter.js';
 
 const SUMMARY_INSTRUCTION =
   'Summarize the following chat messages concisely and list the key points. ' +
@@ -215,9 +216,12 @@ async function handleSum(
       ? `**📋 Chat Summary for @${targetUsername} (last ${messages.length} messages)**`
       : `**📋 Chat Summary (last ${messages.length} messages)**`;
 
-    const reply = `${header}\n\n${cleanOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
-    await ctx.reply(reply, { parse_mode: 'MarkdownV2' }).catch(async () => {
-      await ctx.reply(reply).catch(() => {});
+    const replyMarkdown = `${header}\n\n${cleanOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
+    const replyHtml = markdownToHtml(replyMarkdown);
+
+    await ctx.reply(replyHtml, { parse_mode: 'HTML' }).catch(async (err) => {
+      logger.warn(`[sum] Failed to send HTML summary: ${err.message || err}. Falling back to plain text.`);
+      await ctx.reply(replyMarkdown).catch(() => {});
     });
     logger.info(`[sum] Delivered summary (${cleanOutput.length} chars) to chatId=${chatId}`);
   } catch (e) {
