@@ -56,4 +56,14 @@ export const modelOutputs = sqliteTable('model_outputs', {
   createdAt: text('created_at').notNull(),
 });
 
+/**
+ * RuntimeStates table persists internal runtime states across restarts (e.g. backend cooldowns, rate limits).
+ */
+export const runtimeStates = sqliteTable('runtime_states', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+
 

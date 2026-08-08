@@ -100,6 +100,13 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   sqlite.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_model_outputs_chat_msg ON model_outputs(chat_id, message_id);
   `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS runtime_states (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
 
   // Dynamically add usage column to messages table if it doesn't exist in legacy databases
   try {
