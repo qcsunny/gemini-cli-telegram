@@ -875,11 +875,33 @@ export class TelegramBot {
       // Persist non-command messages to the local chat_messages table so that
       // /sum can summarize recent chat history (Bot API cannot fetch history).
       persistChatMessage(ctx.message);
-      if (isPrivateImageRequest(text)) {
+
+      let promptText = text;
+
+      // In group chats, only respond if the bot is mentioned or replied to
+      if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
+        const botUsername = ctx.me.username;
+        const isMentioned = text.includes(`@${botUsername}`);
+        const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+
+        if (!isMentioned && !isReplyToBot) {
+          return;
+        }
+
+        // Clean up the mention from prompt text to avoid polluting the AI prompt
+        if (isMentioned) {
+          const mentionRegex = new RegExp(`@${botUsername}\\b`, 'gi');
+          promptText = text.replace(mentionRegex, '').trim();
+          // Mutate ctx.message.text so downstream helper functions see the clean text
+          ctx.message.text = promptText;
+        }
+      }
+
+      if (isPrivateImageRequest(promptText)) {
         await handlePrivateImageRequest(ctx, this.sessionManager, this.defaultOptions);
         return;
       }
-      if (text.startsWith('/')) return;
+      if (promptText.startsWith('/')) return;
       // Send a welcome message for first-time users
       const chatId = ctx.chat?.id;
       if (chatId) {
@@ -904,10 +926,9 @@ export class TelegramBot {
         : undefined;
       const refText = quoteText ?? replyMsgText;
 
-      let promptText = text;
       if (refText && refText.trim()) {
         const cleanRef = refText.trim().slice(0, 1500);
-        promptText = `> [Quoted context]: ${cleanRef.replace(/\n/g, '\n> ')}\n\n${text}`;
+        promptText = `> [Quoted context]: ${cleanRef.replace(/\n/g, '\n> ')}\n\n${promptText}`;
         logger.info(`[ReplyContext] Augmented prompt with quoted/reply text (len=${cleanRef.length}) for chatId=${chatId}`);
       }
 
@@ -1059,6 +1080,28 @@ export class TelegramBot {
       return;
     }
 
+    let captionText = info.caption ?? '';
+
+    // In group chats, only respond if the bot is mentioned or replied to
+    if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
+      const botUsername = ctx.me.username;
+      const isMentioned = captionText.includes(`@${botUsername}`);
+      const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
+
+      if (!isMentioned && !isReplyToBot) {
+        return;
+      }
+
+      // Clean up the mention from caption text
+      if (isMentioned) {
+        const mentionRegex = new RegExp(`@${botUsername}\\b`, 'gi');
+        captionText = captionText.replace(mentionRegex, '').trim();
+        if (ctx.message && ctx.message.caption) {
+          ctx.message.caption = captionText;
+        }
+      }
+    }
+
     let tempFilePath: string | undefined;
 
     await withSession(
@@ -1068,9 +1111,9 @@ export class TelegramBot {
       async (session, channelReply) => {
         tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
 
-        const taskText = injectMediaCaptionTask(info.caption);
+        const taskText = injectMediaCaptionTask(captionText);
         const multimodalInput: MultimodalInput = {
-          text: taskText ?? info.caption ?? '',
+          text: taskText ?? captionText,
           media: [
             {
               type: mediaType,
