@@ -22,7 +22,10 @@ import type { SessionManager } from '../../../core/session.js';
 
 const SUMMARY_INSTRUCTION =
   'Summarize the following chat messages concisely and list the key points. ' +
-  'Reply in the same language as the messages:\n\n';
+  'Reply in the same language as the messages. ' +
+  'Each message is prefixed with a number in brackets, e.g. [3]. ' +
+  'When you reference a specific message, cite its number like [3] so readers can jump to the original. ' +
+  'End your reply with a "References" section that lists every cited message number as [N]:\n\n';
 
 /**
  * Persists an incoming Telegram message into the local chat_messages table so
@@ -257,7 +260,12 @@ async function handleSum(
       ? `**📋 Chat Summary for @${targetUsername} (last ${messages.length} messages)**`
       : `**📋 Chat Summary (last ${messages.length} messages)**`;
 
-    const replyMarkdown = `${header}\n\n${linkedOutput}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
+    // Guaranteed clickable reference list, so links appear even if the model
+    // omits "[N]" citations in the summary body.
+    const references = messages
+      .map((m, i) => `[${i + 1}](https://t.me/c/${peerId}/${m.messageId})`)
+      .join(' · ');
+    const replyMarkdown = `${header}\n\n${linkedOutput}\n\n**📎 References**\n${references}\n\n_${footerParts.join(' · ')} (${modelUsed})_`;
     const parseMode = session?.settings?.telegram?.parseMode || 'RichText';
     const replyObj = buildChannelReply(ctx, chatId, parseMode, session, ctx.message?.message_id);
     await replyObj.send(replyMarkdown);
