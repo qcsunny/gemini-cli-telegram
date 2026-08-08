@@ -3,7 +3,7 @@
  * @description Shared type definitions for the agy module.
  */
 
-export interface AgyStreamEvent {
+interface AgyStreamEvent {
   type: 'thought' | 'text' | 'done';
   content?: string;
 }

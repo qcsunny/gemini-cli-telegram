@@ -340,13 +340,6 @@ function getBlocksPayload(originalText: string | StructuredMessage): any[] {
   });
 }
 
-export interface TelegramBotOptions {
-  allowedUsers?: number[];
-  model?: string;
-  cwd?: string;
-  proxy?: string;
-}
-
 function prepareTelegramMarkdown(markdown: string): string {
   let text = markdown;
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$');
