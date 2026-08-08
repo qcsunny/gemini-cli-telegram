@@ -107,6 +107,20 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       updated_at TEXT NOT NULL
     );
   `);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT NOT NULL,
+      message_id INTEGER NOT NULL,
+      sender_id INTEGER NOT NULL,
+      sender_name TEXT,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  sqlite.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_chat_msg ON chat_messages(chat_id, message_id);
+  `);
 
   // Dynamically add usage column to messages table if it doesn't exist in legacy databases
   try {

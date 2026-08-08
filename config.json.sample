@@ -39,5 +39,10 @@
       "Your Model Display Name A",
       "Your Model Display Name B"
     ]
+  },
+  "summarization": {
+    "defaultCount": 100,
+    "maxCount": 500,
+    "model": "Your Summarize Model Display Name (optional)"
   }
 }

@@ -62,6 +62,16 @@ const defaultModelsSchema = z.object({
   compareGroup: z.array(z.string()).optional(),
 });
 
+/** Zod schema for /sum chat summarization settings. */
+const summarizationSchema = z.object({
+  /** Default number of recent messages summarized by /sum when no count is given. */
+  defaultCount: z.number().optional(),
+  /** Maximum number of recent messages /sum is allowed to summarize. */
+  maxCount: z.number().optional(),
+  /** Model display name used for summarization. Falls back to the session/default model. */
+  model: z.string().optional(),
+});
+
 /** Zod schema for individual project configurations */
 const projectInfoSchema = z.object({
   id: z.string(),
@@ -134,6 +144,11 @@ const userConfigSchema = z.object({
    * falling back to hardcoded model names.
    */
   defaultModels: defaultModelsSchema.optional(),
+  /**
+   * /sum chat summarization settings (optional).
+   * Controls how many recent messages are summarized and which model is used.
+   */
+  summarization: summarizationSchema.optional(),
   /**
    * Backend service URLs for local proxy services.
    * Foreign users can skip by omitting the key entirely (the corresponding
@@ -354,6 +369,32 @@ export function getDefaultModels(): DefaultModels | null {
   return loadUserConfig()?.defaultModels ?? null;
 }
 
+/** Default /sum summarization settings — used when config.summarization fields are omitted. */
+export const SUMMARIZATION_DEFAULTS = {
+  defaultCount: 100,
+  maxCount: 500,
+};
+
+/** Resolved summarization settings: config overrides merged with defaults. */
+export type SummarizationConfig = {
+  defaultCount: number;
+  maxCount: number;
+  model?: string;
+};
+
+let _cachedSummarization: SummarizationConfig | undefined;
+
+/**
+ * Returns the resolved /sum summarization configuration (config values + defaults).
+ * Cached after first call and cleared via clearConfigCache() on SIGHUP.
+ */
+export function getSummarizationConfig(): SummarizationConfig {
+  if (_cachedSummarization) return _cachedSummarization;
+  const cfg = loadUserConfig();
+  _cachedSummarization = { ...SUMMARIZATION_DEFAULTS, ...cfg?.summarization };
+  return _cachedSummarization;
+}
+
 const BROWSE_ROOT_DEFAULT = path.join(os.homedir(), 'Documents');
 
 export function getBrowseRoot(): string {
@@ -388,6 +429,7 @@ export function getAnswerSaveDir(): string {
  */
 export function clearConfigCache(): void {
   _cachedTuning = undefined;
+  _cachedSummarization = undefined;
   _configCache = undefined;
 }
 

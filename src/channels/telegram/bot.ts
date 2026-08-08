@@ -29,6 +29,7 @@ import { SessionManager } from '../../core/session.js';
 import { processMessage } from '../../core/messageLoop.js';
 import { createTelegramSendMedia } from './outbound.js';
 import { isPrivateImageRequest, handlePrivateImageRequest } from './commands/privateImageHandler.js';
+import { persistChatMessage } from './commands/sumHandler.js';
 import type {
   ChannelReply,
   SessionOptions,
@@ -862,6 +863,9 @@ export class TelegramBot {
   private setupMessageHandler(): void {
     this.bot.on('message:text', async (ctx) => {
       const text = ctx.message.text;
+      // Persist non-command messages to the local chat_messages table so that
+      // /sum can summarize recent chat history (Bot API cannot fetch history).
+      persistChatMessage(ctx.message);
       if (isPrivateImageRequest(text)) {
         await handlePrivateImageRequest(ctx, this.sessionManager, this.defaultOptions);
         return;
@@ -902,22 +906,27 @@ export class TelegramBot {
     });
 
     this.bot.on('message:photo', async (ctx) => {
+      persistChatMessage(ctx.message);
       await this.handleMediaMessage(ctx, 'photo');
     });
 
     this.bot.on('message:voice', async (ctx) => {
+      persistChatMessage(ctx.message);
       await this.handleMediaMessage(ctx, 'voice');
     });
 
     this.bot.on('message:audio', async (ctx) => {
+      persistChatMessage(ctx.message);
       await this.handleMediaMessage(ctx, 'audio');
     });
 
     this.bot.on('message:video', async (ctx) => {
+      persistChatMessage(ctx.message);
       await this.handleMediaMessage(ctx, 'video');
     });
 
     this.bot.on('message:document', async (ctx) => {
+      persistChatMessage(ctx.message);
       await this.handleMediaMessage(ctx, 'document');
     });
 
