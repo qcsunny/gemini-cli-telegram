@@ -43,7 +43,7 @@ import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 import { CONFIG_PATH, getBackendUrl } from '../../config/userConfig.js';
 import { buildChannelReply } from './bot/channelReply.js';
-import { startBackoffCleanup } from './bot/rateLimiter.js';
+import { startBackoffCleanup, reset429Backoff } from './bot/rateLimiter.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
 
@@ -942,6 +942,7 @@ export class TelegramBot {
           channelReply,
           telegramFormatter,
         );
+        reset429Backoff(Number(session.chatId));
 
         // Handle autopilot / self-reply until
         await this.handleAutopilot(session, channelReply, ctx);
