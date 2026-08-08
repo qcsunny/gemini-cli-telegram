@@ -45,6 +45,19 @@ export function persistChatMessage(msg: Message | undefined, now = new Date().to
       })
       .onConflictDoNothing()
       .run();
+
+    // Asynchronously trim old messages to keep database size bounded
+    try {
+      const config = getSummarizationConfig();
+      const keepCount = Math.max(1000, (config.maxCount || 200) * 2);
+      Promise.resolve().then(() => {
+        trimChatMessages(msg.chat.id, keepCount);
+      }).catch((e) => {
+        logger.warn(`[sumHandler] Async trim execution error: ${e}`);
+      });
+    } catch (e) {
+      logger.warn(`[sumHandler] Failed to initiate async trim: ${e}`);
+    }
   } catch (e) {
     logger.warn(`[sumHandler] Failed to persist chat message: ${e}`);
   }
