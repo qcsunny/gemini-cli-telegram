@@ -25,7 +25,7 @@ import { runWeb2Api } from './backends/web2api.js';
 import { runDeepSeek } from './backends/deepseek.js';
 
 import { runOpenCode } from './backends/opencode.js';
-import { readUsageFromDatabase, getConversationsDir } from './protobuf.js';
+import { readUsageFromDatabase, getMaxStepIdx, getConversationsDir } from './protobuf.js';
 import type { AgyRunOptions, AgyRunResult } from './types.js';
 
 // Re-export all types and functions for backward compatibility
@@ -178,6 +178,9 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   // Snapshot conversations before the call so we can detect the new one
   const before = conversationId ? new Set<string>() : await snapshotConversations();
+
+  // Record the max step idx before this run so per-reply usage only counts new steps
+  const fromIdx = conversationId ? getMaxStepIdx(path.join(getConversationsDir(), `${conversationId}.db`)) : -1;
 
   // Resolve and inject the correct Antigravity Project ID for the workspace
   const agProjectId = await findAntigravityProjectId(cwd);
@@ -341,7 +344,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (resolvedConvId) {
         try {
           const dbPath = path.join(getConversationsDir(), `${resolvedConvId}.db`);
-          usage = readUsageFromDatabase(dbPath);
+          usage = readUsageFromDatabase(dbPath, fromIdx);
           logger.info(`[agyCli] Read usage from agy database: ${JSON.stringify(usage)}`);
         } catch (e) {
           logger.warn(`[agyCli] SQLite usage extraction failed: ${e}`);

@@ -314,8 +314,27 @@ function extractMetadataFromProto(m: Uint8Array): Record<string, unknown> {
   return result;
 }
 
-/** Exported for testing: reads agy DB and extracts usage metadata. */
-export function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | undefined {
+/** Returns the largest step idx currently stored in the agy DB (or -1 if none). */
+export function getMaxStepIdx(dbPath: string): number {
+  try {
+    if (!fssync.existsSync(dbPath)) return -1;
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.prepare('SELECT MAX(idx) AS maxIdx FROM steps').get() as { maxIdx: number | null } | undefined;
+    db.close();
+    return row?.maxIdx ?? -1;
+  } catch (e) {
+    logger.warn(`[agyCli] getMaxStepIdx failed: ${e}`);
+    return -1;
+  }
+}
+
+/**
+ * Exported for testing: reads agy DB and sums usage metadata for steps added
+ * after `fromIdx` (exclusive). When `fromIdx` is -1, sums every step's usage.
+ * This gives the per-reply input/output/cached tokens, since a single reply may
+ * span multiple steps (tool-call chains) within the same agy conversation.
+ */
+export function readUsageFromDatabase(dbPath: string, fromIdx = -1): AgyRunResult['usage'] | undefined {
   try {
     if (!fssync.existsSync(dbPath)) {
       return undefined;
@@ -324,18 +343,13 @@ export function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | u
     const rows = db.prepare('SELECT idx, step_type, metadata FROM steps ORDER BY idx ASC').all() as { idx: number; step_type: number; metadata: Uint8Array }[];
     db.close();
 
-    const total: AgyRunResult['usage'] = { input: 0, output: 0, cached: 0, thinking: 0 };
     const stepsInfo: Array<{ idx: number; step_type: number; usage: AgyRunResult['usage'] }> = [];
 
     for (const row of rows) {
+      if (Number(row.idx) <= fromIdx) continue;
       if (row.metadata instanceof Uint8Array) {
         const usage = extractUsageFromProto(row.metadata);
         if (usage) {
-          total.input += (usage.input || 0);
-          total.output += (usage.output || 0);
-          total.cached += (usage.cached || 0);
-          total.thinking += (usage.thinking || 0);
-
           stepsInfo.push({
             idx: row.idx,
             step_type: row.step_type,
@@ -345,20 +359,29 @@ export function readUsageFromDatabase(dbPath: string): AgyRunResult['usage'] | u
       }
     }
 
-    // Debug: print all steps' usage for the latest conversation
-    if (stepsInfo.length > 0) {
-      logger.info(`[agyCli] readUsageFromDatabase: ${stepsInfo.length} steps, total=${JSON.stringify(total)}, latest_step=${stepsInfo[stepsInfo.length - 1].idx} usage=${JSON.stringify(stepsInfo[stepsInfo.length - 1].usage)}`);
+    // Sum usage across all steps belonging to this reply
+    const total: AgyRunResult['usage'] = { input: 0, output: 0, cached: 0, thinking: 0 };
+    for (const s of stepsInfo) {
+      const u = s.usage;
+      total.input += u?.input ?? 0;
+      total.output += u?.output ?? 0;
+      total.cached += u?.cached ?? 0;
+      total.thinking += u?.thinking ?? 0;
     }
 
-    // 如果累加后全是 0，返回 undefined（表示没有有效的 usage 数据）
+    logger.info(`[agyCli] readUsageFromDatabase: fromIdx=${fromIdx}, ${stepsInfo.length} new steps (idx=${stepsInfo.map(s => s.idx).join(',')}), total=${JSON.stringify(total)}`);
+
+    if (stepsInfo.length === 0) {
+      return undefined;
+    }
     if (total.input === 0 && total.output === 0 && total.cached === 0 && total.thinking === 0) {
       return undefined;
     }
     return total;
   } catch (e) {
     logger.warn(`[agyCli] readUsageFromDatabase failed: ${e}`);
+    return undefined;
   }
-  return undefined;
 }
 
 /** Decode a blob as plain UTF-8 text, with null-bytes stripped and non-printable chars replaced. */
