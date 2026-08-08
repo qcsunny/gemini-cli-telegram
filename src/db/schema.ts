@@ -65,5 +65,20 @@ export const runtimeStates = sqliteTable('runtime_states', {
   updatedAt: text('updated_at').notNull(),
 });
 
+/**
+ * ChatMessages table persists recent Telegram group/chat messages so the /sum
+ * command can summarize them. The Bot API cannot fetch chat history, so the
+ * bot stores every received message locally as they arrive.
+ */
+export const chatMessages = sqliteTable('chat_messages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  chatId: text('chat_id').notNull(),
+  messageId: integer('message_id').notNull(),
+  senderId: integer('sender_id').notNull(),
+  senderName: text('sender_name'),
+  text: text('text').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
 
 
