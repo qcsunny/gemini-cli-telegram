@@ -6,7 +6,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { getAgyDataDir, getDefaultModel } from '../../../config/userConfig.js';
+import { getAgyDataDir, getDefaultModel, getDefaultModels } from '../../../config/userConfig.js';
 import { findSafeCutPoint, formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
@@ -365,13 +365,16 @@ export const MAX_MODEL_SUGGESTIONS = 5;
 
 /** Fallback model suggestions shown when no model keyword matched. */
 function getFallbackModelSuggestions(): string[] {
-  return [
-    getDefaultModel() || 'Gemini 3.6 Flash (High)',
-    'Web2API: Gemini 3.1 Pro',
-    'DeepSeek: Flash',
-    'Claude Sonnet 4.6 (Thinking)',
-    'OpenCode: DeepSeek V4 Flash Free',
-  ];
+  const suggestions = [
+    getDefaultModel(),
+    ...(getDefaultModels()?.inlineSuggestions ?? []),
+  ].filter((m): m is string => Boolean(m));
+  const seen = new Set<string>();
+  return suggestions.filter(m => {
+    if (seen.has(m)) return false;
+    seen.add(m);
+    return true;
+  }).slice(0, MAX_MODEL_SUGGESTIONS);
 }
 
 const CHANNEL_PREFIX_RE = /^(Web2API|DeepSeek|OpenCode)\s*:\s*/i;
@@ -677,9 +680,13 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
   if (cmp.currentPage === 0) {
     // Cover mode: ZERO model buttons on page 0 for maximum privacy
     const configDefaults = loadModelsConfig()?.compareDefaults;
-    const defaultLabel = configDefaults && configDefaults.length >= 2
-      ? `🚀 Default group compare (${configDefaults.map(m => m.replace(/^(Web2API|DeepSeek|OpenCode)\s*:\s*/i, '').split(' ')[0].split('：')[0]).join(' + ')})`
-      : '🚀 Default group compare (Opus + Gemini Pro + DeepSeek)';
+    const compareGroup = getDefaultModels()?.compareGroup ?? [];
+    const labelModels = configDefaults && configDefaults.length >= 2
+      ? configDefaults
+      : compareGroup.length > 0 ? [cmp.candidates[0], ...compareGroup].filter(Boolean) : [];
+    const defaultLabel = labelModels.length > 0
+      ? `🚀 Default group compare (${labelModels.map(m => m.replace(/^(Web2API|DeepSeek|OpenCode)\s*:\s*/i, '').split(' ')[0].split('：')[0]).join(' + ')})`
+      : '🚀 Default group compare';
     rows.push([{ text: defaultLabel, callback_data: `inline_cmp_default:${cmp.resultId}` }]);
     rows.push([{ text: '▶️ Browse/select models (full list)', callback_data: `inline_cmp_page:${cmp.resultId}:1` }]);
     if (cmp.selectedIdx.length >= 2) {
@@ -987,8 +994,7 @@ export function registerInlineHandler(
         selectedIndices.length = 0; // reset
         const defaultGroup = [
           activeCmp.candidates[0], // First model (Opus)
-          'Web2API: Gemini 3.1 Pro Enhanced',
-          'DeepSeek: Flash Thinking Search'
+          ...(getDefaultModels()?.compareGroup ?? []),
         ];
         for (const modelName of defaultGroup) {
           if (!modelName) continue;
@@ -1233,7 +1239,7 @@ export function registerInlineHandler(
         },
       }];
       logger.info(`[InlineQuery] Compare mode: sending picker card for "${prompt.slice(0, 40)}..."`);
-      await ctx.answerInlineQuery(results, { cache_time: 0 });
+      await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
       return;
     }
 
@@ -1278,7 +1284,7 @@ export function registerInlineHandler(
         });
 
         logger.info(`[InlineQuery] Family mode "${family}": sending ${results.length} model card(s) ids=${results.map((r) => r.id).join(',')}`);
-        await ctx.answerInlineQuery(results, { cache_time: 0 });
+        await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
         return;
       }
 
@@ -1360,7 +1366,7 @@ export function registerInlineHandler(
       ];
 
       logger.info(`[InlineQuery] Sending ${results.length} result(s) family="${family || ''}" primary="${modelToUse}" suggestions=${suggestionCandidates.length} ids=${results.map((r) => (r as any).id).join(',')}`);
-      await ctx.answerInlineQuery(results, { cache_time: 0 });
+      await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
     } catch (e) {
       logger.error(`Error answering inline query: ${e}`);
       pendingResults.delete(resultId);

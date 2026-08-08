@@ -25,6 +25,16 @@ vi.mock('../utils/logger.js', () => ({
     debug: vi.fn(),
   },
 }));
+vi.mock('../config/userConfig.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/userConfig.js')>();
+  return {
+    ...actual,
+    loadUserConfig: vi.fn(() => ({ telegramBotToken: 'mock-token', allowedUsers: [1] })),
+    saveUserConfig: vi.fn(),
+    getDefaultModel: vi.fn(() => 'mock-model'),
+    getDefaultProjectName: vi.fn(() => 'mock-project'),
+  };
+});
 
 describe('ProjectManager', () => {
   let projectManager: ProjectManager;
@@ -128,6 +138,34 @@ describe('ProjectManager', () => {
       
       expect(projects.length).toBe(1);
       expect(projects[0].name).toBe('python-app');
+    });
+  });
+
+  describe('saveProjects', () => {
+    it('should solidify projects into config.json via saveUserConfig', async () => {
+      const { saveUserConfig } = await import('../config/userConfig.js');
+      const { loadUserConfig } = await import('../config/userConfig.js');
+      vi.mocked(loadUserConfig).mockReturnValue({
+        telegramBotToken: 'mock-token',
+        allowedUsers: [1],
+        projects: [],
+      });
+
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify([
+        { id: 'p-a', name: 'Alpha', path: '/p/a' },
+      ]));
+      await projectManager.loadProjects();
+      await projectManager.saveProjects();
+
+      expect(saveUserConfig).toHaveBeenCalledWith(expect.objectContaining({
+        projects: expect.arrayContaining([
+          expect.objectContaining({ id: 'p-a', name: 'Alpha', path: '/p/a' }),
+        ]),
+      }));
+      expect(saveUserConfig).toHaveBeenCalledWith(expect.objectContaining({
+        telegramBotToken: 'mock-token',
+        allowedUsers: [1],
+      }));
     });
   });
 });

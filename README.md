@@ -26,6 +26,9 @@ A local gateway that bridges the **Google Antigravity / Gemini CLI** to **Telegr
    npm run build
    ```
 2. Configure `config.json`: set `allowedUsers` (your Telegram user id), proxy, and `projects`.
+
+   `/save` command and the save-latest button write markdown files to the answer save dir.
+   Set `paths.answerSaveDir` (no default; must be set in `config.json`) to control where they are stored:
 3. Authenticate:
    ```bash
    node dist/cli.js setup auth

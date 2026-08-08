@@ -6,7 +6,7 @@
 import * as http from 'node:http';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../../utils/logger.js';
-import { getTuningConfig, getBackendUrl } from '../../config/userConfig.js';
+import { getTuningConfig, getBackendUrl, getDefaultModels } from '../../config/userConfig.js';
 import { loadUserConfig } from '../../config/userConfig.js';
 import { saveMessage, getHistory } from '../messageStore.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
@@ -16,7 +16,7 @@ import type { AgyRunOptions, AgyRunResult } from '../types.js';
 export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
   const { prompt, conversationId: existingConvId, model = '', onChunk, signal } = opts;
   const cfg = loadModelsConfig();
-  const modelId = cfg?.routing[model] ?? 'deepseek-v4-flash';
+  const modelId = cfg?.routing[model] ?? getDefaultModels()?.deepseekId;
 
   const convId = existingConvId || makeDeepSeekConvId();
 

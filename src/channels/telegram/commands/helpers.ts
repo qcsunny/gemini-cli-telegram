@@ -3,6 +3,10 @@
  * @description Helper functions for Telegram command handlers.
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { getAnswerSaveDir } from '../../../config/userConfig.js';
+
 export function htmlToMarkdown(html: string): string {
   let md = html;
 
@@ -96,4 +100,38 @@ export function extractTitleFromMarkdown(answerMarkdown: string): string {
   // 3. Fallback to the first line (clean out any basic inline markdown formatting like *, _, `)
   const firstLine = lines[0].replace(/[*_`#]/g, '').trim();
   return firstLine;
+}
+
+export interface SaveAnswerInput {
+  title?: string;
+  answerMarkdown: string;
+  thinkingMarkdown?: string;
+}
+
+/**
+ * Reassembles a response into Obsidian-friendly markdown, builds a date-prefixed
+ * filename, and writes it to the configured answer save directory (getAnswerSaveDir()).
+ * Returns the absolute path of the written file.
+ */
+export function saveMarkdownToAnswerSaveDir({ title, answerMarkdown, thinkingMarkdown }: SaveAnswerInput): string {
+  let markdown = '';
+  if (title) markdown += `# ${title}\n\n`;
+  markdown += `${answerMarkdown}\n`;
+  if (thinkingMarkdown && thinkingMarkdown.trim()) {
+    markdown += `\n---\n\n<details>\n<summary>🤔 AI Thinking (click to expand)</summary>\n\n${thinkingMarkdown.trim()}\n\n</details>\n`;
+  }
+
+  const sanitizedTitle = (title || 'untitled')
+    .replace(/[\/\\:*?"<>|]/g, '')
+    .replace(/\s+/g, '_')
+    .trim()
+    .substring(0, 50);
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const fileName = sanitizedTitle ? `${dateStr}_${sanitizedTitle}.md` : `Untitled_${Math.floor(Date.now() / 1000)}.md`;
+
+  const answerSaveDir = getAnswerSaveDir();
+  if (!fs.existsSync(answerSaveDir)) fs.mkdirSync(answerSaveDir, { recursive: true });
+  const filePath = path.join(answerSaveDir, fileName);
+  fs.writeFileSync(filePath, markdown, 'utf8');
+  return filePath;
 }

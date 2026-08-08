@@ -12,7 +12,7 @@ vi.mock('node:os', () => ({
   homedir: () => '/mock/home',
 }));
 
-import { loadUserConfig, saveUserConfig, configExists, getTuningConfig, getBackendUrl, clearConfigCache, getAgyDataDir, getBrowseRoot, TUNING_DEFAULTS, BACKEND_URL_DEFAULTS } from './userConfig.js';
+import { loadUserConfig, saveUserConfig, configExists, getTuningConfig, getBackendUrl, clearConfigCache, getAgyDataDir, getBrowseRoot, getDefaultModels, TUNING_DEFAULTS, BACKEND_URL_DEFAULTS } from './userConfig.js';
 
 describe('userConfig', () => {
   beforeEach(() => {

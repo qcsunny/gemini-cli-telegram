@@ -22,7 +22,7 @@ import { readThoughtFromTranscript } from './messageLoop/transcript.js';
 import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
-import { getTuningConfig } from '../config/userConfig.js';
+import { getTuningConfig, getDefaultModel } from '../config/userConfig.js';
 import { getEffectiveModelOrder, getChannelModel, buildTierAwareChain } from './modelRegistry.js';
 import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError } from './backendHealth.js';
 
@@ -488,7 +488,7 @@ export async function processMessage(
       // Local agy models already return cumulative usage from their database
        logger.info(`[footer] Calculating footer - exitCode=${finalResult.exitCode}, usage=${JSON.stringify(finalResult.usage)}`);
       const footerText = formatFooterMarker(
-        modelToUse || 'Gemini 3.5 Flash (Medium)',
+        modelToUse || getDefaultModel() || '',
         finalPrompt,
         answerBuffer + (thoughtBuffer.trim() ? '\n' + thoughtBuffer.trim() : ''),
         finalResult.usage,

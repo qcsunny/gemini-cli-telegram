@@ -30,6 +30,7 @@
   ],
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^13.0.1",
     "commander": "^15.0.0",
     "drizzle-orm": "^0.45.2",

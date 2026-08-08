@@ -1,0 +1,13 @@
+{
+  "name": "sqlite-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only MCP server for the gemini-cli-telegram db.sqlite database",
+  "bin": {
+    "sqlite-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  }
+}

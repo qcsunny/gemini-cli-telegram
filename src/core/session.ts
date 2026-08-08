@@ -21,7 +21,7 @@ import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd } from '../agy/conversationStore.js';
 import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory } from '../agy/agyCli.js';
-import { loadUserConfig, getDefaultModel, getDefaultProjectName, CONFIG_DIR } from '../config/userConfig.js';
+import { loadUserConfig, saveUserConfig, getDefaultModel, getDefaultProjectName, CONFIG_DIR } from '../config/userConfig.js';
 
 /** Factory function type for building chat-bound media sender functions */
 export type SendMediaFactory = (chatId: number) => SendMediaFn;
@@ -88,6 +88,13 @@ export class ProjectManager {
       const projectsFile = path.join(this.configDir, 'projects.json');
       const data = JSON.stringify(Array.from(this.projects.values()), null, 2);
       await fs.writeFile(projectsFile, data, 'utf-8');
+
+      // Solidify into config.json so startup initialize() retains them.
+      // Only ever touches the `projects` key, preserving all other config.
+      const cfg = loadUserConfig();
+      if (cfg) {
+        saveUserConfig({ ...cfg, projects: Array.from(this.projects.values()) });
+      }
     } catch (e) {
       logger.error(`Failed to save projects: ${e}`);
     }
@@ -111,6 +118,7 @@ export class ProjectManager {
         'Dockerfile',
         'docker-compose.yml',
         '.git',
+        '.agents',
         'README.md',
         'requirements.txt',
         'Gemfile',
