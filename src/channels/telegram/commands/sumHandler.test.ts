@@ -105,4 +105,21 @@ describe('sumHandler chat_messages persistence', () => {
     persistChatMessage(undefined);
     expect(loadRecentMessages(999, 10)).toHaveLength(0);
   });
+
+  it('should support filtering by target username (case-insensitive)', () => {
+    persistChatMessage(makeMsg({ message_id: 1, text: 'msg from bob', from: { id: 10, is_bot: false, first_name: 'Bob', username: 'Bob_The_Builder' } }));
+    persistChatMessage(makeMsg({ message_id: 2, text: 'msg from alice', from: { id: 20, is_bot: false, first_name: 'Alice', username: 'AliceInWonderland' } }));
+    persistChatMessage(makeMsg({ message_id: 3, text: 'another from bob', from: { id: 10, is_bot: false, first_name: 'Bob', username: 'Bob_The_Builder' } }));
+
+    const bobMsgs = loadRecentMessages(999, 10, 'bob_the_builder');
+    expect(bobMsgs).toEqual([
+      { senderName: 'Bob', text: 'msg from bob' },
+      { senderName: 'Bob', text: 'another from bob' },
+    ]);
+
+    const aliceMsgs = loadRecentMessages(999, 10, 'ALICEINWONDERLAND');
+    expect(aliceMsgs).toEqual([
+      { senderName: 'Alice', text: 'msg from alice' },
+    ]);
+  });
 });

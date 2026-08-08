@@ -114,6 +114,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       message_id INTEGER NOT NULL,
       sender_id INTEGER NOT NULL,
       sender_name TEXT,
+      sender_username TEXT,
       text TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
@@ -129,6 +130,16 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   } catch (e: any) {
     if (!e.message?.includes('duplicate column name')) {
       logger.warn(`[db] Notice on adding 'usage' column: ${e.message}`);
+    }
+  }
+
+  // Dynamically add sender_username column to chat_messages table if it doesn't exist in legacy databases
+  try {
+    sqlite.exec(`ALTER TABLE chat_messages ADD COLUMN sender_username TEXT;`);
+    logger.info(`[db] Successfully added 'sender_username' column to 'chat_messages' table.`);
+  } catch (e: any) {
+    if (!e.message?.includes('duplicate column name')) {
+      logger.warn(`[db] Notice on adding 'sender_username' column: ${e.message}`);
     }
   }
 
