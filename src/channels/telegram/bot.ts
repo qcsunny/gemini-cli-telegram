@@ -844,6 +844,30 @@ export class TelegramBot {
     this.bot.use(async (ctx, next) => {
       if (ctx.message) {
         persistChatMessage(ctx.message);
+
+        // Trigger typing indicator immediately if this message targets the bot,
+        // so the user sees "bot is typing..." before queueing or file downloads.
+        try {
+          const text = ctx.message.text || ctx.message.caption;
+          if (text && ctx.chat) {
+            let shouldRespond = false;
+            if (ctx.chat.type === 'private') {
+              shouldRespond = !text.startsWith('/');
+            } else if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
+              const botUsername = ctx.me.username;
+              const isMentioned = text.includes(`@${botUsername}`);
+              const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+              if ((isMentioned || isReplyToBot) && !text.startsWith('/')) {
+                shouldRespond = true;
+              }
+            }
+            if (shouldRespond) {
+              ctx.replyWithChatAction('typing').catch(() => {});
+            }
+          }
+        } catch (err) {
+          logger.warn(`Failed to trigger pre-queue typing action: ${err}`);
+        }
       }
       await next();
     });
