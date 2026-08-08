@@ -212,8 +212,23 @@ async function handleSum(
     const footerParts: string[] = [`📚 ${messages.length} messages`, `⏱️ ${duration}s`];
     const inCount = result.usage?.input || 0;
     const outCount = result.usage?.output || 0;
-    if (inCount) footerParts.push(`📥 In: ${inCount}`);
-    if (outCount) footerParts.push(`📤 Out: ${outCount}`);
+    const cachedCount = result.usage?.cached || 0;
+    const thinkingCount = result.usage?.thinking || 0;
+
+    if (inCount > 0 || cachedCount > 0) {
+      let inText = `📥 In: ${inCount}`;
+      if (cachedCount > 0) {
+        inText += ` (Cached: ${cachedCount})`;
+      }
+      footerParts.push(inText);
+    }
+    if (outCount > 0 || thinkingCount > 0) {
+      let outText = `📤 Out: ${outCount}`;
+      if (thinkingCount > 0) {
+        outText += ` (Reasoning: ${thinkingCount})`;
+      }
+      footerParts.push(outText);
+    }
 
     const header = targetUsername
       ? `**📋 Chat Summary for @${targetUsername} (last ${messages.length} messages)**`
