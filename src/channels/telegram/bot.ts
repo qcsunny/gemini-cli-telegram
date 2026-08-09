@@ -27,7 +27,7 @@ import * as crypto from 'crypto';
 import * as http from 'http';
 import { SessionManager } from '../../core/session.js';
 import { processMessage } from '../../core/messageLoop.js';
-import { createTelegramSendMedia } from './outbound.js';
+import { createTelegramSendMedia, createTelegramSendMediaGroup } from './outbound.js';
 import { isPrivateImageRequest, handlePrivateImageRequest } from './commands/privateImageHandler.js';
 import { persistChatMessage } from './commands/sumHandler.js';
 import type {
@@ -336,7 +336,7 @@ async function downloadTelegramFile(
 }
 
 /** Supported Telegram media types for extraction. */
-type TelegramMediaType = 'photo' | 'voice' | 'audio' | 'video' | 'document';
+type TelegramMediaType = 'photo' | 'voice' | 'audio' | 'video' | 'document' | 'sticker' | 'animation' | 'video_note';
 
 /** Extracted info from a Telegram media message. */
 interface TelegramMediaInfo {
@@ -373,6 +373,15 @@ function extractMediaFromMessage(
   if (msg.document) {
     return { type: 'document', fileId: msg.document.file_id, mimeType: msg.document.mime_type || 'application/octet-stream', caption: msg.caption, fileName: msg.document.file_name };
   }
+  if (msg.sticker) {
+    return { type: 'sticker', fileId: msg.sticker.file_id, mimeType: msg.sticker.mime_type || 'image/webp', caption: msg.caption, fileName: msg.sticker.emoji };
+  }
+  if (msg.animation) {
+    return { type: 'animation', fileId: msg.animation.file_id, mimeType: msg.animation.mime_type || 'video/mp4', caption: msg.caption, fileName: msg.animation.file_name };
+  }
+  if (msg.video_note) {
+    return { type: 'video_note', fileId: msg.video_note.file_id, mimeType: 'video/mp4', caption: msg.caption, fileName: 'video_note.mp4' };
+  }
   return undefined;
 }
 
@@ -390,6 +399,9 @@ function extractMediaInfo(
     audio?: { file_id: string; mime_type?: string; file_name?: string };
     video?: { file_id: string; mime_type?: string; file_name?: string };
     document?: { file_id: string; mime_type?: string; file_name?: string };
+    sticker?: { file_id: string; mime_type?: string; emoji?: string };
+    animation?: { file_id: string; mime_type?: string; file_name?: string };
+    video_note?: { file_id: string };
   } | undefined;
   if (!msg) return undefined;
   const caption = msg.caption;
@@ -416,6 +428,18 @@ function extractMediaInfo(
     const doc = msg.document;
     if (!doc) return undefined;
     return { fileId: doc.file_id, mimeType: doc.mime_type || 'application/octet-stream', caption, fileName: doc.file_name };
+  } else if (mediaType === 'sticker') {
+    const sticker = msg.sticker;
+    if (!sticker) return undefined;
+    return { fileId: sticker.file_id, mimeType: sticker.mime_type || 'image/webp', caption, fileName: sticker.emoji };
+  } else if (mediaType === 'animation') {
+    const animation = msg.animation;
+    if (!animation) return undefined;
+    return { fileId: animation.file_id, mimeType: animation.mime_type || 'video/mp4', caption, fileName: animation.file_name };
+  } else if (mediaType === 'video_note') {
+    const videoNote = msg.video_note;
+    if (!videoNote) return undefined;
+    return { fileId: videoNote.file_id, mimeType: 'video/mp4', caption, fileName: 'video_note.mp4' };
   }
   return undefined;
 }
@@ -428,6 +452,15 @@ export class TelegramBot {
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private proxyAgent: ProxyAgent | undefined;
   private pollAgent: ProxyAgent | undefined;
+  private albumBuffer: Map<
+    string,
+    {
+      chatId: number;
+      items: { mediaType: TelegramMediaType; info: TelegramMediaInfo; ctx: Context }[];
+      timer: ReturnType<typeof setTimeout>;
+    }
+  > = new Map();
+  private static readonly ALBUM_FLUSH_MS = 800;
 
   constructor(token: string, options: TelegramBotOptions = {}) {
     const clientConfig: any = {};
@@ -524,6 +557,7 @@ export class TelegramBot {
     this.bot = new Bot(token, { client: clientConfig });
     this.sessionManager = new SessionManager(
       (chatId) => createTelegramSendMedia(this.bot.api, chatId, token, options.proxy),
+      (chatId) => createTelegramSendMediaGroup(this.bot.api, chatId, token, options.proxy),
     );
     this.defaultOptions = {
       cwd: options.cwd || process.cwd(),
@@ -1020,7 +1054,7 @@ export class TelegramBot {
 
     this.bot.on('message:photo', async (ctx) => {
       persistChatMessage(ctx.message);
-      await this.handleMediaMessage(ctx, 'photo');
+      await this.handleAlbumOrSingle(ctx, 'photo');
     });
 
     this.bot.on('message:voice', async (ctx) => {
@@ -1035,12 +1069,27 @@ export class TelegramBot {
 
     this.bot.on('message:video', async (ctx) => {
       persistChatMessage(ctx.message);
-      await this.handleMediaMessage(ctx, 'video');
+      await this.handleAlbumOrSingle(ctx, 'video');
     });
 
     this.bot.on('message:document', async (ctx) => {
       persistChatMessage(ctx.message);
-      await this.handleMediaMessage(ctx, 'document');
+      await this.handleAlbumOrSingle(ctx, 'document');
+    });
+
+    this.bot.on('message:sticker', async (ctx) => {
+      persistChatMessage(ctx.message);
+      await this.handleMediaMessage(ctx, 'sticker');
+    });
+
+    this.bot.on('message:animation', async (ctx) => {
+      persistChatMessage(ctx.message);
+      await this.handleMediaMessage(ctx, 'animation');
+    });
+
+    this.bot.on('message:video_note', async (ctx) => {
+      persistChatMessage(ctx.message);
+      await this.handleMediaMessage(ctx, 'video_note');
     });
 
     this.bot.catch((err) => {
@@ -1150,6 +1199,129 @@ export class TelegramBot {
         await channelReply.send(`${ICONS.error} <b>Autopilot stopped</b> — error: ${e instanceof Error ? e.message : String(e)}`);
         return;
       }
+    }
+  }
+
+  private async handleAlbumOrSingle(
+    ctx: Context,
+    mediaType: TelegramMediaType,
+  ): Promise<void> {
+    const groupId = (ctx.message as any)?.media_group_id as string | undefined;
+    if (!groupId) {
+      await this.handleMediaMessage(ctx, mediaType);
+      return;
+    }
+
+    const info = extractMediaInfo(ctx, mediaType);
+    if (!info) {
+      await ctx.reply(`${ICONS.error} Could not retrieve ${mediaType} file info.`);
+      return;
+    }
+
+    // In group chats, only respond if the bot is mentioned or replied to
+    if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
+      const botUsername = ctx.me.username;
+      const captionText = info.caption ?? '';
+      const isMentioned = captionText.includes(`@${botUsername}`);
+      const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
+      if (!isMentioned && !isReplyToBot) {
+        return;
+      }
+    }
+
+    const existing = this.albumBuffer.get(groupId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.items.push({ mediaType, info, ctx });
+      existing.timer = setTimeout(() => {
+        void this.flushAlbum(groupId);
+      }, TelegramBot.ALBUM_FLUSH_MS);
+    } else {
+      this.albumBuffer.set(groupId, {
+        chatId: ctx.chat?.id ?? 0,
+        items: [{ mediaType, info, ctx }],
+        timer: setTimeout(() => {
+          void this.flushAlbum(groupId);
+        }, TelegramBot.ALBUM_FLUSH_MS),
+      });
+    }
+  }
+
+  private async flushAlbum(groupId: string): Promise<void> {
+    const entry = this.albumBuffer.get(groupId);
+    this.albumBuffer.delete(groupId);
+    if (!entry || entry.items.length === 0) return;
+
+    const firstCtx = entry.items[0].ctx;
+
+    // Telegram puts the album caption on the last media item; pick the last non-empty one.
+    let captionText = '';
+    for (const item of entry.items) {
+      if (item.info.caption) captionText = item.info.caption;
+    }
+
+    // Clean up the mention from caption text for group chats
+    if (firstCtx.chat?.type === 'group' || firstCtx.chat?.type === 'supergroup') {
+      const botUsername = firstCtx.me.username;
+      const mentionRegex = new RegExp(`@${botUsername}\\b`, 'gi');
+      captionText = captionText.replace(mentionRegex, '').trim();
+    }
+
+    const media: {
+      type: TelegramMediaType;
+      path: string;
+      mimeType?: string;
+      fileName?: string;
+    }[] = [];
+    const tempPaths: string[] = [];
+
+    try {
+      for (const item of entry.items) {
+        const tempFilePath = await downloadTelegramFile(
+          item.ctx,
+          item.info.fileId,
+          this.proxyAgent,
+        );
+        tempPaths.push(tempFilePath);
+        media.push({
+          type: item.mediaType,
+          path: tempFilePath,
+          mimeType: item.info.mimeType,
+          fileName: item.info.fileName,
+        });
+      }
+    } catch (e) {
+      logger.error(`Failed to download album files: ${e}`);
+      for (const p of tempPaths) {
+        await fs.unlink(p).catch(() => undefined);
+      }
+      return;
+    }
+
+    await withSession(
+      this.sessionManager,
+      firstCtx,
+      this.defaultOptions,
+      async (session, channelReply) => {
+        const taskText = injectMediaCaptionTask(captionText);
+        const multimodalInput: MultimodalInput = {
+          text: taskText ?? captionText,
+          media,
+        };
+        await processMessage(
+          session,
+          multimodalInput,
+          channelReply,
+          telegramFormatter,
+        );
+        reset429Backoff(Number(session.chatId));
+      },
+    );
+
+    for (const p of tempPaths) {
+      await fs
+        .unlink(p)
+        .catch((e) => logger.warn(`Failed to delete temp file: ${e}`));
     }
   }
 

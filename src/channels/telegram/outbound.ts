@@ -21,6 +21,8 @@ type MediaType =
   | 'audio'
   | 'video'
   | 'animation'
+  | 'sticker'
+  | 'video_note'
   | 'document'
   | 'auto';
 
@@ -30,6 +32,16 @@ export type SendMediaFn = (
   type: MediaType,
   caption?: string,
 ) => Promise<void>;
+
+/** Single item inside an album (media group) delivery */
+export interface SendMediaGroupItem {
+  filePath: string;
+  type: Exclude<MediaType, 'sticker' | 'video_note' | 'auto'>;
+  caption?: string;
+}
+
+/** Function contract for dispatching a batch of files as an album (media group) */
+export type SendMediaGroupFn = (items: SendMediaGroupItem[]) => Promise<void>;
 
 const EXTENSION_TO_MEDIA_TYPE: Record<string, MediaType> = {
   // Photos
@@ -52,6 +64,10 @@ const EXTENSION_TO_MEDIA_TYPE: Record<string, MediaType> = {
   '.mkv': 'video',
   // Animation
   '.gif': 'animation',
+  // Sticker
+  '.tgs': 'sticker',
+  // Video note (round video)
+  '.webm': 'video_note',
 };
 
 function detectMediaType(filePath: string): MediaType {
@@ -101,6 +117,12 @@ export function createTelegramSendMedia(
         case 'animation':
           await api.sendAnimation(chatId, file, opts);
           break;
+        case 'sticker':
+          await api.sendSticker(chatId, file);
+          break;
+        case 'video_note':
+          await api.sendVideoNote(chatId, file);
+          break;
         case 'document':
         default:
           await api.sendDocument(chatId, file, opts);
@@ -117,6 +139,8 @@ export function createTelegramSendMedia(
             audio: 'sendAudio',
             video: 'sendVideo',
             animation: 'sendAnimation',
+            sticker: 'sendSticker',
+            video_note: 'sendVideoNote',
             document: 'sendDocument',
             auto: 'sendDocument',
           };
@@ -127,6 +151,8 @@ export function createTelegramSendMedia(
             audio: 'audio',
             video: 'video',
             animation: 'animation',
+            sticker: 'sticker',
+            video_note: 'video_note',
             document: 'document',
             auto: 'document',
           };
@@ -138,7 +164,8 @@ export function createTelegramSendMedia(
           }
           cmd += ` -F "chat_id=${chatId}"`;
           cmd += ` -F "${field}=@${filePath}"`;
-          if (caption) {
+          const supportsCaption: MediaType[] = ['photo', 'voice', 'audio', 'video', 'animation', 'document', 'auto'];
+          if (caption && supportsCaption.includes(resolvedType)) {
             cmd += ` -F "caption=${markdownToHtml(caption)}"`;
             cmd += ` -F "parse_mode=HTML"`;
           }
@@ -154,6 +181,80 @@ export function createTelegramSendMedia(
           }
         } catch (curlErr) {
           logger.error(`Curl fallback also failed: ${curlErr}`);
+          throw e; // throw the original error
+        }
+      } else {
+        throw e;
+      }
+    }
+  };
+}
+
+/**
+ * Creates a bound media-group (album) send function for a specific Telegram chat.
+ * Telegram only allows grouping photos, videos, audio and documents into an album.
+ */
+export function createTelegramSendMediaGroup(
+  api: Api,
+  chatId: number,
+  token?: string,
+  proxy?: string,
+): SendMediaGroupFn {
+  return async (items: SendMediaGroupItem[]): Promise<void> => {
+    if (items.length === 0) return;
+    const media = items.map((item) => {
+      const opts = item.caption
+        ? { caption: markdownToHtml(item.caption), parse_mode: 'HTML' as const }
+        : {};
+      switch (item.type) {
+        case 'video':
+          return { type: 'video' as const, media: new InputFile(item.filePath), ...opts };
+        case 'audio':
+          return { type: 'audio' as const, media: new InputFile(item.filePath), ...opts };
+        case 'document':
+          return { type: 'document' as const, media: new InputFile(item.filePath), ...opts };
+        case 'photo':
+        default:
+          return { type: 'photo' as const, media: new InputFile(item.filePath), ...opts };
+      }
+    });
+
+    logger.debug(`Sending media group of ${items.length} items to chat ${chatId}`);
+
+    try {
+      await api.sendMediaGroup(chatId, media as never);
+    } catch (e) {
+      logger.error(`Failed to send media group via grammy api: ${e}`);
+      if (token) {
+        logger.info(`Attempting fallback media group delivery via curl...`);
+        try {
+          const parts = items.map((item, idx) => {
+            const field = `media`;
+            const itemJson = JSON.stringify({
+              type: item.type,
+              media: `attach://file${idx}`,
+              ...(item.caption ? { caption: markdownToHtml(item.caption), parse_mode: 'HTML' } : {}),
+            });
+            return `-F "${field}=${itemJson}" -F "file${idx}=@${item.filePath}"`;
+          });
+          let cmd = `curl -s -X POST "https://api.telegram.org/bot${token}/sendMediaGroup"`;
+          if (proxy) {
+            cmd += ` -x "${proxy}"`;
+          }
+          cmd += ` -F "chat_id=${chatId}"`;
+          cmd += ` ${parts.join(' ')}`;
+
+          logger.info(`Executing curl fallback media group command`);
+          const { stdout } = await execAsync(cmd);
+          const res = JSON.parse(stdout);
+          if (res.ok) {
+            logger.info(`Curl fallback delivered media group successfully.`);
+            return;
+          } else {
+            throw new Error(res.description || 'Unknown error');
+          }
+        } catch (curlErr) {
+          logger.error(`Curl fallback media group also failed: ${curlErr}`);
           throw e; // throw the original error
         }
       } else {

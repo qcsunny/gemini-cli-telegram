@@ -17,7 +17,7 @@ import * as os from 'node:os';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
-import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './types.js';
+import type { DaemonSession, SessionOptions, SendMediaFn, SendMediaGroupFn, ProjectInfo } from './types.js';
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd, getSessionKey } from '../agy/conversationStore.js';
 import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory } from '../agy/agyCli.js';
@@ -25,6 +25,9 @@ import { loadUserConfig, saveUserConfig, getDefaultModel, getDefaultProjectName,
 
 /** Factory function type for building chat-bound media sender functions */
 type SendMediaFactory = (chatId: number) => SendMediaFn;
+
+/** Factory function type for building chat-bound media-group (album) sender functions */
+type SendMediaGroupFactory = (chatId: number) => SendMediaGroupFn;
 
 /**
  * Utility class for discovering, caching, and managing local software projects/workspaces.
@@ -274,11 +277,13 @@ export class ProjectManager {
 export class SessionManager {
   private sessions: Map<string, DaemonSession> = new Map();
   private sendMediaFactory?: SendMediaFactory;
+  private sendMediaGroupFactory?: SendMediaGroupFactory;
   private projectManager: ProjectManager;
   private chatScheduler: ChatScheduler;
 
-  constructor(sendMediaFactory?: SendMediaFactory) {
+  constructor(sendMediaFactory?: SendMediaFactory, sendMediaGroupFactory?: SendMediaGroupFactory) {
     this.sendMediaFactory = sendMediaFactory;
+    this.sendMediaGroupFactory = sendMediaGroupFactory;
     this.projectManager = new ProjectManager();
     this.chatScheduler = new ChatScheduler();
     this.projectManager.initialize().catch(e => logger.error(`Failed to initialize project manager: ${e}`));
@@ -425,6 +430,7 @@ export class SessionManager {
     const storedModel = await getStoredModel(chatId, threadId);
     const modelToUse = storedModel || options.model || getDefaultModel() || '';
     const sendMedia = this.sendMediaFactory?.(chatId);
+    const sendMediaGroup = this.sendMediaGroupFactory?.(chatId);
 
     const session: DaemonSession = {
       sessionId,
@@ -446,6 +452,7 @@ export class SessionManager {
       },
       thinkingSteps: [],
       sendMedia,
+      sendMediaGroup,
       autopilot: undefined,
       config: {
         getModel: () => session.model || getDefaultModel() || '',

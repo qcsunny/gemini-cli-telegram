@@ -11,9 +11,9 @@
  * workspace metadata, and formatting contracts.
  */
 
-import type { SendMediaFn } from '../channels/telegram/outbound.js';
+import type { SendMediaFn, SendMediaGroupFn } from '../channels/telegram/outbound.js';
 
-export type { SendMediaFn } from '../channels/telegram/outbound.js';
+export type { SendMediaFn, SendMediaGroupFn } from '../channels/telegram/outbound.js';
 
 /**
  * Multimodal input payload combining text prompt and attached media parts.
@@ -27,7 +27,7 @@ export interface MultimodalInput {
  * Downloaded media attachment details for prompt input processing.
  */
 interface MediaPart {
-  type: 'photo' | 'voice' | 'audio' | 'video' | 'document';
+  type: 'photo' | 'voice' | 'audio' | 'video' | 'document' | 'sticker' | 'animation' | 'video_note';
   path: string; // Local path to the downloaded file
   mimeType?: string; // Optional: detected mime type
   fileName?: string; // Original file name (for documents)
@@ -160,6 +160,8 @@ export interface DaemonSession {
   typingInterval?: ReturnType<typeof setInterval>;
   /** Outbound media send function for tool-initiated file delivery. */
   sendMedia?: SendMediaFn;
+  /** Outbound media-group (album) send function for tool-initiated batch delivery. */
+  sendMediaGroup?: SendMediaGroupFn;
   /** Autopilot / self-reply until configuration */
   autopilot?: AutopilotConfig;
   config?: SessionConfig;
