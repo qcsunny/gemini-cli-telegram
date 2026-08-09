@@ -554,6 +554,19 @@ export function buildChannelReply(
 
             const replyParams = replyToMessageId ? { message_id: replyToMessageId } : undefined;
 
+            // Attach WebApp interactive chart keyboard if response contains a stock/crypto ticker
+            const tickerInText = typeof originalText === 'string'
+              ? originalText.match(/\$([A-Za-z0-9-]+)/)?.[1]
+              : originalText.content.match(/\$([A-Za-z0-9-]+)/)?.[1];
+            const keyboardMarkup = tickerInText ? {
+              inline_keyboard: [[
+                {
+                  text: `📊 View $${tickerInText.toUpperCase()} Real-time Chart`,
+                  web_app: { url: `http://127.0.0.1:4096/chart?symbol=${encodeURIComponent(tickerInText.toUpperCase())}` }
+                }
+              ]]
+            } : undefined;
+
             if (parts.length === 1) {
               // Single part: send as before
               logger.debug(`[SENDRICH] Option A: sending native blocks (count=${blocks.length})`);
@@ -561,6 +574,7 @@ export function buildChannelReply(
               const res = await ctx.api.sendRichMessage(chatId, richMessage, {
                 message_thread_id: messageThreadId,
                 reply_parameters: replyParams,
+                reply_markup: keyboardMarkup,
               });
               messageCache.set(res.message_id, safeMarkdown);
               return res.message_id;
