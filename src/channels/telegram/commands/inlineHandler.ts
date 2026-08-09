@@ -14,6 +14,7 @@ import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.
 import { buildTierAwareChain, getEffectiveModelOrder, loadModelsConfig, displayModelName } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/pricing.js';
+import { marketService } from '../../../stock/service/quote.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -1099,55 +1100,46 @@ export function registerInlineHandler(
     // Default to active session project if no explicit /pN flag was provided
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
-    // Option B: Inline Query Real-time Stock / Crypto Ticker ($NVDA, $BTC, etc.)
-    const tickerMatch = rawQuery.trim().match(/^\$([A-Za-z0-9-]+)$/);
+    // Phase 4 Inline Mode: Real-time Stock / Crypto Ticker ($NVDA, NVDA, $BTC, etc.)
+    const tickerMatch = rawQuery.trim().match(/^(\$)?([A-Za-z0-9-]{1,10})$/);
     if (tickerMatch) {
-      const symbol = tickerMatch[1].toUpperCase();
-      let quoteText = `📈 <b>Real-time Quote — ${symbol}</b>\n\n`;
-      if (symbol.includes('BTC') || symbol.includes('ETH')) {
-        try {
-          const coinId = symbol.includes('BTC') ? 'bitcoin' : 'ethereum';
-          const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true`);
-          const data = await res.json() as any;
-          if (data[coinId]) {
-            const price = data[coinId].usd;
-            const change = data[coinId].usd_24h_change;
-            const changeSign = change >= 0 ? '+' : '';
-            quoteText += `<b>Price:</b> $${price.toLocaleString('en-US')}\n<b>24h Change:</b> ${changeSign}${change.toFixed(2)}%\n\n`;
-          }
-        } catch {
-          quoteText += `Fetching live data for ${symbol}...\n\n`;
-        }
-      } else {
-        quoteText += `Tap the button below or open TradingView to inspect ${symbol} live interactive charts & technical indicators.\n\n`;
-      }
-      quoteText += `<i>Powered by @static32bot Financial Engine</i>`;
+      const symbol = tickerMatch[2].toUpperCase();
+      const quote = await marketService.getQuote(symbol);
+      if (quote) {
+        const sign = quote.change >= 0 ? '+' : '';
+        const icon = quote.change >= 0 ? '📈' : '📉';
+        const delayBadge = quote.isDelayed ? '<i>(Delayed ~15m)</i>' : '<i>(Real-time)</i>';
 
-      const results = [
-        {
-          type: 'article' as const,
-          id: `ticker-${symbol}`,
-          title: `📈 Real-time Market Quote: $${symbol}`,
-          description: `Tap to send ${symbol} live price quote & interactive chart card`,
-          thumbnail_url: THUMBNAILS.sparkles,
-          input_message_content: {
-            message_text: quoteText,
-            parse_mode: 'HTML' as const,
-          },
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: `📊 Open ${symbol} Interactive Chart`,
-                  web_app: { url: `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(symbol.includes('BTC') || symbol.includes('ETH') ? `BINANCE:${symbol}USDT` : `NASDAQ:${symbol}`)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark` },
-                },
+        const quoteText = `${icon} <b>${quote.name}</b>\n\n代号：<b>$${quote.symbol}</b>\n\n<b>当前价格：</b>$${quote.price.toFixed(2)}\n<b>涨跌：</b>${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n<b>市场：</b>${quote.market}\n<b>数据时间：</b>${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
+
+        const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(
+          quote.market === 'CRYPTO' ? `BINANCE:${quote.symbol}USDT` : `NASDAQ:${quote.symbol}`
+        )}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
+
+        const results = [
+          {
+            type: 'article' as const,
+            id: `stock-${symbol}`,
+            title: `${icon} ${quote.name} ($${quote.symbol})`,
+            description: `$${quote.price.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%) · ${quote.market}`,
+            thumbnail_url: THUMBNAILS.sparkles,
+            input_message_content: {
+              message_text: quoteText,
+              parse_mode: 'HTML' as const,
+            },
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '📊 查看详情', web_app: { url: webAppUrl } },
+                  { text: '📈 K线图', web_app: { url: webAppUrl } }
+                ],
               ],
-            ],
+            },
           },
-        },
-      ];
-      await ctx.answerInlineQuery(results, { cache_time: 10, is_personal: true }).catch(() => {});
-      return;
+        ];
+        await ctx.answerInlineQuery(results, { cache_time: 10, is_personal: true }).catch(() => {});
+        return;
+      }
     }
 
     if (!prompt && task !== 'image') {

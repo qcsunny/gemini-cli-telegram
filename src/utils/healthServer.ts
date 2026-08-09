@@ -8,6 +8,8 @@
 import * as http from 'node:http';
 import { logger } from './logger.js';
 
+import { handleStockRoutes } from '../stock/api/stockRoutes.js';
+
 let server: http.Server | null = null;
 const startTime = Date.now();
 
@@ -28,7 +30,10 @@ export function startHealthServer(port: number): void {
     return;
   }
 
-  server = http.createServer((req, res) => {
+  server = http.createServer(async (req, res) => {
+    const handled = await handleStockRoutes(req, res);
+    if (handled) return;
+
     if (req.url === '/health' && req.method === 'GET') {
       const now = Date.now();
       const uptimeMs = now - startTime;
