@@ -23,7 +23,7 @@ export function registerStockHandler(
 ): void {
   bot.command('stock', async (ctx) => {
     const rawArgs = ctx.match;
-    const symbol = typeof rawArgs === 'string' ? rawArgs.trim().toUpperCase().replace(/^\$/, '') : '';
+    const symbol = typeof rawArgs === 'string' ? rawArgs.trim().replace(/^\$/, '') : '';
 
     if (!symbol) {
       await ctx.reply(

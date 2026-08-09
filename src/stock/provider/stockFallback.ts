@@ -18,7 +18,15 @@ export class StockFallbackProvider implements MarketDataProvider {
   readonly name = 'GlobalMarketData';
 
   async getQuote(symbol: string): Promise<StockQuote | null> {
-    const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
+    let cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
+
+    // If query is Chinese name or non-ticker string (e.g. 阿里巴巴, 贵州茅台), search symbol first
+    if (/[\u4e00-\u9fa5]/.test(symbol)) {
+      const searchRes = await this.searchSymbols(symbol);
+      if (searchRes.length > 0) {
+        cleanSym = searchRes[0].symbol.toUpperCase();
+      }
+    }
 
     // 1. Check if query is A-share (e.g., SH600519, 600519, SZ000001) or HK stock (e.g. HK00700, 00700)
     const isAshare = /^(SH|SZ)?\d{6}$/i.test(cleanSym);
@@ -213,9 +221,32 @@ export class StockFallbackProvider implements MarketDataProvider {
   }
 
   async searchSymbols(query: string): Promise<StockSearchResult[]> {
-    const cleanQ = query.toUpperCase().trim();
+    const cleanQ = query.trim();
     if (!cleanQ) return [];
-    const quote = await this.getQuote(cleanQ);
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      const url = `https://searchapi.eastmoney.com/api/suggest/get?type=14&token=D4357F9D2955B90757E0A343A8FA71E9&input=${encodeURIComponent(cleanQ)}`;
+      const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      if (res.ok) {
+        const json = (await res.json()) as any;
+        const list = json?.QuotationCodeTable?.Data || [];
+        if (list.length > 0) {
+          return list.slice(0, 5).map((item: any) => ({
+            symbol: item.Code,
+            name: item.Name,
+            exchange: item.JYS || item.Classify || 'STOCKS',
+            type: 'stock',
+            currency: 'USD',
+          }));
+        }
+      }
+    } catch (err) {
+      logger.warn(`[EastmoneySearch] Search failed for ${cleanQ}: ${err}`);
+    }
+
+    const quote = await this.getQuote(cleanQ.toUpperCase());
     if (quote) {
       return [{
         symbol: quote.symbol,
