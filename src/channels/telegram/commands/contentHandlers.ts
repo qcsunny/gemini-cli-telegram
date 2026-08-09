@@ -133,6 +133,7 @@ export function registerContentHandlers(
   // ── Delete Session ──
   bot.command('delete_session', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
@@ -149,7 +150,7 @@ export function registerContentHandlers(
 
     let session;
     try {
-      session = await sessionManager.getOrCreate(chatId, defaultOptions);
+      session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
     } catch (e) {
       logger.error(`Failed to create session for chat ${chatId}: ${e}`);
       await ctx.reply(`${ICONS.error} <b>Initialization failed:</b> ${e}`);
@@ -191,7 +192,7 @@ export function registerContentHandlers(
         await sessionManager.reset(chatId, {
           ...defaultOptions,
           model: defaultOptions.model,
-        });
+        }, threadId);
         activeResetMsg = ` This was the active session, so your session has been reset and set to <code>${defaultOptions.model}</code>.`;
       }
 

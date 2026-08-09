@@ -37,6 +37,7 @@ export function registerCallbackRouter(
 
     const data = ctx.callbackQuery.data;
     const chatId = ctx.chat?.id;
+    const threadId = ctx.callbackQuery?.message?.message_thread_id;
     
     if (!chatId) return;
 
@@ -60,7 +61,7 @@ export function registerCallbackRouter(
         await sessionManager.reset(chatId, {
           ...defaultOptions,
           project: defaultProj,
-        });
+        }, threadId);
         await ctx.editMessageText(
           `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${defaultOptions.model}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
           { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
@@ -84,7 +85,7 @@ export function registerCallbackRouter(
         return;
       }
 
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       const currentProjectId = session?.currentProject?.id;
 
       await ctx.editMessageText(
@@ -104,7 +105,7 @@ export function registerCallbackRouter(
 
     if (data === '/model') {
       ctx.answerCallbackQuery('Loading models...').catch(e => logger.error(`Failed callback: ${e}`));
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
       const page = 0;
@@ -134,7 +135,7 @@ export function registerCallbackRouter(
       const tierName = tierNames[tier] || 'Model category';
       ctx.answerCallbackQuery(`✨ Switched category: ${tierName}`).catch(e => logger.error(`Failed callback: ${e}`));
 
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
 
@@ -181,7 +182,7 @@ export function registerCallbackRouter(
 
     if (data.startsWith('/model_page ')) {
       const page = parseInt(data.replace('/model_page ', ''), 10);
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
       const start = page * MODELS_PER_PAGE;
@@ -210,7 +211,7 @@ export function registerCallbackRouter(
       const lastContext = messageCache.getLastReplyContext();
       if (!lastContext || (!lastContext.answerMarkdown.trim() && !lastContext.thinkingMarkdown.trim())) {
         // Fallback: try loading from DB (survives restart)
-        const session = sessionManager.getSession(chatId);
+        const session = sessionManager.getSession(chatId, threadId);
         const convId = session?.conversationId;
         const model = session?.model || '';
         if (convId) {
@@ -245,7 +246,7 @@ export function registerCallbackRouter(
       ctx.answerCallbackQuery('Loading session...').catch(e => logger.error(`Failed callback: ${e}`));
       let session;
       try {
-        session = await sessionManager.getOrCreate(chatId, defaultOptions);
+        session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
       } catch {
         return;
       }
@@ -301,7 +302,7 @@ export function registerCallbackRouter(
 
     if (data === '/status') {
       ctx.answerCallbackQuery('Loading status...').catch(e => logger.error(`Failed callback: ${e}`));
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       if (!session) {
         await ctx.editMessageText(`${ICONS.warning} <b>No active session.</b>`, {
           parse_mode: 'HTML',
@@ -355,7 +356,7 @@ export function registerCallbackRouter(
           return;
         }
 
-        const session = sessionManager.getSession(chatId);
+        const session = sessionManager.getSession(chatId, threadId);
         const currentProjectId = session?.currentProject?.id;
 
         await ctx.editMessageText(
@@ -400,7 +401,7 @@ export function registerCallbackRouter(
           return;
         }
 
-        const session = sessionManager.getSession(chatId);
+        const session = sessionManager.getSession(chatId, threadId);
         const currentProjectId = session?.currentProject?.id;
 
         await ctx.editMessageText(
@@ -486,7 +487,7 @@ export function registerCallbackRouter(
       ctx.answerCallbackQuery(`Brain: ${modelName}`).catch(e => logger.error(`Failed callback: ${e}`));
 
       try {
-        const session = await sessionManager.getOrCreate(chatId, defaultOptions);
+        const session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
         session.config!.setModel(modelName, false);
         const backKeyboard = new InlineKeyboard().text(`${ICONS.back} Main Menu`, '/start');
         await ctx.editMessageText(
@@ -515,7 +516,7 @@ export function registerCallbackRouter(
 
       ctx.answerCallbackQuery(`Workspace: ${project.name}`).catch(e => logger.error(`Failed callback: ${e}`));
 
-      const currentSession = sessionManager.getSession(chatId);
+      const currentSession = sessionManager.getSession(chatId, threadId);
       const currentModel = currentSession?.model;
 
       try {
@@ -523,7 +524,7 @@ export function registerCallbackRouter(
           ...defaultOptions,
           project,
           model: currentModel || defaultOptions.model,
-        });
+        }, threadId);
 
         await ctx.editMessageText(
           `${ICONS.success} <b>Workspace Switched</b>\n\n${formatProjectInfo(project)}`,
@@ -545,7 +546,7 @@ export function registerCallbackRouter(
       const projects = projectManager.getProjects();
       const start = page * PROJECTS_PER_PAGE;
       const pageProjects = projects.slice(start, start + PROJECTS_PER_PAGE);
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       const currentProjectId = session?.currentProject?.id;
 
       ctx.answerCallbackQuery(`Page ${page + 1}`).catch(e => logger.error(`Failed callback: ${e}`));

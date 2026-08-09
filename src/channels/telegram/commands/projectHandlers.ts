@@ -22,6 +22,7 @@ export function registerProjectHandlers(
 ): void {
   bot.command('projects', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const projectManager = sessionManager.getProjectManager();
@@ -35,7 +36,7 @@ export function registerProjectHandlers(
       return;
     }
 
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     const currentProjectId = session?.currentProject?.id;
 
     await ctx.reply(
@@ -54,6 +55,7 @@ export function registerProjectHandlers(
 
   bot.command('project_select', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
@@ -75,7 +77,7 @@ export function registerProjectHandlers(
       await sessionManager.reset(chatId, {
         ...defaultOptions,
         project,
-      });
+      }, threadId);
 
       await ctx.reply(
         `${ICONS.success} <b>Workspace Switched</b>\n\n${formatProjectInfo(project)}`,
@@ -92,10 +94,11 @@ export function registerProjectHandlers(
 
   bot.command('project_browse', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     const baseDir = session?.config?.getTargetDir() || process.cwd();
     
     let browsePath: string;
@@ -122,7 +125,7 @@ export function registerProjectHandlers(
         return;
       }
 
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       const currentProjectId = session?.currentProject?.id;
 
       await ctx.reply(

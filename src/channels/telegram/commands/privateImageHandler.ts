@@ -40,6 +40,7 @@ export async function handlePrivateImageRequest(
 ): Promise<boolean> {
   const text = ctx.message?.text;
   const chatId = ctx.chat?.id;
+  const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
   if (!text || !chatId) return false;
   const match = text.match(IMG_RE);
   if (!match) return false;
@@ -50,7 +51,7 @@ export async function handlePrivateImageRequest(
     return true;
   }
 
-  const session = sessionManager.getSession(chatId);
+  const session = sessionManager.getSession(chatId, threadId);
   const availableProjects = sessionManager.getProjectsInConfigOrder() as any[];
   const defaultModel = session?.model
     || session?.config?.getModel?.()

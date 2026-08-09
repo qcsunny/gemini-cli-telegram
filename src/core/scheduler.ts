@@ -22,6 +22,8 @@ import { getScheduledTasksPath } from '../config/userConfig.js';
 export interface ScheduledTask {
   id: string;
   chatId: number;
+  /** Telegram topic (message_thread_id) this task belongs to, if any. */
+  threadId?: number;
   message: string;
   type: 'once' | 'recurring';
   /** ISO string or cron-like expression */
@@ -123,6 +125,7 @@ export class ChatScheduler {
     type: 'once' | 'recurring',
     schedule: string,
     intervalMinutes?: number,
+    threadId?: number,
   ): Promise<ScheduledTask> {
     const now = Date.now();
     let nextRun: number;
@@ -137,6 +140,7 @@ export class ChatScheduler {
     const task: ScheduledTask = {
       id: crypto.randomUUID(),
       chatId,
+      threadId,
       message,
       type,
       schedule,

@@ -152,9 +152,10 @@ async function handleSum(
   defaultOptions: { cwd?: string; proxy?: string },
 ): Promise<void> {
   const chatId = ctx.chat?.id;
+  const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
   if (!chatId) return;
 
-  const session = await sessionManager.getOrCreate(chatId, defaultOptions);
+  const session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
   const config = getSummarizationConfig();
   const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
 

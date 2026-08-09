@@ -189,10 +189,11 @@ async function withSession(
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
+  const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
 
   let session: DaemonSession;
   try {
-    session = await sessionManager.getOrCreate(chatId, defaultOptions);
+    session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
   } catch (e) {
     logger.error(`Failed to create session for chat ${chatId}: ${e}`);
     await ctx.reply(`${ICONS.error} Failed to initialize session: ${e}`);
@@ -550,7 +551,8 @@ export class TelegramBot {
     const scheduler = this.sessionManager.getChatScheduler();
     scheduler.initialize(async (task) => {
       const chatId = task.chatId;
-      logger.info(`Executing scheduled task ${task.id} for chat ${chatId}`);
+      const threadId = task.threadId;
+      logger.info(`Executing scheduled task ${task.id} for chat ${chatId}${threadId ? ` topic ${threadId}` : ''}`);
 
       try {
         const safeEdit = async (messageId: number, text: string, html = true) => {
@@ -567,21 +569,21 @@ export class TelegramBot {
         // Build a custom ChannelReply for scheduled messages
         const scheduledReply: ChannelReply = {
           send: async (text: string): Promise<number> => {
-            const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML' });
+            const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML', message_thread_id: threadId });
             return msg.message_id;
           },
           edit: async (messageId: number, newText: string): Promise<void> => {
             await safeEdit(messageId, newText, true);
           },
           sendPlain: async (text: string): Promise<number> => {
-            const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML' });
+            const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML', message_thread_id: threadId });
             return msg.message_id;
           },
           editPlain: async (messageId: number, newText: string): Promise<void> => {
             await safeEdit(messageId, newText, false);
           },
           sendDocument: async (filePath: string, caption?: string): Promise<void> => {
-            await this.bot.api.sendMessage(chatId, caption || 'Document: ' + filePath);
+            await this.bot.api.sendMessage(chatId, caption || 'Document: ' + filePath, { message_thread_id: threadId });
           },
           delete: async (messageId: number): Promise<void> => {
             await this.bot.api.deleteMessage(chatId, messageId);
@@ -600,7 +602,7 @@ export class TelegramBot {
           },
         };
 
-        const session = await this.sessionManager.getOrCreate(chatId, this.defaultOptions);
+        const session = await this.sessionManager.getOrCreate(chatId, this.defaultOptions, threadId);
         if (session.busy) {
           const msg = `Session busy for chat ${chatId}, skipping scheduled task ${task.id}`;
           logger.warn(msg);
@@ -959,7 +961,8 @@ export class TelegramBot {
       // Send a welcome message for first-time users in private chat
       const chatId = ctx.chat?.id;
       if (chatId && ctx.chat?.type === 'private') {
-        const session = this.sessionManager.getSession(chatId);
+        const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
+        const session = this.sessionManager.getSession(chatId, threadId);
         if (!session) {
           // First message - show welcome with keyboard
           const userName = ctx.from?.first_name;

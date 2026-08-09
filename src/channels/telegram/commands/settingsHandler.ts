@@ -72,8 +72,9 @@ export function registerSettingsHandler(
   // /settings command — open the panel.
   bot.command('settings', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     await ctx.reply(buildSettingsText(sessionManager, chatId, defaultOptions.model || 'default'), {
       parse_mode: 'HTML',
       reply_markup: buildSettingsKeyboard(readParseMode(session?.settings?.telegram?.parseMode)),
@@ -90,6 +91,7 @@ export function registerSettingsHandler(
       return;
     }
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) {
       await ctx.answerCallbackQuery().catch(() => {});
       return;
@@ -97,7 +99,7 @@ export function registerSettingsHandler(
     // Answer immediately to dismiss loading, mirroring callbackRouter.
     ctx.answerCallbackQuery().catch(() => {});
 
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
 
     // Cycle parse mode.
     if (data.startsWith('settings:parseMode:')) {

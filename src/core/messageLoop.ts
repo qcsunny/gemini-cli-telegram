@@ -355,7 +355,7 @@ export async function processMessage(
             if (modelToUse && modelToUse !== session.model) {
               logger.info(`[messageLoop] Successfully downgraded to model "${modelToUse}". Updating session.`);
               session.model = modelToUse;
-              await setConversation(chatId, result.conversationId || session.conversationId || '', cwd, modelToUse);
+              await setConversation(chatId, result.conversationId || session.conversationId || '', cwd, modelToUse, session.threadId);
             }
             break;
           }
@@ -447,7 +447,7 @@ export async function processMessage(
       // 4. Save and persist the updated conversation ID
       if (finalResult.conversationId) {
         session.conversationId = finalResult.conversationId;
-        await setConversation(chatId, finalResult.conversationId, cwd, session.model);
+        await setConversation(chatId, finalResult.conversationId, cwd, session.model, session.threadId);
       }
 
       // Wait for any pending stream updates to completely finish before rendering final message

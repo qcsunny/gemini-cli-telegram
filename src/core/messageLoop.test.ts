@@ -96,7 +96,7 @@ describe('processMessage', () => {
     // After completion (final rendering)
     expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('Hi there!'));
     expect(mockSession.conversationId).toBe('updated-conv-id');
-    expect(setConversation).toHaveBeenCalledWith(123456, 'updated-conv-id', '/test/project/path', 'test-model');
+    expect(setConversation).toHaveBeenCalledWith(123456, 'updated-conv-id', '/test/project/path', 'test-model', undefined);
   });
 
   it('should retry the same model 3x then downgrade to a lower model when rate limit (429) is hit', async () => {
@@ -167,7 +167,8 @@ describe('processMessage', () => {
       123456,
       'fallback-conv-id',
       '/test/project/path',
-      'OpenCode: Nemotron 3 Ultra Free'
+      'OpenCode: Nemotron 3 Ultra Free',
+      undefined
     );
   });
 

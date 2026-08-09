@@ -19,7 +19,7 @@ import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
 import type { DaemonSession, SessionOptions, SendMediaFn, ProjectInfo } from './types.js';
 import { ChatScheduler } from './scheduler.js';
-import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd } from '../agy/conversationStore.js';
+import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd, getSessionKey } from '../agy/conversationStore.js';
 import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory } from '../agy/agyCli.js';
 import { loadUserConfig, saveUserConfig, getDefaultModel, getDefaultProjectName, CONFIG_DIR } from '../config/userConfig.js';
 
@@ -272,7 +272,7 @@ export class ProjectManager {
  * Maps a channel-specific chat identifier (number) to a DaemonSession.
  */
 export class SessionManager {
-  private sessions: Map<number, DaemonSession> = new Map();
+  private sessions: Map<string, DaemonSession> = new Map();
   private sendMediaFactory?: SendMediaFactory;
   private projectManager: ProjectManager;
   private chatScheduler: ChatScheduler;
@@ -295,34 +295,38 @@ export class SessionManager {
   async getOrCreate(
     chatId: number,
     options: SessionOptions,
+    threadId?: number,
   ): Promise<DaemonSession> {
-    const existing = this.sessions.get(chatId);
+    const key = getSessionKey(chatId, threadId);
+    const existing = this.sessions.get(key);
     if (existing) {
       if (existing.abortController.signal.aborted) {
         logger.debug(`Reusing session ${existing.sessionId} but signal was aborted. Resetting.`);
         existing.abortController = new AbortController();
       }
-      logger.debug(`Reusing existing session ${existing.sessionId} for chat ${chatId}`);
+      logger.debug(`Reusing existing session ${existing.sessionId} for chat ${key}`);
       return existing;
     }
-    logger.debug(`No existing session for chat ${chatId}, creating new one`);
-    return this.createSession(chatId, options);
+    logger.debug(`No existing session for chat ${key}, creating new one`);
+    return this.createSession(chatId, options, threadId);
   }
 
   async reset(
     chatId: number,
     options: SessionOptions,
+    threadId?: number,
   ): Promise<DaemonSession> {
-    await this.destroy(chatId);
-    return this.createSession(chatId, options);
+    await this.destroy(chatId, threadId);
+    return this.createSession(chatId, options, threadId);
   }
 
-  async destroy(chatId: number): Promise<void> {
-    const session = this.sessions.get(chatId);
+  async destroy(chatId: number, threadId?: number): Promise<void> {
+    const key = getSessionKey(chatId, threadId);
+    const session = this.sessions.get(key);
     let convId = session?.conversationId;
     if (!convId) {
       try {
-        convId = (await getConversationId(chatId)) || undefined;
+        convId = (await getConversationId(chatId, threadId)) || undefined;
       } catch {
         // Ignore errors fetching conversationId
       }
@@ -330,32 +334,35 @@ export class SessionManager {
 
     if (session) {
       session.abortController.abort('Session destroyed');
-      this.sessions.delete(chatId);
-      logger.info(`Session destroyed for chat ${chatId}`);
+      this.sessions.delete(key);
+      logger.info(`Session destroyed for chat ${key}`);
     }
 
     try {
-      await deleteConversation(chatId);
+      await deleteConversation(chatId, threadId);
       if (convId) {
         clearWeb2ApiHistory(convId);
         clearDeepSeekHistory(convId);
         clearOpenCodeHistory(convId);
       }
     } catch (e) {
-      logger.warn(`Error deleting conversation for chat ${chatId}: ${e}`);
+      logger.warn(`Error deleting conversation for chat ${key}: ${e}`);
     }
   }
 
   async destroyAll(): Promise<void> {
-    const chatIds = Array.from(this.sessions.keys());
-    for (const chatId of chatIds) {
-      await this.destroy(chatId);
+    const keys = Array.from(this.sessions.keys());
+    for (const key of keys) {
+      const [chatIdStr, threadIdStr] = key.split(':');
+      const chatId = Number(chatIdStr);
+      const threadId = threadIdStr !== undefined ? Number(threadIdStr) : undefined;
+      await this.destroy(chatId, threadId);
     }
     logger.info('All sessions destroyed');
   }
 
-  getSession(chatId: number): DaemonSession | undefined {
-    return this.sessions.get(chatId);
+  getSession(chatId: number, threadId?: number): DaemonSession | undefined {
+    return this.sessions.get(getSessionKey(chatId, threadId));
   }
 
   getSessionCount(): number {
@@ -373,12 +380,13 @@ export class SessionManager {
   private async createSession(
     chatId: number,
     options: SessionOptions,
+    threadId?: number,
   ): Promise<DaemonSession> {
     const sessionId = crypto.randomUUID();
-    logger.info(`Creating session ${sessionId} for chat ${chatId}`);
+    logger.info(`Creating session ${sessionId} for chat ${getSessionKey(chatId, threadId)}`);
 
     let project = options.project;
-    const savedCwd = await getCwd(chatId);
+    const savedCwd = await getCwd(chatId, threadId);
 
     if (!project && savedCwd) {
       project = this.projectManager.getProjects().find(p => p.path === savedCwd);
@@ -413,14 +421,15 @@ export class SessionManager {
       await this.projectManager.updateProjectLastUsed(project.id);
     }
 
-    const conversationId = (await getConversationId(chatId)) || undefined;
-    const storedModel = await getStoredModel(chatId);
+    const conversationId = (await getConversationId(chatId, threadId)) || undefined;
+    const storedModel = await getStoredModel(chatId, threadId);
     const modelToUse = storedModel || options.model || getDefaultModel() || '';
     const sendMedia = this.sendMediaFactory?.(chatId);
 
     const session: DaemonSession = {
       sessionId,
       chatId,
+      threadId,
       conversationId,
       model: modelToUse,
       proxy: options.proxy,
@@ -441,7 +450,7 @@ export class SessionManager {
         getModel: () => session.model || getDefaultModel() || '',
         setModel: (modelName: string) => {
           session.model = modelName;
-          setConversation(chatId, session.conversationId || '', session.currentProject?.path || process.cwd(), modelName).catch(err => {
+          setConversation(chatId, session.conversationId || '', session.currentProject?.path || process.cwd(), modelName, threadId).catch(err => {
             logger.error(`Error setting model in store: ${err}`);
           });
         },
@@ -457,8 +466,9 @@ export class SessionManager {
       }
     };
 
-    this.sessions.set(chatId, session);
-    logger.info(`Session ${sessionId} created for chat ${chatId}`);
+    const key = getSessionKey(chatId, threadId);
+    this.sessions.set(key, session);
+    logger.info(`Session ${sessionId} created for chat ${key}`);
 
     return session;
   }

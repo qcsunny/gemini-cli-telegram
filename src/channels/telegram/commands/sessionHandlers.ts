@@ -34,10 +34,11 @@ export function registerSessionHandlers(
 
     const userName = ctx.from?.first_name;
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (chatId) {
       try {
         // Ensure session exists without destroying existing history
-        await sessionManager.getOrCreate(chatId, defaultOptions);
+        await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
       } catch (e) {
         logger.error(`Error ensuring session for chat ${chatId} on /start: ${e}`);
       }
@@ -51,10 +52,11 @@ export function registerSessionHandlers(
   // ── New Session ──
   bot.command('new', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     try {
-      const activeSession = sessionManager.getSession(chatId);
+      const activeSession = sessionManager.getSession(chatId, threadId);
       if (activeSession) {
         if (activeSession.typingInterval) {
           clearInterval(activeSession.typingInterval);
@@ -72,7 +74,7 @@ export function registerSessionHandlers(
         ...defaultOptions,
         project: defaultProj,
         model: defaultOptions.model || getDefaultModel() || '',
-      });
+      }, threadId);
 
       const modelName = defaultOptions.model || getDefaultModel() || '';
       await ctx.reply(
@@ -88,9 +90,10 @@ export function registerSessionHandlers(
   // ── Cancel ──
   bot.command('cancel', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     if (!session) {
       await ctx.reply(`${ICONS.warning} <b>No active session.</b>`);
       return;
@@ -117,6 +120,7 @@ export function registerSessionHandlers(
   // ── Resume ──
   bot.command('resume', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
@@ -124,7 +128,7 @@ export function registerSessionHandlers(
     // Ensure we have a session (needed to access config/storage paths)
     let session;
     try {
-      session = await sessionManager.getOrCreate(chatId, defaultOptions);
+      session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
     } catch (e) {
       logger.error(`Failed to create session for chat ${chatId}: ${e}`);
       await ctx.reply(`${ICONS.error} <b>Initialization failed:</b> ${e}`);
@@ -188,9 +192,10 @@ export function registerSessionHandlers(
   // ── Undo ──
   bot.command('undo', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     if (!session) {
       await ctx.reply(`${ICONS.warning} <b>No active session to undo.</b>`, { parse_mode: 'HTML' });
       return;

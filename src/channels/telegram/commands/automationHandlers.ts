@@ -194,13 +194,14 @@ export function registerAutomationHandlers(
   // ── Autopilot ──
   bot.command('autopilot', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
 
     // Stop autopilot
     if (arg === 'stop' || arg === 'off') {
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       if (session?.autopilot?.active) {
         session.autopilot.active = false;
         await ctx.reply(`${ICONS.cancel} <b>Autopilot Deactivated</b>\n\nI've stopped the autonomous loop.`, {
@@ -224,7 +225,7 @@ export function registerAutomationHandlers(
       return;
     }
 
-    const session = await sessionManager.getOrCreate(chatId, defaultOptions);
+    const session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
 
     // Set autopilot config (unlimited iterations, 30 min timeout)
     session.autopilot = {

@@ -153,7 +153,8 @@ export async function resumeSession(
       session.chatId,
       targetUuid,
       session.currentProject?.path || process.cwd(),
-      session.model
+      session.model,
+      session.threadId
     );
   }
   return `Successfully switched active agy session to ${targetUuid}`;

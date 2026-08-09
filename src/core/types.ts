@@ -139,6 +139,8 @@ interface SessionSettings {
 export interface DaemonSession {
   sessionId: string;
   chatId?: number;
+  /** Telegram topic (message_thread_id) this session belongs to, if any. */
+  threadId?: number;
   conversationId?: string; // Local agy conversation UUID
   model?: string;          // Selected model override
   proxy?: string;          // Configured proxy server

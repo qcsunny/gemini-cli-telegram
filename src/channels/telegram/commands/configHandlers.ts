@@ -13,11 +13,12 @@ export function registerConfigHandlers(
   // ── Model Selection ──
   bot.command('model', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
     if (!arg) {
-      const session = sessionManager.getSession(chatId);
+      const session = sessionManager.getSession(chatId, threadId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
       const page = 0;
@@ -48,7 +49,7 @@ export function registerConfigHandlers(
         : arg;
 
     try {
-      const session = await sessionManager.getOrCreate(chatId, defaultOptions);
+      const session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
       session.config!.setModel(modelName, false);
       await ctx.reply(`${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${modelName}</code>`, {
         parse_mode: 'HTML',
@@ -63,9 +64,10 @@ export function registerConfigHandlers(
   // ── Status ──
   bot.command('status', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     if (!session) {
       await ctx.reply(`${ICONS.warning} <b>No active session.</b>`, {
         reply_markup: buildMainKeyboard(),
@@ -91,6 +93,7 @@ export function registerConfigHandlers(
   // ── Add Folder ──
   bot.command('addfolder', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
@@ -99,7 +102,7 @@ export function registerConfigHandlers(
       return;
     }
 
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     if (!session) {
       await ctx.reply(`${ICONS.warning} <b>No active session.</b>\nSend a message first.`);
       return;
@@ -119,9 +122,10 @@ export function registerConfigHandlers(
   // ── Session ID ──
   bot.command('id', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
-    const session = sessionManager.getSession(chatId);
+    const session = sessionManager.getSession(chatId, threadId);
     if (!session) {
       await ctx.reply(`${ICONS.warning} <b>No active session.</b>`);
       return;
