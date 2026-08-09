@@ -32,8 +32,12 @@ export function registerCallbackRouter(
       return;
     }
 
-    // Answer immediately to dismiss Telegram UI loading state
-    ctx.answerCallbackQuery().catch(() => {});
+    // Answer immediately to dismiss Telegram UI loading state (guaranteed fire)
+    try {
+      ctx.answerCallbackQuery().catch(() => {});
+    } catch {
+      // ignore
+    }
 
     const data = ctx.callbackQuery.data;
     const chatId = ctx.chat?.id;

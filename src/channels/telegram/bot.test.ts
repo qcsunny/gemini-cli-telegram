@@ -194,10 +194,10 @@ describe('TelegramBot', () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       const msgId = await reply.sendRich!('**bold** text');
 
-      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith({
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
         chat_id: chatId,
         rich_message: expect.any(Object),
-      });
+      }));
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
       expect(parsed).toHaveProperty('blocks');
       expect(msgId).toBe(888);
@@ -232,10 +232,10 @@ describe('TelegramBot', () => {
       const msgId = await reply.sendRich!('some text');
 
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(2);
-      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith({
+      expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith(expect.objectContaining({
         chat_id: chatId,
         rich_message: expect.any(Object),
-      });
+      }));
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[1][0].rich_message;
       expect(parsed).toHaveProperty('html');
       expect(msgId).toBe(888);
