@@ -49,8 +49,9 @@
         "Gemini 3.5 Flash (Low)",
         "Web2API: Gemini 3.5 Flash Thinking Lite",
         "Web2API: Gemini Flash Lite",
-        "OpenCode: Ling 3.0 Flash Free",
+        "OpenCode: Ling 3.0 Tiny Free",
         "OpenCode: North Mini Code Free",
+        "OpenCode: Longcat 2.0 Free",
         "DeepSeek: Flash"
       ]
     }
@@ -74,7 +75,8 @@
     "OpenCode: North Mini Code Free":          "opencode/north-mini-code-free",
     "OpenCode: Laguna S 2.1 Free":             "opencode/laguna-s-2.1-free",
     "OpenCode: MiMo V2.5 Free":              "opencode/mimo-v2.5-free",
-    "OpenCode: Ling 3.0 Flash Free":         "opencode/ling-3.0-flash-free"
+    "OpenCode: Ling 3.0 Tiny Free":          "opencode/ling-3.0-tiny-free",
+    "OpenCode: Longcat 2.0 Free":            "opencode/longcat-2.0-free"
   },
   "descriptions": {
     "OpenCode: Nemotron 3 Ultra Free":       "综合推理最强，代码能力顶级 · 适用：复杂算法设计、架构决策、高难度调试",
@@ -82,6 +84,7 @@
     "OpenCode: Laguna S 2.1 Free":           "Agent编码能力突出，工具调用强 · 适用：自动化工作流、多步骤任务、MLOps管道",
     "OpenCode: MiMo V2.5 Free":              "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解",
     "OpenCode: North Mini Code Free":        "轻量高效，响应迅速 · 适用：简单脚本编写、代码片段生成、快速原型设计",
-    "OpenCode: Ling 3.0 Flash Free":         "轻量级中文优化模型，快速响应 · 适用：中文对话、简单问答、文本生成"
+    "OpenCode: Ling 3.0 Tiny Free":         "轻量级中文优化模型，快速响应 · 适用：中文对话、简单问答、文本生成",
+    "OpenCode: Longcat 2.0 Free":           "超长上下文模型 · 适用：长文档处理、大型代码库理解"
   }
 }
