@@ -127,6 +127,8 @@ interface AutopilotConfig {
  */
 interface TelegramSettings {
   parseMode?: 'HTML' | 'MarkdownV2' | 'RichText';
+  /** Show a 👀 reaction on the streaming draft while generating, cleared at finalize. */
+  reaction?: boolean;
 }
 
 interface SessionSettings {

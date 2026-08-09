@@ -369,6 +369,30 @@ function prepareTelegramMarkdown(markdown: string): string {
 const draftIds = new Map<number, number>();
 const activeDraftIds = new Set<number>();
 
+const REACTION_THINKING = { type: 'emoji', emoji: '👀' } as const;
+
+function reactionEnabled(session?: DaemonSession): boolean {
+  return session?.settings?.telegram?.reaction !== false;
+}
+
+async function setThinkingReaction(ctx: Context, chatId: number, messageId: number): Promise<void> {
+  try {
+    await ctx.api.setMessageReaction(chatId, messageId, [REACTION_THINKING]);
+  } catch (e: any) {
+    if (!e?.description?.includes('message is not modified')) {
+      logger.debug(`setMessageReaction (thinking) failed: ${e?.description || e}`);
+    }
+  }
+}
+
+async function clearReaction(ctx: Context, chatId: number, messageId: number): Promise<void> {
+  try {
+    await ctx.api.setMessageReaction(chatId, messageId, []);
+  } catch (e: any) {
+    logger.debug(`setMessageReaction (clear) failed: ${e?.description || e}`);
+  }
+}
+
 /**
  * Force-release any active draft for a chatId. Called from messageLoop's `finally`
  * block to prevent permanent activeDraftIds leaks on error/cancel paths (BUG-02).
@@ -651,6 +675,9 @@ export function buildChannelReply(
         draftIds.set(chatId, realId);
         activeDraftIds.add(realId);
         messageCache.set(realId, cacheMarkdown);
+        if (reactionEnabled(session)) {
+          await setThinkingReaction(ctx, chatId, realId);
+        }
         logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft Markdown) success: real message id=${realId}.`);
         return realId;
       } catch (err: any) {
@@ -837,6 +864,9 @@ export function buildChannelReply(
         logger.info(`[FINALIZE] finalizing real streaming message in place (was messageId=${messageId})`);
         activeDraftIds.delete(messageId);
         if (draftIds.get(chatId) === messageId) draftIds.delete(chatId);
+        if (reactionEnabled(session)) {
+          await clearReaction(ctx, chatId, messageId);
+        }
       }
 
       // Option A (10.2): Native structured blocks (final, persisted message).

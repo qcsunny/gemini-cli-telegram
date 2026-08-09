@@ -441,6 +441,7 @@ export class SessionManager {
       settings: {
         telegram: {
           parseMode: 'RichText', // 默认修改为 RichText！
+          reaction: true,
         },
       },
       thinkingSteps: [],

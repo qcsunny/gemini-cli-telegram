@@ -37,18 +37,20 @@ function buildSettingsText(
   const model = escapeHtml(session?.model || defaultModel);
   const project = session?.currentProject ? escapeHtml(session.currentProject.name) : 'None selected';
   const turns = session?.turnCount ?? 0;
+  const reaction = session?.settings?.telegram?.reaction !== false;
 
   return (
     `${ICONS.settings} <b>Setting Panel</b>\n\n` +
     `${ICONS.model} <b>Model:</b> <code>${model}</code>\n` +
     `${ICONS.project} <b>Workspace:</b> <code>${project}</code>\n` +
     `${ICONS.clock} <b>Turns:</b> ${turns}\n` +
-    `${ICONS.terminal} <b>Output Format:</b> ${MODE_LABELS[parseMode]}\n\n` +
+    `${ICONS.terminal} <b>Output Format:</b> ${MODE_LABELS[parseMode]}\n` +
+    `${ICONS.reaction} <b>Thinking Reaction:</b> ${reaction ? 'On 👀' : 'Off'}\n\n` +
     `<i>Takes effect immediately.</i>`
   );
 }
 
-function buildSettingsKeyboard(parseMode: ParseMode): InlineKeyboard {
+function buildSettingsKeyboard(parseMode: ParseMode, reactionOn: boolean): InlineKeyboard {
   const kb = new InlineKeyboard();
 
   for (const mode of PARSE_MODES) {
@@ -59,7 +61,9 @@ function buildSettingsKeyboard(parseMode: ParseMode): InlineKeyboard {
     kb.row();
   }
 
-  kb.text(`${ICONS.model} Choose Model`, 'settings:model')
+  kb.text(`${ICONS.reaction} Thinking Reaction: ${reactionOn ? 'On 👀' : 'Off'}`, 'settings:reaction:toggle')
+    .row()
+    .text(`${ICONS.model} Choose Model`, 'settings:model')
     .text(`${ICONS.back} Main Menu`, '/start');
   return kb;
 }
@@ -77,7 +81,10 @@ export function registerSettingsHandler(
     const session = sessionManager.getSession(chatId, threadId);
     await ctx.reply(buildSettingsText(sessionManager, chatId, defaultOptions.model || 'default'), {
       parse_mode: 'HTML',
-      reply_markup: buildSettingsKeyboard(readParseMode(session?.settings?.telegram?.parseMode)),
+      reply_markup: buildSettingsKeyboard(
+        readParseMode(session?.settings?.telegram?.parseMode),
+        session?.settings?.telegram?.reaction !== false,
+      ),
     }).catch((e) => logger.warn(`[settings] reply failed: ${e}`));
   });
 
@@ -112,7 +119,25 @@ export function registerSettingsHandler(
       }
       await ctx.editMessageText(buildSettingsText(sessionManager, chatId, defaultOptions.model || 'default'), {
         parse_mode: 'HTML',
-        reply_markup: buildSettingsKeyboard(next),
+        reply_markup: buildSettingsKeyboard(next, session?.settings?.telegram?.reaction !== false),
+      }).catch((err) => logger.warn(`[settings] edit failed: ${err}`));
+      return;
+    }
+
+    // Toggle the thinking reaction on the streaming draft.
+    if (data === 'settings:reaction:toggle') {
+      if (session) {
+        session.settings ??= {};
+        session.settings.telegram ??= {};
+        session.settings.telegram.reaction = session.settings.telegram.reaction === false;
+        logger.info(`[settings] chatId=${chatId} reaction -> ${session.settings.telegram.reaction}`);
+      }
+      await ctx.editMessageText(buildSettingsText(sessionManager, chatId, defaultOptions.model || 'default'), {
+        parse_mode: 'HTML',
+        reply_markup: buildSettingsKeyboard(
+          readParseMode(session?.settings?.telegram?.parseMode),
+          session?.settings?.telegram?.reaction !== false,
+        ),
       }).catch((err) => logger.warn(`[settings] edit failed: ${err}`));
       return;
     }

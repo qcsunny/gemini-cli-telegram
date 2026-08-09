@@ -26,6 +26,7 @@ export const ICONS = {
   warning: '⚠️',
   error: '🚫',
   success: '✅',
+  reaction: '👀',
   
   // Navigation & Actions
   new: '➕',
