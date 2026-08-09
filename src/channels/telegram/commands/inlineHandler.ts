@@ -15,6 +15,7 @@ import { buildTierAwareChain, getEffectiveModelOrder, loadModelsConfig, displayM
 import { logger } from '../../../utils/logger.js';
 import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/pricing.js';
 import { marketService } from '../../../stock/service/quote.js';
+import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -1109,12 +1110,12 @@ export function registerInlineHandler(
         const sign = quote.change >= 0 ? '+' : '';
         const icon = quote.change >= 0 ? '📈' : '📉';
         const delayBadge = quote.isDelayed ? '<i>(Delayed ~15m)</i>' : '<i>(Real-time)</i>';
+        const currencySymbol = quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$';
 
-        const quoteText = `${icon} <b>${quote.name}</b>\n\n代号：<b>$${quote.symbol}</b>\n\n<b>当前价格：</b>$${quote.price.toFixed(2)}\n<b>涨跌：</b>${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n<b>市场：</b>${quote.market}\n<b>数据时间：</b>${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
+        const quoteText = `${icon} <b>${quote.name}</b>\n\n代号：<b>$${quote.symbol}</b>\n\n<b>当前价格：</b>${currencySymbol}${quote.price.toFixed(2)}\n<b>涨跌：</b>${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n<b>市场：</b>${quote.market}\n<b>数据时间：</b>${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
 
-        const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(
-          quote.market === 'CRYPTO' ? `BINANCE:${quote.symbol}USDT` : `NASDAQ:${quote.symbol}`
-        )}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
+        const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
+        const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
         const results = [
           {

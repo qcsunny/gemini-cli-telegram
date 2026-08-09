@@ -16,6 +16,8 @@ import { marketService } from '../../../stock/service/quote.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 
+import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
+
 export function registerStockHandler(
   bot: Bot,
   sessionManager: SessionManager,
@@ -27,7 +29,7 @@ export function registerStockHandler(
 
     if (!symbol) {
       await ctx.reply(
-        `${ICONS.info} <b>Stock Quote Usage:</b>\n\n<code>/stock NVDA</code>\n<code>/stock AAPL</code>\n<code>/stock BTC</code>\n\nOr use inline query: <code>@bot $NVDA</code>`,
+        `${ICONS.info} <b>Stock Quote Usage:</b>\n\n<code>/stock NVDA</code>\n<code>/stock 600519</code>\n<code>/stock 00700</code>\n<code>/stock BTC</code>`,
         { parse_mode: 'HTML' }
       );
       return;
@@ -53,7 +55,7 @@ export function registerStockHandler(
             { type: 'cashtag', text: [`$${quote.symbol}`], cashtag: quote.symbol },
             '\n\n',
             { type: 'bold', text: ['当前价格：'] },
-            `$${quote.price.toFixed(2)}\n`,
+            `${quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$'}${quote.price.toFixed(2)}\n`,
             { type: 'bold', text: ['涨跌：'] },
             `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n`,
             { type: 'bold', text: ['市场：'] },
@@ -65,9 +67,8 @@ export function registerStockHandler(
         }
       ];
 
-      const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(
-        quote.market === 'CRYPTO' ? `BINANCE:${quote.symbol}USDT` : `NASDAQ:${quote.symbol}`
-      )}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
+      const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
+      const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
       await ctx.api.sendRichMessage(ctx.chat.id, { blocks: blocksPayload as any }, {
         reply_markup: {
