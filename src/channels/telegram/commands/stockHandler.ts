@@ -42,15 +42,25 @@ export function registerStockHandler(
 
       const sign = quote.change >= 0 ? '+' : '';
       const icon = quote.change >= 0 ? '📈' : '📉';
-      const delayBadge = quote.isDelayed ? '<i>(Delayed ~15m)</i>' : '<i>(Real-time)</i>';
+      const delayBadge = quote.isDelayed ? '(Delayed ~15m)' : '(Real-time)';
 
       const blocksPayload = [
         {
           type: 'paragraph',
           text: [
-            `${icon} <b>${quote.name}</b>\n\n代号：`,
+            { type: 'bold', text: [`${icon} ${quote.name}`] },
+            '\n\n代号：',
             { type: 'cashtag', text: [`$${quote.symbol}`], cashtag: quote.symbol },
-            `\n\n<b>当前价格：</b>$${quote.price.toFixed(2)}\n<b>涨跌：</b>${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n<b>市场：</b>${quote.market}\n<b>数据时间：</b>${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`
+            '\n\n',
+            { type: 'bold', text: ['当前价格：'] },
+            `$${quote.price.toFixed(2)}\n`,
+            { type: 'bold', text: ['涨跌：'] },
+            `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n`,
+            { type: 'bold', text: ['市场：'] },
+            `${quote.market}\n`,
+            { type: 'bold', text: ['数据时间：'] },
+            `${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} `,
+            { type: 'italic', text: [delayBadge] },
           ]
         }
       ];
