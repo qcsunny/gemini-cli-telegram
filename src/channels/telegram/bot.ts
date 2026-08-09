@@ -681,7 +681,9 @@ export class TelegramBot {
       { command: 'addfolder', description: 'Add a folder for read+write access' },
       { command: 'id', description: 'Show current session ID' },
       { command: 'help', description: 'Show help message' },
-    ]);
+    ]).catch(e => {
+      logger.warn(`Failed to set Telegram bot commands during startup: ${e}`);
+    });
 
     logger.info('Telegram bot started. Listening for messages...');
 
