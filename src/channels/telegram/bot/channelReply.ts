@@ -369,7 +369,7 @@ function prepareTelegramMarkdown(markdown: string): string {
 const draftIds = new Map<number, number>();
 const activeDraftIds = new Set<number>();
 
-const REACTION_THINKING_EMOJIS = ['👀', '🤔', '✍', '🤯', '🫡', '🤓', '😎', '🙊', '😴', '🔥', '🎉', '🤗', '💅', '🤪', '💘', '👾'] as const;
+const REACTION_THINKING_EMOJIS = ['👍', '👎', '❤', '🔥', '🥰', '👏', '😁', '🤔', '🤯', '😱', '🤬', '😢', '🎉', '🤩', '🤮', '💩', '🙏', '👌', '🕊', '🤡', '🥱', '🥴', '😍', '🐳', '❤‍🔥', '🌚', '🌭', '💯', '🤣', '⚡', '🍌', '🏆', '💔', '🤨', '😐', '🍓', '🍾', '💋', '🖕', '😈', '😴', '😭', '🤓', '👻', '👨‍💻', '👀', '🎃', '🙈', '😇', '😨', '🤝', '✍', '🤗', '🫡', '🎅', '🎄', '☃', '💅', '🤪', '🗿', '🆒', '💘', '🙉', '🦄', '😘', '💊', '🙊', '😎', '👾', '🤷‍♂', '🤷', '🤷‍♀', '😡'] as const;
 
 function reactionEnabled(session?: DaemonSession): boolean {
   return session?.settings?.telegram?.reaction !== false;
