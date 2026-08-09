@@ -369,7 +369,7 @@ function prepareTelegramMarkdown(markdown: string): string {
 const draftIds = new Map<number, number>();
 const activeDraftIds = new Set<number>();
 
-const REACTION_THINKING = { type: 'emoji', emoji: '👀' } as const;
+const REACTION_THINKING_EMOJIS = ['👀', '🤔', '✍', '🤯', '🫡', '🤓', '😎', '🙊', '😴', '🔥', '🎉', '🤗', '💅', '🤪', '💘', '👾'] as const;
 
 function reactionEnabled(session?: DaemonSession): boolean {
   return session?.settings?.telegram?.reaction !== false;
@@ -377,7 +377,8 @@ function reactionEnabled(session?: DaemonSession): boolean {
 
 async function setThinkingReaction(ctx: Context, chatId: number, messageId: number): Promise<void> {
   try {
-    await ctx.api.setMessageReaction(chatId, messageId, [REACTION_THINKING]);
+    const emoji = REACTION_THINKING_EMOJIS[Math.floor(Math.random() * REACTION_THINKING_EMOJIS.length)];
+    await ctx.api.setMessageReaction(chatId, messageId, [{ type: 'emoji', emoji }]);
   } catch (e: any) {
     if (!e?.description?.includes('message is not modified')) {
       logger.debug(`setMessageReaction (thinking) failed: ${e?.description || e}`);
