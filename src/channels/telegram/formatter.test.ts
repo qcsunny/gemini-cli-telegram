@@ -250,6 +250,23 @@ Thanks for reading! 🚀
     expect(html).toContain('<details><summary>展开标题</summary>');
   });
 
+  it('should parse <aside> into native pullquote block and <tg-hashtag>/<tg-cashtag> into inline RichText', () => {
+    const mdInput = '<aside>\nKey quote\n</aside>\n\nText with <tg-hashtag tag="crypto">#crypto</tg-hashtag> and <tg-cashtag tag="BTC">$BTC</tg-cashtag>.';
+    const blocks = markdownToRichBlocks(mdInput) as any[];
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].type).toBe('pullquote');
+    expect(blocks[0].text).toBe('Key quote');
+
+    expect(blocks[1].type).toBe('paragraph');
+    expect(blocks[1].text).toEqual([
+      'Text with ',
+      { type: 'hashtag', text: '#crypto', hashtag: 'crypto' },
+      ' and ',
+      { type: 'cashtag', text: '$BTC', cashtag: 'BTC' },
+      '.'
+    ]);
+  });
+
   it('should convert preceding Click-to-expand prompt lines into native details elements', () => {
     const mdInput = '点击展开查看事故描述\n> 事故发生在 `192.168.1.105` 节点';
     const html = markdownToHtml(mdInput);

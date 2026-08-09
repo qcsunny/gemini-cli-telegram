@@ -43,6 +43,8 @@ type RichTextEntity =
   | { type: 'email_address'; text: string; email_address: string }
   | { type: 'phone_number'; text: string; phone_number: string }
   | { type: 'text_mention'; text: string; user: { id: number } }
+  | { type: 'hashtag'; text: RichText; hashtag: string }
+  | { type: 'cashtag'; text: RichText; cashtag: string }
   | { type: 'reference'; text: RichText; name: string }
   | { type: 'reference_link'; text: RichText; reference_name: string };
 
@@ -177,6 +179,8 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
       case 'text_mention': node = { type: 'text_mention', text: String(inner), user: { id: Number(top.href) } }; break;
       case 'reference': node = { type: 'reference', text: inner, name: top.href ?? '' }; break;
       case 'reference_link': node = { type: 'reference_link', text: inner, reference_name: top.href ?? '' }; break;
+      case 'hashtag': node = { type: 'hashtag', text: inner, hashtag: top.href ?? '' }; break;
+      case 'cashtag': node = { type: 'cashtag', text: inner, cashtag: top.href ?? '' }; break;
       case 'custom_emoji': node = { type: 'custom_emoji', text: String(inner), custom_emoji_id: top.href ?? '', alternative_text: String(inner) }; break;
       case 'datetime': {
         const [unix, fmt] = (top.href ?? '0:wDT').split(':');
@@ -266,6 +270,16 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
                 open('reference', name);
                 break;
               }
+              if (tagName === 'tg-hashtag') {
+                const tagVal = attrs.match(/tag="([^"]*)"/)?.[1] ?? '';
+                open('hashtag', tagVal);
+                break;
+              }
+              if (tagName === 'tg-cashtag') {
+                const tagVal = attrs.match(/tag="([^"]*)"/)?.[1] ?? '';
+                open('cashtag', tagVal);
+                break;
+              }
               
               // Media tags (self-closing). These are parsed, registered in the media store,
               // and replaced by a proprietary tg:// URI reference to be processed during message sending.
@@ -317,6 +331,8 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
               if (tagName === 'tg-emoji') { close('custom_emoji'); break; }
               if (tagName === 'tg-time') { close('datetime'); break; }
               if (tagName === 'tg-reference') { close('reference'); break; }
+              if (tagName === 'tg-hashtag') { close('hashtag'); break; }
+              if (tagName === 'tg-cashtag') { close('cashtag'); break; }
               if (tagName === 'a') {
                 const lastLink = [...stack].reverse().find(s => 
                   s.type === 'url' || s.type === 'email_address' || 
