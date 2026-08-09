@@ -89,6 +89,8 @@ const userConfigSchema = z.object({
   proxy: z.string().optional(),
   geminiApiKey: z.string().optional(),
   deepseekApiKey: z.string().optional(),
+  /** API key for external stock market data provider (optional). */
+  stockMarketApiKey: z.string().optional(),
   /** HTTP health endpoint port (optional). If set, starts a /health HTTP server. */
   healthPort: z.number().optional(),
   /** Solidified project list (id/name/path/description). Kept in the local,

@@ -251,18 +251,18 @@ Thanks for reading! 🚀
   });
 
   it('should parse <aside> into native pullquote block and <tg-hashtag>/<tg-cashtag> into inline RichText', () => {
-    const mdInput = '<aside>\nKey quote\n</aside>\n\nText with <tg-hashtag tag="crypto">#crypto</tg-hashtag> and <tg-cashtag tag="BTC">$BTC</tg-cashtag>.';
+    const mdInput = '<aside>Key quote</aside>\n\nText with <tg-hashtag tag="crypto">#crypto</tg-hashtag> and <tg-cashtag tag="BTC">$BTC</tg-cashtag>.';
     const blocks = markdownToRichBlocks(mdInput) as any[];
     expect(blocks).toHaveLength(2);
     expect(blocks[0].type).toBe('pullquote');
-    expect(blocks[0].text).toBe('Key quote');
+    expect(blocks[0].text).toEqual(['Key quote']);
 
     expect(blocks[1].type).toBe('paragraph');
     expect(blocks[1].text).toEqual([
       'Text with ',
-      { type: 'hashtag', text: '#crypto', hashtag: 'crypto' },
+      { type: 'hashtag', text: ['#crypto'], hashtag: 'crypto' },
       ' and ',
-      { type: 'cashtag', text: '$BTC', cashtag: 'BTC' },
+      { type: 'cashtag', text: ['$BTC'], cashtag: 'BTC' },
       '.'
     ]);
   });

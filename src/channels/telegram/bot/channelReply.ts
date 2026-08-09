@@ -562,7 +562,7 @@ export function buildChannelReply(
               inline_keyboard: [[
                 {
                   text: `📊 View $${tickerInText.toUpperCase()} Real-time Chart`,
-                  web_app: { url: `http://127.0.0.1:4096/chart?symbol=${encodeURIComponent(tickerInText.toUpperCase())}` }
+                  web_app: { url: `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tickerInText.includes('BTC') || tickerInText.includes('ETH') ? `BINANCE:${tickerInText.toUpperCase()}USDT` : `NASDAQ:${tickerInText.toUpperCase()}`)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark` }
                 }
               ]]
             } : undefined;

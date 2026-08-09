@@ -1139,7 +1139,7 @@ export function registerInlineHandler(
               [
                 {
                   text: `📊 Open ${symbol} Interactive Chart`,
-                  web_app: { url: `http://127.0.0.1:4096/chart?symbol=${encodeURIComponent(symbol)}` },
+                  web_app: { url: `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(symbol.includes('BTC') || symbol.includes('ETH') ? `BINANCE:${symbol}USDT` : `NASDAQ:${symbol}`)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark` },
                 },
               ],
             ],

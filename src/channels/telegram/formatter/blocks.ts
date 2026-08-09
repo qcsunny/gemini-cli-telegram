@@ -418,9 +418,9 @@ function tryHtmlBlockToRichBlock(
   }
 
   // `<aside>...</aside>` → native pullquote block.
-  const asideMatch = content.match(/^<aside>([\s\S]*?)<\/aside>\s*$/i);
+  const asideMatch = content.match(/<aside>([\s\S]*?)<\/aside>/i);
   if (asideMatch) {
-    const inner = trimRichText(inlineToRichText(md.parseInline(asideMatch[1], {}) as any as MarkdownToken[]));
+    const inner = trimRichText(inlineToRichText(md.parseInline(asideMatch[1].trim(), {}) as any as MarkdownToken[]));
     if (inner) {
       return { block: { type: 'pullquote', text: inner }, advance: 1 };
     }

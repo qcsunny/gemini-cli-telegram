@@ -684,6 +684,7 @@ export class TelegramBot {
       { command: 'projects', description: 'Browse and select projects' },
       { command: 'schedule', description: 'Schedule a message' },
       { command: 'autopilot', description: 'Auto-reply until goal achieved' },
+      { command: 'stock', description: 'Query real-time stock & crypto quotes' },
       { command: 'addfolder', description: 'Add a folder for read+write access' },
       { command: 'id', description: 'Show current session ID' },
       { command: 'help', description: 'Show help message' },
