@@ -255,8 +255,14 @@ async function withSession(
 
   try {
     await handler(session, reply);
-  } catch (e) {
+  } catch (e: any) {
     logger.error(`Error in handler for chat ${chatId}: ${e}`);
+    const isBlocked = e?.description?.includes('bot was blocked by the user') || e?.error_code === 403;
+    if (isBlocked) {
+      logger.warn(`Bot was blocked by user in chat ${chatId}. Cleaning up session.`);
+      sessionManager.destroy(chatId, threadId);
+      return;
+    }
     try {
       await ctx.reply(
         `${ICONS.error} <b>Operation failed:</b>\n<i>${e instanceof Error ? e.message : String(e)}</i>`,

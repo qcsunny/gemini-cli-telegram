@@ -784,7 +784,10 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
             for (const child of children) {
               if (child.type === 'text' && cursor > 0) {
                 const childContent = child.content ?? '';
-                const cut = Math.min(cursor, childContent.length);
+                let cut = Math.min(cursor, childContent.length);
+                if (cut > 0 && cut < childContent.length && /[\uD800-\uDBFF]/.test(childContent[cut - 1])) {
+                  cut--;
+                }
                 const remainder = childContent.slice(cut);
                 cursor -= cut;
                 if (remainder) rebuiltChildren.push({ ...child, content: remainder });
