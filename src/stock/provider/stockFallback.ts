@@ -10,48 +10,66 @@
  * Provides reliable fallback quote data.
  */
 
+import { fetch as undiciFetch } from 'undici';
 import type { MarketDataProvider, StockQuote, StockCandles, StockSearchResult, CandleDataPoint } from '../types.js';
-
-const KNOWN_STOCKS: Record<string, { name: string; exchange: string; price: number; change: number; changePercent: number }> = {
-  NVDA: { name: 'NVIDIA Corporation', exchange: 'NASDAQ', price: 182.47, change: 4.12, changePercent: 2.31 },
-  AAPL: { name: 'Apple Inc.', exchange: 'NASDAQ', price: 229.65, change: 1.25, changePercent: 0.55 },
-  TSLA: { name: 'Tesla, Inc.', exchange: 'NASDAQ', price: 342.10, change: -4.15, changePercent: -1.20 },
-  MSFT: { name: 'Microsoft Corporation', exchange: 'NASDAQ', price: 448.90, change: 3.20, changePercent: 0.72 },
-  AMZN: { name: 'Amazon.com, Inc.', exchange: 'NASDAQ', price: 186.30, change: 2.10, changePercent: 1.14 },
-  GOOGL: { name: 'Alphabet Inc.', exchange: 'NASDAQ', price: 175.50, change: 1.80, changePercent: 1.04 },
-};
+import { logger } from '../../utils/logger.js';
 
 export class StockFallbackProvider implements MarketDataProvider {
-  readonly name = 'StockFallback';
+  readonly name = 'NasdaqMarketData';
 
   async getQuote(symbol: string): Promise<StockQuote | null> {
     const cleanSym = symbol.toUpperCase().replace(/^\$/, '');
-    const meta = KNOWN_STOCKS[cleanSym];
-    
-    // Always supply structured stock quote info for equities
-    const name = meta ? meta.name : `${cleanSym} Corp`;
-    const exchange = meta ? meta.exchange : 'NASDAQ';
-    const price = meta ? meta.price : 150.00;
-    const change = meta ? meta.change : 1.50;
-    const changePercent = meta ? meta.changePercent : 1.01;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      const url = `https://api.nasdaq.com/api/quote/${cleanSym}/info?assetclass=stocks`;
+      const res = await undiciFetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+        },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
 
-    return {
-      symbol: cleanSym,
-      name,
-      price,
-      change,
-      changePercent,
-      open: price - change,
-      high: price + Math.abs(change) * 1.5,
-      low: price - Math.abs(change) * 1.5,
-      previousClose: price - change,
-      volume: 45000000,
-      market: exchange,
-      currency: 'USD',
-      timestamp: Math.floor(Date.now() / 1000),
-      source: this.name,
-      isDelayed: true,
-    };
+      if (res.ok) {
+        const json = (await res.json()) as any;
+        const data = json?.data;
+        if (data && data.primaryData) {
+          const rawPrice = String(data.primaryData.lastSalePrice || '').replace(/[^0-9.]/g, '');
+          const price = parseFloat(rawPrice) || 0;
+          const rawChange = String(data.primaryData.netChange || '').replace(/[^0-9.-]/g, '');
+          const change = parseFloat(rawChange) || 0;
+          const rawPct = String(data.primaryData.percentageChange || '').replace(/[^0-9.-]/g, '');
+          const changePercent = parseFloat(rawPct) || 0;
+          const companyName = data.companyName || `${cleanSym} Inc.`;
+          const exchange = (data.exchange || 'NASDAQ').replace('-GS', '').replace('-NGS', '');
+
+          if (price > 0) {
+            return {
+              symbol: cleanSym,
+              name: companyName,
+              price,
+              change,
+              changePercent,
+              open: price - change,
+              high: price + Math.abs(change),
+              low: price - Math.abs(change),
+              previousClose: price - change,
+              volume: parseInt(String(data.primaryData.volume || '0').replace(/,/g, ''), 10) || 0,
+              market: exchange,
+              currency: 'USD',
+              timestamp: Math.floor(Date.now() / 1000),
+              source: this.name,
+              isDelayed: true,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(`[NasdaqProvider] Direct fetch failed for ${cleanSym}: ${err}`);
+    }
+
+    return null;
   }
 
   async getQuotes(symbols: string[]): Promise<StockQuote[]> {
@@ -103,18 +121,17 @@ export class StockFallbackProvider implements MarketDataProvider {
 
   async searchSymbols(query: string): Promise<StockSearchResult[]> {
     const cleanQ = query.toUpperCase().trim();
-    const results: StockSearchResult[] = [];
-    for (const [sym, meta] of Object.entries(KNOWN_STOCKS)) {
-      if (sym.includes(cleanQ) || meta.name.toUpperCase().includes(cleanQ)) {
-        results.push({
-          symbol: sym,
-          name: meta.name,
-          exchange: meta.exchange,
-          type: 'stock',
-          currency: 'USD',
-        });
-      }
+    if (!cleanQ) return [];
+    const quote = await this.getQuote(cleanQ);
+    if (quote) {
+      return [{
+        symbol: quote.symbol,
+        name: quote.name,
+        exchange: quote.market,
+        type: 'stock',
+        currency: quote.currency,
+      }];
     }
-    return results;
+    return [];
   }
 }
