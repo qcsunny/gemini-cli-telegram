@@ -1118,22 +1118,22 @@ export function registerInlineHandler(
 
       let title = `📈 查询股票行情: $${queryStr}`;
       let description = `点击获取 $${queryStr} 最新价格、涨跌幅及华尔街机构评级`;
-      let quoteText = `📈 <b>正在查询 $${queryStr} 实时行情...</b>\n\n*🚀 数据加载中，请稍候...*`;
+      let quoteText = `📈 **正在查询 $${queryStr} 实时行情...**\n\n*🚀 数据加载中，请稍候...*`;
       let webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(cleanSym)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
       if (cached) {
         const sign = cached.change >= 0 ? '+' : '';
         const icon = cached.change >= 0 ? '📈' : '📉';
         const currencySymbol = cached.currency === 'CNY' ? '¥' : cached.currency === 'HKD' ? 'HK$' : '$';
-        const delayBadge = cached.isDelayed ? '<i>(Delayed ~15m)</i>' : '<i>(Real-time)</i>';
+        const delayBadge = cached.isDelayed ? '*(Delayed ~15m)*' : '*(Real-time)*';
         const perf = cached.performance;
         const fmtPerf = (val?: number) => (val === undefined || isNaN(val)) ? '--' : `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
         const rec = cached.recommendations;
-        const recText = rec ? `\n\n<b>🏦 华尔街/机构评级：</b>\n• 共识：${rec.consensusText}\n• 胜率：买 ${rec.buyProbability}% | 持 ${rec.holdProbability}% | 卖 ${rec.sellProbability}%\n• 目标价：$${rec.targetPriceMean || '--'}` : '';
+        const recText = rec ? `\n\n**🏦 华尔街/机构评级：**\n• 共识：${rec.consensusText}\n• 胜率：买 ${rec.buyProbability}% | 持 ${rec.holdProbability}% | 卖 ${rec.sellProbability}%\n• 目标价：$${rec.targetPriceMean || '--'}` : '';
 
         title = `${icon} ${cached.name} ($${cached.symbol})`;
         description = `${currencySymbol}${cached.price.toFixed(2)} (${sign}${cached.changePercent.toFixed(2)}%) · ${cached.market} ${rec ? '· ' + rec.consensusText : ''}`;
-        quoteText = `${icon} <b>${cached.name}</b>\n\n代号：<b>$${cached.symbol}</b>\n\n<b>当前价格：</b>${currencySymbol}${cached.price.toFixed(2)}\n<b>当日涨跌：</b>${sign}${cached.change.toFixed(2)} (${sign}${cached.changePercent.toFixed(2)}%)${recText}\n\n<b>📊 阶段表现：</b>\n• 1M: ${fmtPerf(perf?.change1M)}  |  3M: ${fmtPerf(perf?.change3M)}\n• 6M: ${fmtPerf(perf?.change6M)}  |  1Y: ${fmtPerf(perf?.change1Y)}\n• YTD: ${fmtPerf(perf?.changeYTD)}\n\n<b>市场：</b>${cached.market}\n<b>数据时间：</b>${new Date(cached.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
+        quoteText = `${icon} **${cached.name}**\n\n代号：**$${cached.symbol}**\n\n**当前价格：**${currencySymbol}${cached.price.toFixed(2)}\n**当日涨跌：**${sign}${cached.change.toFixed(2)} (${sign}${cached.changePercent.toFixed(2)}%)${recText}\n\n**📊 阶段表现：**\n• 1M: ${fmtPerf(perf?.change1M)}  |  3M: ${fmtPerf(perf?.change3M)}\n• 6M: ${fmtPerf(perf?.change6M)}  |  1Y: ${fmtPerf(perf?.change1Y)}\n• YTD: ${fmtPerf(perf?.changeYTD)}\n\n**市场：**${cached.market}\n**数据时间：**${new Date(cached.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
         const tvSymbol = buildTradingViewSymbol(cached.symbol, cached.market);
         webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
       }
@@ -1149,7 +1149,7 @@ export function registerInlineHandler(
         thumbnail_url: THUMBNAILS.sparkles,
         input_message_content: {
           rich_message: {
-            html: quoteText,
+            markdown: quoteText,
           },
         } as any,
         reply_markup: {
@@ -1455,14 +1455,14 @@ export function registerInlineHandler(
       if (quote) {
         const sign = quote.change >= 0 ? '+' : '';
         const icon = quote.change >= 0 ? '📈' : '📉';
-        const delayBadge = quote.isDelayed ? '<i>(Delayed ~15m)</i>' : '<i>(Real-time)</i>';
+        const delayBadge = quote.isDelayed ? '*(Delayed ~15m)*' : '*(Real-time)*';
         const currencySymbol = quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$';
         const perf = quote.performance;
         const fmtPerf = (val?: number) => (val === undefined || isNaN(val)) ? '--' : `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
         const rec = quote.recommendations;
-        const recText = rec ? `\n\n<b>🏦 华尔街/机构评级：</b>\n• 共识：${rec.consensusText}\n• 胜率：买 ${rec.buyProbability}% | 持 ${rec.holdProbability}% | 卖 ${rec.sellProbability}%\n• 目标价：$${rec.targetPriceMean || '--'}` : '';
+        const recText = rec ? `\n\n**🏦 华尔街/机构评级：**\n• 共识：${rec.consensusText}\n• 胜率：买 ${rec.buyProbability}% | 持 ${rec.holdProbability}% | 卖 ${rec.sellProbability}%\n• 目标价：$${rec.targetPriceMean || '--'}` : '';
 
-        const quoteText = `${icon} <b>${quote.name}</b>\n\n代号：<b>$${quote.symbol}</b>\n\n<b>当前价格：</b>${currencySymbol}${quote.price.toFixed(2)}\n<b>当日涨跌：</b>${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)${recText}\n\n<b>📊 阶段表现：</b>\n• 1M: ${fmtPerf(perf?.change1M)}  |  3M: ${fmtPerf(perf?.change3M)}\n• 6M: ${fmtPerf(perf?.change6M)}  |  1Y: ${fmtPerf(perf?.change1Y)}\n• YTD: ${fmtPerf(perf?.changeYTD)}\n\n<b>市场：</b>${quote.market}\n<b>数据时间：</b>${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
+        const quoteText = `${icon} **${quote.name}**\n\n代号：**$${quote.symbol}**\n\n**当前价格：**${currencySymbol}${quote.price.toFixed(2)}\n**当日涨跌：**${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)${recText}\n\n**📊 阶段表现：**\n• 1M: ${fmtPerf(perf?.change1M)}  |  3M: ${fmtPerf(perf?.change3M)}\n• 6M: ${fmtPerf(perf?.change6M)}  |  1Y: ${fmtPerf(perf?.change1Y)}\n• YTD: ${fmtPerf(perf?.changeYTD)}\n\n**市场：**${quote.market}\n**数据时间：**${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
 
         const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
         const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
@@ -1470,7 +1470,7 @@ export function registerInlineHandler(
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
           rich_message: {
-            html: quoteText,
+            markdown: quoteText,
           },
           reply_markup: {
             inline_keyboard: [
