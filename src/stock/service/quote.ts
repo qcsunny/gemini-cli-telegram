@@ -40,6 +40,17 @@ export class MarketService {
       try {
         const quote = await provider.getQuote(cleanSym);
         if (quote) {
+          // Asynchronously attempt to enrich quote with performance metrics (1M, 3M, 6M, 1Y, YTD)
+          try {
+            const candles = await this.getCandles(cleanSym, '1d', '1y');
+            if (candles && candles.data) {
+              const { calculatePerformance } = await import('../utils/performance.js');
+              quote.performance = calculatePerformance(quote.price, candles.data);
+            }
+          } catch {
+            // Ignore performance calculation errors gracefully
+          }
+
           marketCache.set(cacheKey, quote, QUOTE_TTL_MS);
           return quote;
         }

@@ -83,10 +83,12 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
   <div id="chart_container"></div>
 
   <div class="details-grid">
-    <div class="detail-card"><div class="label">Open</div><div class="val" id="d_open">--</div></div>
+    <div class="detail-card"><div class="label">1M Return</div><div class="val" id="p_1m">--</div></div>
+    <div class="detail-card"><div class="label">3M Return</div><div class="val" id="p_3m">--</div></div>
+    <div class="detail-card"><div class="label">6M Return</div><div class="val" id="p_6m">--</div></div>
+    <div class="detail-card"><div class="label">1Y Return</div><div class="val" id="p_1y">--</div></div>
+    <div class="detail-card"><div class="label">YTD Return</div><div class="val" id="p_ytd">--</div></div>
     <div class="detail-card"><div class="label">Previous Close</div><div class="val" id="d_prev">--</div></div>
-    <div class="detail-card"><div class="label">Day High</div><div class="val" id="d_high">--</div></div>
-    <div class="detail-card"><div class="label">Day Low</div><div class="val" id="d_low">--</div></div>
   </div>
 
   <div class="actions">
@@ -140,10 +142,23 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
           changeElem.innerText = sign + q.change.toFixed(2) + ' (' + sign + q.changePercent.toFixed(2) + '%)';
           changeElem.className = 'change ' + (q.change >= 0 ? 'up' : 'down');
 
-          document.getElementById('d_open').innerText = q.open ? '$' + q.open.toFixed(2) : '--';
+          const fmtVal = (val) => val === undefined || isNaN(val) ? '--' : (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
+          const setPerfElem = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.innerText = fmtVal(val);
+            if (val !== undefined && !isNaN(val)) {
+              el.className = 'val ' + (val >= 0 ? 'up' : 'down');
+            }
+          };
+
+          const p = q.performance || {};
+          setPerfElem('p_1m', p.change1M);
+          setPerfElem('p_3m', p.change3M);
+          setPerfElem('p_6m', p.change6M);
+          setPerfElem('p_1y', p.change1Y);
+          setPerfElem('p_ytd', p.changeYTD);
           document.getElementById('d_prev').innerText = q.previousClose ? '$' + q.previousClose.toFixed(2) : '--';
-          document.getElementById('d_high').innerText = q.high ? '$' + q.high.toFixed(2) : '--';
-          document.getElementById('d_low').innerText = q.low ? '$' + q.low.toFixed(2) : '--';
         }
       } catch (err) {
         console.error('Failed to load quote', err);

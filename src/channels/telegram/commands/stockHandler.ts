@@ -46,6 +46,13 @@ export function registerStockHandler(
       const icon = quote.change >= 0 ? '📈' : '📉';
       const delayBadge = quote.isDelayed ? '(Delayed ~15m)' : '(Real-time)';
 
+      const perf = quote.performance;
+      const fmtPerf = (val?: number) => {
+        if (val === undefined || isNaN(val)) return '--';
+        const s = val >= 0 ? '+' : '';
+        return `${s}${val.toFixed(2)}%`;
+      };
+
       const blocksPayload = [
         {
           type: 'paragraph',
@@ -56,8 +63,12 @@ export function registerStockHandler(
             '\n\n',
             { type: 'bold', text: ['当前价格：'] },
             `${quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$'}${quote.price.toFixed(2)}\n`,
-            { type: 'bold', text: ['涨跌：'] },
+            { type: 'bold', text: ['当日涨跌：'] },
             `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n`,
+            { type: 'bold', text: ['📊 阶段涨跌表现：'] },
+            `\n• 近1个月：${fmtPerf(perf?.change1M)}  |  近3个月：${fmtPerf(perf?.change3M)}` +
+            `\n• 近6个月：${fmtPerf(perf?.change6M)}  |  近1年：${fmtPerf(perf?.change1Y)}` +
+            `\n• 今年以来 (YTD)：${fmtPerf(perf?.changeYTD)}\n\n`,
             { type: 'bold', text: ['市场：'] },
             `${quote.market}\n`,
             { type: 'bold', text: ['数据时间：'] },

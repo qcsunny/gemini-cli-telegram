@@ -26,6 +26,13 @@ export interface StockQuote {
   timestamp: number;
   source: string;
   isDelayed: boolean;
+  performance?: {
+    change1M?: number; // 1 month percentage change
+    change3M?: number; // 3 months percentage change
+    change6M?: number; // 6 months percentage change
+    change1Y?: number; // 1 year percentage change
+    changeYTD?: number; // Year-to-date (今年以来) percentage change
+  };
 }
 
 export interface CandleDataPoint {
