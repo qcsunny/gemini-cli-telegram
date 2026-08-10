@@ -48,6 +48,9 @@ export class StockFallbackProvider implements MarketDataProvider {
                 const changePercent = prevClose ? (change / prevClose) * 100 : 0;
 
                 if (price > 0) {
+                  const secid = String(item.secid || '');
+                  const secidMarket = secid.startsWith('116.') ? 'HKEX' : secid.startsWith('1.') ? 'SSE' : secid.startsWith('0.') ? 'SZSE' : undefined;
+                  const currency = secidMarket === 'HKEX' ? 'HKD' : secidMarket === 'SSE' || secidMarket === 'SZSE' ? 'CNY' : 'USD';
                   return {
                     symbol: cleanSym,
                     name: item.name || `${cleanSym} Inc.`,
@@ -59,8 +62,8 @@ export class StockFallbackProvider implements MarketDataProvider {
                     low,
                     previousClose: prevClose,
                     volume: parseInt(last[5], 10) || 0,
-                    market: item.exchange || 'NASDAQ',
-                    currency: 'USD',
+                    market: secidMarket || item.exchange || 'NASDAQ',
+                    currency,
                     timestamp: Math.floor(Date.now() / 1000),
                     source: 'EastmoneyFast',
                     isDelayed: true,
