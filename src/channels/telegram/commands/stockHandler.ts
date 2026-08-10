@@ -12,8 +12,10 @@
 import type { Bot } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
-import type { StockQuote } from '../../../stock/types.js';
+import type { StockQuote, StockFinancial } from '../../../stock/types.js';
 import { marketService } from '../../../stock/service/quote.js';
+import { getStockMarketApiKey } from '../../../config/userConfig.js';
+import { fetchRecentFinancials } from '../../../stock/provider/fmp.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -112,6 +114,7 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
       { type: 'paragraph', text: [{ type: 'bold', text: ['📋 当日行情：'] }] },
       { type: 'table', cells: quoteCells, is_bordered: true, is_striped: true },
     ] : []),
+    ...(quote.financials?.length ? buildFinancialBlocks(quote.financials, quote.currency) : []),
     {
       type: 'paragraph',
       text: [
@@ -122,6 +125,52 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
         { type: 'italic', text: [delayBadge] },
       ]
     }
+  ];
+}
+
+/**
+ * Builds the "近期财报" section as a list of collapsible details blocks — one
+ * per reported quarter — to avoid making the stock card too long.
+ */
+export function buildFinancialBlocks(
+  financials: StockFinancial[],
+  currency?: string,
+): Array<Record<string, any>> {
+  const cur = currency === 'CNY' ? '¥' : currency === 'HKD' ? 'HK$' : '$';
+  const fmtAmount = (val?: number) => {
+    if (val === undefined || isNaN(val)) return '--';
+    if (val >= 1e9) return `${cur}${(val / 1e9).toFixed(2)}B`;
+    if (val >= 1e6) return `${cur}${(val / 1e6).toFixed(2)}M`;
+    return `${cur}${val.toFixed(0)}`;
+  };
+  const mkCell = (label: string, value: string): Array<Record<string, any>> => [
+    { text: { type: 'bold', text: [label] }, align: 'left', valign: 'middle' },
+    { text: value, align: 'center', valign: 'middle' },
+  ];
+
+  const detailsBlocks: Array<Record<string, any>> = [];
+  for (const f of financials) {
+    const margin = f.revenue ? ((f.netIncome / f.revenue) * 100).toFixed(2) : undefined;
+    const cells: Array<Array<Record<string, any>>> = [];
+    cells.push(mkCell('报告期', `${f.period}（${f.date}）`));
+    cells.push(mkCell('营收', fmtAmount(f.revenue)));
+    cells.push(mkCell('毛利', fmtAmount(f.grossProfit)));
+    cells.push(mkCell('营业利润', fmtAmount(f.operatingIncome)));
+    cells.push(mkCell('净利润', fmtAmount(f.netIncome)));
+    cells.push(mkCell('净利率', margin ? `${margin}%` : '--'));
+    cells.push(mkCell('每股收益 (EPS)', f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--'));
+    detailsBlocks.push({
+      type: 'details',
+      summary: `📊 ${f.period} · 营收 ${fmtAmount(f.revenue)} · 净利 ${fmtAmount(f.netIncome)}`,
+      blocks: [
+        { type: 'table', cells, is_bordered: true, is_striped: true },
+      ],
+    });
+  }
+
+  return [
+    { type: 'paragraph', text: [{ type: 'bold', text: ['📅 近期财报（最近' + String(financials.length) + '个季度）：'] }] },
+    ...detailsBlocks,
   ];
 }
 
@@ -143,6 +192,23 @@ export async function ensureQuotePerformance(quote: StockQuote): Promise<StockQu
     }
   } catch (err) {
     logger.warn(`[ensureQuotePerformance] failed for ${quote.symbol}: ${err}`);
+  }
+  return quote;
+}
+
+/**
+ * Enriches a quote with recent quarterly financials (FMP) when an API key is
+ * configured. No-op when the key is missing or data already present.
+ */
+export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuote> {
+  if (quote.financials) return quote;
+  const apiKey = getStockMarketApiKey();
+  if (!apiKey) return quote;
+  try {
+    const financials = await fetchRecentFinancials(quote.symbol, apiKey);
+    if (financials) quote.financials = financials;
+  } catch (err) {
+    logger.warn(`[ensureQuoteFinancials] failed for ${quote.symbol}: ${err}`);
   }
   return quote;
 }
@@ -172,6 +238,13 @@ export function registerStockHandler(
       }
 
       await ensureQuotePerformance(quote);
+
+      const apiKey = getStockMarketApiKey();
+      if (apiKey && !quote.financials) {
+        const financials = await fetchRecentFinancials(quote.symbol, apiKey);
+        if (financials) quote.financials = financials;
+      }
+
       const blocksPayload = buildStockBlocks(quote);
 
       const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);

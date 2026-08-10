@@ -54,6 +54,30 @@ export interface StockQuote {
     targetPriceHigh?: number;
     targetPriceLow?: number;
   };
+  /** Recent quarterly financial statements (income statement), newest first. Filled when a stock market API key is configured. */
+  financials?: StockFinancial[];
+}
+
+/** A single period's income statement data from the stock market data provider. */
+export interface StockFinancial {
+  /** Report date (e.g. '2026-04-26'). */
+  date: string;
+  /** Filing date (e.g. '2026-05-20'). */
+  filingDate?: string;
+  /** Fiscal year and period (e.g. '2027 Q1'). */
+  period: string;
+  /** Total revenue in reported currency. */
+  revenue: number;
+  /** Gross profit in reported currency. */
+  grossProfit?: number;
+  /** Operating income in reported currency. */
+  operatingIncome?: number;
+  /** Net income in reported currency. */
+  netIncome: number;
+  /** Diluted earnings per share. */
+  epsDiluted?: number;
+  /** Reported currency code (e.g. 'USD'). */
+  currency?: string;
 }
 
 export interface CandleDataPoint {

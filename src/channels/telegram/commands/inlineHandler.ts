@@ -17,7 +17,7 @@ import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/p
 import { marketService } from '../../../stock/service/quote.js';
 import { marketCache } from '../../../stock/cache.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
-import { buildStockBlocks, ensureQuotePerformance } from './stockHandler.js';
+import { buildStockBlocks, ensureQuoteFinancials, ensureQuotePerformance } from './stockHandler.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -1447,6 +1447,7 @@ export function registerInlineHandler(
       const quote = await marketService.getQuote(stockReq.queryStr);
       if (quote) {
         await ensureQuotePerformance(quote);
+        await ensureQuoteFinancials(quote);
 
         const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
         const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;

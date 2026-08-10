@@ -355,6 +355,11 @@ export function getDefaultModel(): string | null {
   return loadUserConfig()?.model ?? null;
 }
 
+/** Returns the configured stock market data API key (config.json "stockMarketApiKey"). Null when unset. */
+export function getStockMarketApiKey(): string | null {
+  return loadUserConfig()?.stockMarketApiKey ?? null;
+}
+
 /**
  * Returns the configured default project name (config.json "defaultProject").
  * Returns null when unset so callers fall back to the first project.
