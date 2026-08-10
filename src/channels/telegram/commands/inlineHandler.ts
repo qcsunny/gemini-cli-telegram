@@ -17,6 +17,7 @@ import { calculateCost, estimateTokens, type TokenUsage } from '../../../utils/p
 import { marketService } from '../../../stock/service/quote.js';
 import { marketCache } from '../../../stock/cache.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
+import { buildStockBlocks, ensureQuotePerformance } from './stockHandler.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -1122,18 +1123,10 @@ export function registerInlineHandler(
       let webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(cleanSym)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
       if (cached) {
-        const sign = cached.change >= 0 ? '+' : '';
-        const icon = cached.change >= 0 ? '📈' : '📉';
+        title = `${cached.change >= 0 ? '📈' : '📉'} ${cached.name} ($${cached.symbol})`;
         const currencySymbol = cached.currency === 'CNY' ? '¥' : cached.currency === 'HKD' ? 'HK$' : '$';
-        const delayBadge = cached.isDelayed ? '*(Delayed ~15m)*' : '*(Real-time)*';
-        const perf = cached.performance;
-        const fmtPerf = (val?: number) => (val === undefined || isNaN(val)) ? '--' : `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
-        const rec = cached.recommendations;
-        const recText = rec ? `\n\n**🏦 华尔街/机构评级：**\n• 共识：${rec.consensusText}\n• 胜率：买 ${rec.buyProbability}% | 持 ${rec.holdProbability}% | 卖 ${rec.sellProbability}%\n• 目标价：$${rec.targetPriceMean || '--'}` : '';
-
-        title = `${icon} ${cached.name} ($${cached.symbol})`;
-        description = `${currencySymbol}${cached.price.toFixed(2)} (${sign}${cached.changePercent.toFixed(2)}%) · ${cached.market} ${rec ? '· ' + rec.consensusText : ''}`;
-        quoteText = `${icon} **${cached.name}**\n\n代号：**$${cached.symbol}**\n\n**当前价格：**${currencySymbol}${cached.price.toFixed(2)}\n**当日涨跌：**${sign}${cached.change.toFixed(2)} (${sign}${cached.changePercent.toFixed(2)}%)${recText}\n\n**📊 阶段表现：**\n• 1M: ${fmtPerf(perf?.change1M)}  |  3M: ${fmtPerf(perf?.change3M)}\n• 6M: ${fmtPerf(perf?.change6M)}  |  1Y: ${fmtPerf(perf?.change1Y)}\n• YTD: ${fmtPerf(perf?.changeYTD)}\n\n**市场：**${cached.market}\n**数据时间：**${new Date(cached.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
+        const sign = cached.change >= 0 ? '+' : '';
+        description = `${currencySymbol}${cached.price.toFixed(2)} (${sign}${cached.changePercent.toFixed(2)}%) · ${cached.market} ${cached.recommendations ? '· ' + cached.recommendations.consensusText : ''}`;
         const tvSymbol = buildTradingViewSymbol(cached.symbol, cached.market);
         webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
       }
@@ -1148,15 +1141,15 @@ export function registerInlineHandler(
         description,
         thumbnail_url: THUMBNAILS.sparkles,
         input_message_content: {
-          rich_message: {
-            markdown: quoteText,
-          },
+          rich_message: cached
+            ? ({ blocks: buildStockBlocks(cached) } as any)
+            : { markdown: quoteText },
         } as any,
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '📊 查看详情', web_app: { url: webAppUrl } },
-              { text: '📈 K线图', web_app: { url: webAppUrl } }
+              { text: '📊 查看详情', url: webAppUrl },
+              { text: '📈 K线图', url: webAppUrl }
             ],
           ],
         },
@@ -1453,16 +1446,7 @@ export function registerInlineHandler(
       logger.info(`[ChosenInlineStock] Fetching live stock data for "${stockReq.queryStr}"`);
       const quote = await marketService.getQuote(stockReq.queryStr);
       if (quote) {
-        const sign = quote.change >= 0 ? '+' : '';
-        const icon = quote.change >= 0 ? '📈' : '📉';
-        const delayBadge = quote.isDelayed ? '*(Delayed ~15m)*' : '*(Real-time)*';
-        const currencySymbol = quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$';
-        const perf = quote.performance;
-        const fmtPerf = (val?: number) => (val === undefined || isNaN(val)) ? '--' : `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
-        const rec = quote.recommendations;
-        const recText = rec ? `\n\n**🏦 华尔街/机构评级：**\n• 共识：${rec.consensusText}\n• 胜率：买 ${rec.buyProbability}% | 持 ${rec.holdProbability}% | 卖 ${rec.sellProbability}%\n• 目标价：$${rec.targetPriceMean || '--'}` : '';
-
-        const quoteText = `${icon} **${quote.name}**\n\n代号：**$${quote.symbol}**\n\n**当前价格：**${currencySymbol}${quote.price.toFixed(2)}\n**当日涨跌：**${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)${recText}\n\n**📊 阶段表现：**\n• 1M: ${fmtPerf(perf?.change1M)}  |  3M: ${fmtPerf(perf?.change3M)}\n• 6M: ${fmtPerf(perf?.change6M)}  |  1Y: ${fmtPerf(perf?.change1Y)}\n• YTD: ${fmtPerf(perf?.changeYTD)}\n\n**市场：**${quote.market}\n**数据时间：**${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
+        await ensureQuotePerformance(quote);
 
         const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
         const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
@@ -1470,18 +1454,30 @@ export function registerInlineHandler(
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
           rich_message: {
-            markdown: quoteText,
+            blocks: buildStockBlocks(quote),
           },
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '📊 查看详情', web_app: { url: webAppUrl } },
-                { text: '📈 K线图', web_app: { url: webAppUrl } }
+                { text: '📊 查看详情', url: webAppUrl },
+                { text: '📈 K线图', url: webAppUrl }
               ],
             ],
           },
         } as any).catch((e: Error) => logger.warn(`[ChosenInlineStock] Edit message failed: ${e}`));
       }
+      return;
+    }
+
+    const cmp = compareContexts.get(chosen.result_id);
+    if (cmp) {
+      cmp.inlineMessageId = chosen.inline_message_id;
+      logger.info(`[ChosenInline] Compare mode selected: userId=${chosen.from.id} resultId=${chosen.result_id} candidates=${cmp.candidates.length}`);
+      await ctx.api.raw.editMessageText({
+        inline_message_id: chosen.inline_message_id,
+        rich_message: { markdown: renderComparePicker(cmp) },
+        reply_markup: buildCompareKeyboard(cmp),
+      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare picker initial edit failed: ${e}`));
       return;
     }
 

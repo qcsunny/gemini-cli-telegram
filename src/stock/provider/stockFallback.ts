@@ -190,6 +190,29 @@ export class StockFallbackProvider implements MarketDataProvider {
               const changePercent = prevClose ? (change / prevClose) * 100 : 0;
 
               if (price > 0) {
+                let marketCap: number | undefined;
+                let pe: number | undefined;
+                let pb: number | undefined;
+                let turnoverRate: number | undefined;
+                try {
+                  const snapController = new AbortController();
+                  const snapTimer = setTimeout(() => snapController.abort(), 800);
+                  const snapUrl = `https://push2.eastmoney.com/api/qt/stock/get?secid=${item.secid}&fields=f43,f57,f84,f116,f163,f167,f168`;
+                  const snapRes = await undiciFetch(snapUrl, { signal: snapController.signal }).finally(() => clearTimeout(snapTimer));
+                  if (snapRes.ok) {
+                    const snapJson = (await snapRes.json()) as any;
+                    const d = snapJson?.data;
+                    if (d) {
+                      if (typeof d.f116 === 'number') marketCap = d.f116;
+                      if (typeof d.f163 === 'number') pe = d.f163 / 100;
+                      if (typeof d.f167 === 'number') pb = d.f167 / 100;
+                      if (typeof d.f168 === 'number') turnoverRate = d.f168 / 100;
+                    }
+                  }
+                } catch {
+                  // Optional enrichment, ignore failures
+                }
+
                 return {
                   symbol: cleanSym,
                   name: item.name || `${cleanSym} Inc.`,
@@ -201,6 +224,10 @@ export class StockFallbackProvider implements MarketDataProvider {
                   low,
                   previousClose: prevClose,
                   volume: parseInt(last[5], 10) || 0,
+                  marketCap,
+                  pe,
+                  pb,
+                  turnoverRate,
                   market: item.exchange || 'NASDAQ',
                   currency: 'USD',
                   timestamp: Math.floor(Date.now() / 1000),

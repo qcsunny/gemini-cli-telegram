@@ -21,6 +21,12 @@ export interface StockQuote {
   low?: number;
   previousClose?: number;
   volume?: number;
+  high52?: number;
+  low52?: number;
+  marketCap?: number; // Total market capitalization in USD (US stocks via Eastmoney)
+  pe?: number; // Price-to-earnings ratio (TTM)
+  pb?: number; // Price-to-book ratio
+  turnoverRate?: number; // Percentage
   market: string;
   currency: string;
   timestamp: number;

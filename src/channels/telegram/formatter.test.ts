@@ -255,7 +255,7 @@ Thanks for reading! 🚀
     const blocks = markdownToRichBlocks(mdInput) as any[];
     expect(blocks).toHaveLength(2);
     expect(blocks[0].type).toBe('pullquote');
-    expect(blocks[0].text).toEqual(['Key quote']);
+    expect(blocks[0].text).toBe('Key quote');
 
     expect(blocks[1].type).toBe('paragraph');
     expect(blocks[1].text).toEqual([

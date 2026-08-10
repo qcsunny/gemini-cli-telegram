@@ -8,6 +8,7 @@ export default defineConfig({
         singleThread: true,
       },
     },
+    testTimeout: 30000,
     clearMocks: true,
     env: {
       LOG_LEVEL: 'silent',

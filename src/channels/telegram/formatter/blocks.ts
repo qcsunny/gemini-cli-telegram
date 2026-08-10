@@ -1006,7 +1006,7 @@ function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
     const loc = b['location'] as Record<string, unknown> | undefined;
     return !!(loc && typeof b['zoom'] === 'number');
   }
-  return !!(type === 'anchor' || type === 'divider' || type === 'mathematical_expression' || type === 'table' || type === 'thinking');
+  return !!(type === 'anchor' || type === 'divider' || type === 'mathematical_expression' || type === 'table' || type === 'thinking' || type === 'pullquote');
 }
 
 function flattenDepth(blk: RichBlock, depth: number): RichBlock {
