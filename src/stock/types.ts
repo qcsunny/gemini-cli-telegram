@@ -56,6 +56,8 @@ export interface StockQuote {
   };
   /** Recent quarterly financial statements (income statement), newest first. Filled when a stock market API key is configured. */
   financials?: StockFinancial[];
+  /** Company main-business description (主营业务简介). Optional, shown when available. */
+  profile?: string;
 }
 
 /** A single period's income statement data from the stock market data provider. */

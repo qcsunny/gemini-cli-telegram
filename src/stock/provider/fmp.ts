@@ -95,3 +95,35 @@ export async function fetchRecentFinancials(
     clearTimeout(timer);
   }
 }
+
+/**
+ * Fetches a company description for US/HK stocks via FMP /stable/profile.
+ * Returns null when no API key, the request fails, or the symbol has no description.
+ */
+export async function fetchCompanyProfile(
+  symbol: string,
+  apiKey: string,
+): Promise<string | null> {
+  if (!apiKey) return null;
+  const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
+  if (!cleanSym) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const url = `https://financialmodelingprep.com/stable/profile?symbol=${encodeURIComponent(cleanSym)}&apikey=${encodeURIComponent(apiKey)}`;
+    const res = await undiciFetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      logger.warn(`[FMP] Profile failed for ${cleanSym}: HTTP ${res.status}`);
+      return null;
+    }
+    const json = (await res.json()) as Array<Record<string, unknown>>;
+    const desc = json[0]?.['description'];
+    return typeof desc === 'string' && desc.trim() ? desc.trim() : null;
+  } catch (err) {
+    logger.warn(`[FMP] Profile fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

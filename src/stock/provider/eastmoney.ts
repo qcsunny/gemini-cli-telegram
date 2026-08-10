@@ -94,3 +94,30 @@ export async function fetchHKFinancials(symbol: string): Promise<StockFinancial[
   if (!rows.length) return null;
   return toFinancials(rows).map((f) => ({ ...f, currency: 'HKD' }));
 }
+
+const F10_BASE = 'https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax';
+
+/** Company profile (ORG_PROFILE) for A-share stocks via Eastmoney F10. symbol: 6-digit code e.g. '600519'. */
+export async function fetchAStockProfile(symbol: string): Promise<string | null> {
+  const code = symbol.length === 6 && /^\d{6}$/.test(symbol) ? (symbol.startsWith('6') ? `SH${symbol}` : `SZ${symbol}`) : symbol;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  try {
+    const res = await undiciFetch(`${F10_BASE}?code=${encodeURIComponent(code)}`, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
+    });
+    if (!res.ok) {
+      logger.warn(`[EastmoneyProfile] HTTP ${res.status}`);
+      return null;
+    }
+    const json = (await res.json()) as { jbzl?: RawFinancialRow[] };
+    const profile = json.jbzl?.[0]?.['ORG_PROFILE'];
+    return typeof profile === 'string' && profile.trim() ? profile.trim() : null;
+  } catch (err) {
+    logger.warn(`[EastmoneyProfile] fetch failed: ${err}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

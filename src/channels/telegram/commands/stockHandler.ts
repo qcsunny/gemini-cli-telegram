@@ -15,8 +15,8 @@ import type { SessionOptions } from '../../../core/types.js';
 import type { StockQuote, StockFinancial } from '../../../stock/types.js';
 import { marketService } from '../../../stock/service/quote.js';
 import { getStockMarketApiKey } from '../../../config/userConfig.js';
-import { fetchRecentFinancials } from '../../../stock/provider/fmp.js';
-import { fetchAStockFinancials, fetchHKFinancials } from '../../../stock/provider/eastmoney.js';
+import { fetchRecentFinancials, fetchCompanyProfile } from '../../../stock/provider/fmp.js';
+import { fetchAStockFinancials, fetchHKFinancials, fetchAStockProfile } from '../../../stock/provider/eastmoney.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -66,6 +66,10 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
     { text: value, align: 'center', valign: 'middle' },
   ];
 
+  /** Caps the company description so the card stays compact. */
+  const truncateProfile = (p: string): string =>
+    p.length > 300 ? `${p.slice(0, 300)}…` : p;
+
   const perfCells: Array<Array<Record<string, any>>> = [];
   if (perf) {
     perfCells.push(mkCell('近1个月', fmtPerf(perf.change1M)));
@@ -104,6 +108,7 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
         `${quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$'}${quote.price.toFixed(2)}\n`,
         { type: 'bold', text: ['当日涨跌：'] },
         `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n`,
+        ...(quote.profile ? [{ type: 'bold', text: ['🏢 公司简介：'] }, `${truncateProfile(quote.profile)}\n\n`] : []),
         ...recSection,
       ]
     },
@@ -247,6 +252,28 @@ export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuo
   return quote;
 }
 
+/**
+ * Enriches a quote with a company main-business description, routing by market:
+ * A-shares use the free Eastmoney F10 CompanySurvey API; HK/US stocks use FMP
+ * profile when an API key is configured. No-op when data already present.
+ */
+export async function ensureQuoteProfile(quote: StockQuote): Promise<StockQuote> {
+  if (quote.profile) return quote;
+  try {
+    let profile: string | null = null;
+    if (quote.market === 'SSE' || quote.market === 'SZSE') {
+      profile = await fetchAStockProfile(quote.symbol);
+    } else {
+      const apiKey = getStockMarketApiKey();
+      if (apiKey) profile = await fetchCompanyProfile(quote.symbol, apiKey);
+    }
+    if (profile) quote.profile = profile;
+  } catch (err) {
+    logger.warn(`[ensureQuoteProfile] failed for ${quote.symbol}: ${err}`);
+  }
+  return quote;
+}
+
 export function registerStockHandler(
   bot: Bot,
   sessionManager: SessionManager,
@@ -272,12 +299,8 @@ export function registerStockHandler(
       }
 
       await ensureQuotePerformance(quote);
-
-      const apiKey = getStockMarketApiKey();
-      if (apiKey && !quote.financials) {
-        const financials = await fetchRecentFinancials(quote.symbol, apiKey);
-        if (financials) quote.financials = financials;
-      }
+      await ensureQuoteFinancials(quote);
+      await ensureQuoteProfile(quote);
 
       const blocksPayload = buildStockBlocks(quote);
 
