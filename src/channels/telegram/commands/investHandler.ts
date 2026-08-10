@@ -26,7 +26,7 @@ import type {
   StockCashFlow,
 } from '../../../stock/types.js';
 import { marketService } from '../../../stock/service/quote.js';
-import { getDefaultModel } from '../../../config/userConfig.js';
+import { getDefaultModel, loadUserConfig } from '../../../config/userConfig.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
@@ -630,7 +630,7 @@ export function registerInvestHandler(
           prompt,
           cwd: process.cwd(),
           model,
-          proxy: process.env['HTTP_PROXY'] || undefined,
+          proxy: loadUserConfig()?.proxy || undefined,
         });
         if (res.exitCode === 0 && res.output) {
           await ctx.api.sendRichMessage(ctx.chat.id, {
