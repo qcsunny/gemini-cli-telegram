@@ -1101,18 +1101,23 @@ export function registerInlineHandler(
     // Default to active session project if no explicit /pN flag was provided
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
-    // Phase 4 Inline Mode: Real-time Stock / Crypto Ticker ($NVDA, NVDA, $BTC, etc.)
-    const tickerMatch = rawQuery.trim().match(/^(\$)?([A-Za-z0-9-]{1,10})$/);
+    // Phase 4 Inline Mode: Real-time Stock / Crypto Ticker ($NVDA, NVDA, 英伟达, 600519, $BTC, etc.)
+    const tickerMatch = rawQuery.trim().match(/^(\$)?([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
     if (tickerMatch) {
-      const symbol = tickerMatch[2].toUpperCase();
-      const quote = await marketService.getQuote(symbol);
+      const queryStr = tickerMatch[2];
+      const quote = await marketService.getQuote(queryStr);
       if (quote) {
         const sign = quote.change >= 0 ? '+' : '';
         const icon = quote.change >= 0 ? '📈' : '📉';
         const delayBadge = quote.isDelayed ? '<i>(Delayed ~15m)</i>' : '<i>(Real-time)</i>';
         const currencySymbol = quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$';
 
-        const quoteText = `${icon} <b>${quote.name}</b>\n\n代号：<b>$${quote.symbol}</b>\n\n<b>当前价格：</b>${currencySymbol}${quote.price.toFixed(2)}\n<b>涨跌：</b>${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n<b>市场：</b>${quote.market}\n<b>数据时间：</b>${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
+        const perf = quote.performance;
+        const fmtPerf = (val?: number) => (val === undefined || isNaN(val)) ? '--' : `${val >= 0 ? '+' : ''}${val.toFixed(2)}%`;
+        const rec = quote.recommendations;
+        const recText = rec ? `\n\n<b>🏦 华尔街/机构评级：</b>\n• 共识：${rec.consensusText}\n• 胜率：买 ${rec.buyProbability}% | 持 ${rec.holdProbability}% | 卖 ${rec.sellProbability}%\n• 目标价：$${rec.targetPriceMean || '--'}` : '';
+
+        const quoteText = `${icon} <b>${quote.name}</b>\n\n代号：<b>$${quote.symbol}</b>\n\n<b>当前价格：</b>${currencySymbol}${quote.price.toFixed(2)}\n<b>当日涨跌：</b>${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)${recText}\n\n<b>📊 阶段表现：</b>\n• 1M: ${fmtPerf(perf?.change1M)}  |  3M: ${fmtPerf(perf?.change3M)}\n• 6M: ${fmtPerf(perf?.change6M)}  |  1Y: ${fmtPerf(perf?.change1Y)}\n• YTD: ${fmtPerf(perf?.changeYTD)}\n\n<b>市场：</b>${quote.market}\n<b>数据时间：</b>${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${delayBadge}`;
 
         const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
         const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
@@ -1120,9 +1125,9 @@ export function registerInlineHandler(
         const results = [
           {
             type: 'article' as const,
-            id: `stock-${symbol}`,
+            id: `stock-${quote.symbol}`,
             title: `${icon} ${quote.name} ($${quote.symbol})`,
-            description: `$${quote.price.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%) · ${quote.market}`,
+            description: `${currencySymbol}${quote.price.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%) · ${quote.market} ${rec ? '· ' + rec.consensusText : ''}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
               message_text: quoteText,
