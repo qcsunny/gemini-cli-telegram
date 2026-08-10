@@ -110,6 +110,8 @@ export interface StockFinancial {
   incomeTaxExpense?: number;
   /** Net profit excluding non-recurring items (扣非净利润). */
   deductedNetProfit?: number;
+  /** Book value per share (每股净资产). */
+  bps?: number | null;
   /** Operating margin in percent (营业利润率 = operatingIncome / revenue). */
   operatingMargin?: number | null;
   /** Reported currency code (e.g. 'USD'). */

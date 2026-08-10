@@ -32,8 +32,9 @@ function toFinancials(rows: RawFinancialRow[]): StockFinancial[] {
     netIncomeYoY: num(row, 'SJLTZ') ?? num(row, 'HOLDER_PROFIT_YOY') ?? undefined,
     netIncomeQoQ: num(row, 'SJLHZ') ?? num(row, 'HOLDER_PROFIT_QOQ') ?? undefined,
     grossMargin: num(row, 'XSMLL') ?? num(row, 'GROSS_PROFIT_RATIO') ?? undefined,
-    netMargin: num(row, 'NET_PROFIT_RATIO') ?? undefined,
-    roe: num(row, 'ROE_WEIGHT') ?? num(row, 'ROE') ?? undefined,
+    netMargin: num(row, 'XSJLL') ?? num(row, 'NET_PROFIT_RATIO') ?? (num(row, 'PARENT_NETPROFIT') && num(row, 'TOTAL_OPERATE_INCOME') ? (num(row, 'PARENT_NETPROFIT')! / num(row, 'TOTAL_OPERATE_INCOME')!) * 100 : undefined),
+    roe: num(row, 'WEIGHTAVG_ROE') ?? num(row, 'ROE_WEIGHT') ?? num(row, 'ROE') ?? undefined,
+    bps: num(row, 'BPS') ?? undefined,
     eps: num(row, 'BASIC_EPS') ?? undefined,
     currency: undefined,
   }));
@@ -76,7 +77,39 @@ export async function fetchAStockFinancials(symbol: string): Promise<StockFinanc
   });
   const rows = await fetchRows(params);
   if (!rows.length) return null;
-  return toFinancials(rows).map((f) => ({ ...f, currency: 'CNY' }));
+  const financials = toFinancials(rows);
+  const detailRows = await fetchRows(
+    new URLSearchParams({
+      sortColumns: 'REPORT_DATE',
+      sortTypes: '-1',
+      pageSize: '4',
+      pageNumber: '1',
+      reportName: 'RPT_F10_FINANCE_GINCOME',
+      columns: 'ALL',
+      source: 'WEB',
+      client: 'WEB',
+      filter: `(SECUCODE="${symbol}.SH")`,
+    }),
+  );
+  if (detailRows.length) {
+    const detailByDate = new Map<string, RawFinancialRow>();
+    for (const r of detailRows) detailByDate.set(cleanDate(String(r['REPORT_DATE'] ?? '')), r);
+    for (const f of financials) {
+      const d = detailByDate.get(f.date);
+      if (!d) continue;
+      const cost = num(d, 'OPERATE_COST');
+      const opProfit = num(d, 'OPERATE_PROFIT');
+      if (cost !== null && cost !== undefined) f.costOfRevenue = cost;
+      if (opProfit !== null && opProfit !== undefined) f.operatingIncome = opProfit;
+      f.incomeBeforeTax = num(d, 'TOTAL_PROFIT') ?? f.incomeBeforeTax;
+      f.incomeTaxExpense = num(d, 'INCOME_TAX') ?? f.incomeTaxExpense;
+      f.deductedNetProfit = num(d, 'DEDUCT_NETPROFIT') ?? f.deductedNetProfit;
+      if (f.grossProfit === undefined && f.costOfRevenue !== undefined) {
+        f.grossProfit = f.revenue - f.costOfRevenue;
+      }
+    }
+  }
+  return financials.map((f) => ({ ...f, currency: 'CNY' }));
 }
 
 /** HK-stock financial indicators via Eastmoney datacenter. symbol: 5-digit code e.g. '00700'. */
@@ -158,14 +191,14 @@ export async function fetchACashFlows(symbol: string): Promise<StockCashFlow[] |
   return rows
     .map((row): StockCashFlow | null => {
       const netCashOperating = num(row, 'NETCASH_OPERATE');
+      if (netCashOperating === null) return null;
       const endCash = num(row, 'END_CASH') ?? num(row, 'END_CASH_EQUIVALENTS');
-      if (netCashOperating === null || endCash === null) return null;
       return {
         date: cleanDate(String(row['REPORT_DATE'] ?? '')),
         netCashOperating,
         netCashInvesting: num(row, 'NETCASH_INVEST') ?? 0,
         netCashFinancing: num(row, 'NETCASH_FINANCE') ?? 0,
-        endCash,
+        endCash: endCash ?? 0,
         currency: 'CNY',
       };
     })

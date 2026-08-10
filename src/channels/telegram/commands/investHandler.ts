@@ -31,7 +31,12 @@ import { runAgyPrint } from '../../../agy/agyCli.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 
-import { ensureQuotePerformance, ensureQuoteFinancials, ensureQuoteProfile } from './stockHandler.js';
+import {
+  ensureQuotePerformance,
+  ensureQuoteFinancials,
+  ensureQuoteProfile,
+  buildFinancialBlocks,
+} from './stockHandler.js';
 
 // ── Dimension types ──
 
@@ -574,11 +579,13 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
     '',
     '## 最新一期财务数据',
     fs
-      ? `营收 ${fs.revenue}，净利 ${fs.netIncome}，毛利率 ${fs.grossMargin}%，净利率 ${fs.netMargin}%，ROE ${fs.roe}%`
+      ? `营收 ${fs.revenue}，营业成本 ${fs.costOfRevenue}，毛利 ${fs.grossProfit}，营业利润 ${fs.operatingIncome}，税前利润 ${fs.incomeBeforeTax}，所得税 ${fs.incomeTaxExpense}，净利 ${fs.netIncome}，毛利率 ${fs.grossMargin}%，净利率 ${fs.netMargin}%，营业利润率 ${fs.operatingMargin}%，ROE ${fs.roe}%，EPS ${fs.epsDiluted}，每股净资产 ${fs.bps}，营收同比 ${fs.revenueYoY}%，净利同比 ${fs.netIncomeYoY}%`
       : '无',
-    bs ? `总资产 ${bs.totalAssets}，总负债 ${bs.totalLiabilities}，资产负债率 ${bs.debtRatio}%` : '',
-    cf ? `经营现金流 ${cf.netCashOperating}，投资现金流 ${cf.netCashInvesting}` : '',
-    `当前价 ${quote.price}，PE ${quote.pe}，PB ${quote.pb}`,
+    bs
+      ? `总资产 ${bs.totalAssets}，总负债 ${bs.totalLiabilities}，净资产 ${bs.netAssets}，股东权益 ${bs.parentEquity}，流动资产 ${bs.currentAssets}，流动负债 ${bs.currentLiabilities}，货币资金 ${bs.cash}，存货 ${bs.inventory}，应收账款 ${bs.accountsReceivable}，商誉 ${bs.goodwill}，短期借款 ${bs.shortTermDebt}，长期借款 ${bs.longTermDebt}，资产负债率 ${bs.debtRatio}%`
+      : '',
+    cf ? `经营现金流 ${cf.netCashOperating}，投资现金流 ${cf.netCashInvesting}，筹资现金流 ${cf.netCashFinancing}，期末现金 ${cf.endCash}` : '',
+    `当前价 ${quote.price}，PE ${quote.pe}，PB ${quote.pb}，总市值 ${quote.marketCap}，52周最高 ${quote.high52}，52周最低 ${quote.low52}`,
     quote.profile ? `公司简介：${quote.profile.slice(0, 500)}` : '',
     '',
     '## 报告要求',
@@ -619,7 +626,13 @@ export function registerInvestHandler(
 
       const result = analyzeInvest(quote);
       const blocks = buildInvestBlocks(result);
-      await ctx.api.sendRichMessage(ctx.chat.id, { blocks: blocks as any });
+      const finBlocks = buildFinancialBlocks(
+        quote.financials ?? [],
+        quote.balanceSheets,
+        quote.cashFlows,
+        quote.currency,
+      );
+      await ctx.api.sendRichMessage(ctx.chat.id, { blocks: [...blocks, ...finBlocks] as any });
 
       // Deep report via the model
       const model = getDefaultModel();
