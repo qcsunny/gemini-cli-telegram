@@ -1106,8 +1106,10 @@ export function registerInlineHandler(
     // Phase 4 Inline Mode: Stock / Crypto Ticker ($NVDA, $英伟达, $600519, $BTC)
     // Instant 0ms placeholder popup card -> asynchronously loads quote & updates in-place via chosen_inline_result!
     const tickerMatch = rawQuery.trim().match(/^\$([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
+    logger.info(`[InlineStockCheck] rawQuery="${rawQuery}" match=${!!tickerMatch}`);
     if (tickerMatch) {
       const queryStr = tickerMatch[1];
+      logger.info(`[InlineStockCheck] Query string extracted: "${queryStr}"`);
       const resultId = `stockreq-${Date.now()}-${fromId}`;
 
       // Instant 0ms synchronous check in cache
@@ -1146,9 +1148,10 @@ export function registerInlineHandler(
         description,
         thumbnail_url: THUMBNAILS.sparkles,
         input_message_content: {
-          message_text: quoteText,
-          parse_mode: 'HTML' as const,
-        },
+          rich_message: {
+            html: quoteText,
+          },
+        } as any,
         reply_markup: {
           inline_keyboard: [
             [
@@ -1160,7 +1163,9 @@ export function registerInlineHandler(
       };
 
       // 0ms instant response to Telegram -> GUARANTEES floating popup window never times out!
-      await ctx.answerInlineQuery([stockResultCard], { cache_time: 5, is_personal: true }).catch(() => {});
+      await ctx.answerInlineQuery([stockResultCard], { cache_time: 5, is_personal: true }).catch((e) => {
+        logger.error(`[InlineStock] answerInlineQuery error: ${e}`);
+      });
       return;
     }
 
@@ -1464,8 +1469,9 @@ export function registerInlineHandler(
 
         await ctx.api.raw.editMessageText({
           inline_message_id: chosen.inline_message_id,
-          text: quoteText,
-          parse_mode: 'HTML',
+          rich_message: {
+            html: quoteText,
+          },
           reply_markup: {
             inline_keyboard: [
               [
