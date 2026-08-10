@@ -402,6 +402,17 @@ export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuo
     if (financials && financials.length) quote.financials = financials;
     if (balanceSheets && balanceSheets.length) quote.balanceSheets = balanceSheets;
     if (cashFlows && cashFlows.length) quote.cashFlows = cashFlows;
+    const bsByDate = new Map<string, StockBalanceSheet>();
+    for (const bs of quote.balanceSheets ?? []) bsByDate.set(bs.date, bs);
+    for (const f of quote.financials ?? []) {
+      if (f.roe === undefined || f.roe === null) {
+        const eq = bsByDate.get(f.date)?.parentEquity;
+        if (eq && f.netIncome) f.roe = (f.netIncome / eq) * 100;
+      }
+      if ((f.netMargin === undefined || f.netMargin === null) && f.netIncome && f.revenue) {
+        f.netMargin = (f.netIncome / f.revenue) * 100;
+      }
+    }
   } catch (err) {
     logger.warn(`[ensureQuoteFinancials] failed for ${quote.symbol}: ${err}`);
   }

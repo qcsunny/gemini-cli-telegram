@@ -237,14 +237,14 @@ export async function fetchRecentCashFlows(
     const flows: StockCashFlow[] = [];
     for (const raw of json) {
       const date = typeof raw['date'] === 'string' ? raw['date'] : '';
-      const netCashOperating = num(raw['operatingCashFlow']);
-      const endCash = num(raw['cashAndCashEquivalentsAtEnd']);
+      const netCashOperating = num(raw['operatingCashFlow'] ?? raw['netCashProvidedByOperatingActivities']);
+      const endCash = num(raw['cashAndCashEquivalentsAtEnd'] ?? raw['cashAtEndOfPeriod']);
       if (!date || netCashOperating === undefined || endCash === undefined) continue;
       flows.push({
         date,
         netCashOperating,
-        netCashInvesting: num(raw['investingCashFlow']) ?? 0,
-        netCashFinancing: num(raw['financingCashFlow']) ?? 0,
+        netCashInvesting: num(raw['netCashProvidedByInvestingActivities'] ?? raw['investingCashFlow']) ?? 0,
+        netCashFinancing: num(raw['netCashProvidedByFinancingActivities'] ?? raw['financingCashFlow']) ?? 0,
         endCash,
         currency: typeof raw['reportedCurrency'] === 'string' ? raw['reportedCurrency'] : undefined,
       });
