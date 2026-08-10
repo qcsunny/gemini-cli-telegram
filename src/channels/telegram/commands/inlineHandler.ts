@@ -1105,8 +1105,10 @@ export function registerInlineHandler(
     const tickerMatch = rawQuery.trim().match(/^\$([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
     if (tickerMatch) {
       const queryStr = tickerMatch[1];
+      logger.info(`[InlineStock] Querying stock for "${queryStr}"`);
       const quote = await marketService.getQuote(queryStr);
       if (quote) {
+        logger.info(`[InlineStock] Quote found for "${queryStr}": ${quote.symbol} $${quote.price}`);
         const sign = quote.change >= 0 ? '+' : '';
         const icon = quote.change >= 0 ? '📈' : '📉';
         const delayBadge = quote.isDelayed ? '<i>(Delayed ~15m)</i>' : '<i>(Real-time)</i>';
