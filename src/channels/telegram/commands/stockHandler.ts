@@ -164,7 +164,7 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
 
 const fmtAmount = (val: number | undefined, currency?: string): string => {
   if (val === undefined || isNaN(val)) return '--';
-  const cur = currency === 'CNY' ? '¥' : currency === 'HKD' ? 'HK$' : '$';
+  const cur = currency === 'CNY' ? '¥' : currency === 'HKD' ? '' : '$';
   if (val >= 1e9) return `${cur}${(val / 1e9).toFixed(2)}B`;
   if (val >= 1e6) return `${cur}${(val / 1e6).toFixed(2)}M`;
   return `${cur}${val.toFixed(0)}`;
