@@ -1101,11 +1101,11 @@ export function registerInlineHandler(
     // Default to active session project if no explicit /pN flag was provided
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
-    // Phase 4 Inline Mode: Real-time Stock / Crypto Ticker ($NVDA, NVDA, 英伟达, 600519, $BTC, etc.)
+    // Phase 4 Inline Mode: Stock / Crypto Ticker — ONLY triggered when starting with $ (e.g. $NVDA, $英伟达, $600519, $BTC)
     let stockResultCard: any = null;
-    const tickerMatch = rawQuery.trim().match(/^(\$)?([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
+    const tickerMatch = rawQuery.trim().match(/^\$([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
     if (tickerMatch) {
-      const queryStr = tickerMatch[2];
+      const queryStr = tickerMatch[1];
       const quote = await marketService.getQuote(queryStr);
       if (quote) {
         const sign = quote.change >= 0 ? '+' : '';
@@ -1155,7 +1155,7 @@ export function registerInlineHandler(
           description: `Type a question to ask AI (model: ${displayModelName(modelToUse)})`,
           thumbnail_url: THUMBNAILS.bot,
           input_message_content: {
-            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${displayModelName(modelToUse)}.\n\n<b>Model switches (@keyword):</b>\n• <code>@flash ask</code> — list all Flash models\n• <code>@pro ask</code> — list all Pro models\n• <code>@deep ask</code> — list all DeepSeek models\n• <code>@think ask</code> — list all Thinking models\n\n<b>Project switches (/pN):</b>\n${projectHelpList || "• inherits the bot's currently bound project"}`,
+            message_text: `<b>🤖 AI Inline — @static32bot</b>\n\nType a question after @static32bot to get an AI answer using ${displayModelName(modelToUse)}.\n\n<b>📈 Stock Ticker query:</b>\n• Start with <code>$</code> to check stocks: <code>@static32bot $NVDA</code>, <code>@static32bot $英伟达</code>, <code>@static32bot $600519</code>\n\n<b>Model switches (@keyword):</b>\n• <code>@flash ask</code> — list all Flash models\n• <code>@pro ask</code> — list all Pro models\n• <code>@deep ask</code> — list all DeepSeek models\n• <code>@think ask</code> — list all Thinking models\n\n<b>Project switches (/pN):</b>\n${projectHelpList || "• inherits the bot's currently bound project"}`,
             parse_mode: 'HTML' as const,
           },
         },
