@@ -20,11 +20,58 @@ export class StockFallbackProvider implements MarketDataProvider {
   async getQuote(symbol: string): Promise<StockQuote | null> {
     let cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
 
-    // If query is Chinese name or non-ticker string (e.g. 阿里巴巴, 贵州茅台), search symbol first
+    // If query is Chinese name or non-ticker string (e.g. 苹果, 阿里巴巴, 贵州茅台)
     if (/[\u4e00-\u9fa5]/.test(symbol)) {
       const searchRes = await this.searchSymbols(symbol);
       if (searchRes.length > 0) {
-        cleanSym = searchRes[0].symbol.toUpperCase();
+        const item = searchRes[0] as any;
+        cleanSym = item.symbol.toUpperCase();
+
+        // Instantly fetch price from Eastmoney API for Chinese query to ensure sub-300ms speed
+        if (item.secid) {
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 1200);
+            const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${item.secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=2`;
+            const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+            if (res.ok) {
+              const json = (await res.json()) as any;
+              const klines = json?.data?.klines;
+              if (Array.isArray(klines) && klines.length > 0) {
+                const last = klines[klines.length - 1].split(',');
+                const price = parseFloat(last[2]) || 0;
+                const open = parseFloat(last[1]) || price;
+                const high = parseFloat(last[3]) || price;
+                const low = parseFloat(last[4]) || price;
+                const prevClose = json?.data?.preKPrice || open;
+                const change = price - prevClose;
+                const changePercent = prevClose ? (change / prevClose) * 100 : 0;
+
+                if (price > 0) {
+                  return {
+                    symbol: cleanSym,
+                    name: item.name || `${cleanSym} Inc.`,
+                    price,
+                    change,
+                    changePercent,
+                    open,
+                    high,
+                    low,
+                    previousClose: prevClose,
+                    volume: parseInt(last[5], 10) || 0,
+                    market: item.exchange || 'NASDAQ',
+                    currency: 'USD',
+                    timestamp: Math.floor(Date.now() / 1000),
+                    source: 'EastmoneyFast',
+                    isDelayed: true,
+                  };
+                }
+              }
+            }
+          } catch {
+            // Ignore & fallback
+          }
+        }
       }
     }
 
@@ -333,7 +380,7 @@ export class StockFallbackProvider implements MarketDataProvider {
 
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3000);
+      const timer = setTimeout(() => controller.abort(), 1000);
       const url = `https://searchapi.eastmoney.com/api/suggest/get?type=14&token=D4357F9D2955B90757E0A343A8FA71E9&input=${encodeURIComponent(cleanQ)}`;
       const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
       if (res.ok) {
@@ -354,16 +401,6 @@ export class StockFallbackProvider implements MarketDataProvider {
       logger.warn(`[EastmoneySearch] Search failed for ${cleanQ}: ${err}`);
     }
 
-    const quote = await this.getQuote(cleanQ.toUpperCase());
-    if (quote) {
-      return [{
-        symbol: quote.symbol,
-        name: quote.name,
-        exchange: quote.market,
-        type: 'stock',
-        currency: quote.currency,
-      }];
-    }
     return [];
   }
 }
