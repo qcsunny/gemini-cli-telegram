@@ -17,7 +17,7 @@ import { logger } from '../../utils/logger.js';
 
 const FMP_BASE = 'https://financialmodelingprep.com/stable/income-statement';
 const FETCH_TIMEOUT_MS = 3000;
-const MAX_PERIODS = 8;
+const MAX_PERIODS = 5;
 
 /**
  * Fetches the most recent quarterly income statements for a symbol via FMP.
