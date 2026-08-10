@@ -58,6 +58,37 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
     (rec.targetPriceMean ? `\n• 机构目标均价：$${rec.targetPriceMean} (最高:$${rec.targetPriceHigh} / 最低:$${rec.targetPriceLow})\n\n` : '\n\n')
   ] : [];
 
+  const mkCell = (label: string, value: string): Array<Record<string, any>> => [
+    { text: { type: 'bold', text: [label] }, align: 'left', valign: 'middle' },
+    { text: value, align: 'center', valign: 'middle' },
+  ];
+
+  const perfCells: Array<Array<Record<string, any>>> = [];
+  if (perf) {
+    perfCells.push(mkCell('近1个月', fmtPerf(perf.change1M)));
+    perfCells.push(mkCell('近3个月', fmtPerf(perf.change3M)));
+    perfCells.push(mkCell('近6个月', fmtPerf(perf.change6M)));
+    perfCells.push(mkCell('近1年', fmtPerf(perf.change1Y)));
+    perfCells.push(mkCell('今年以来 (YTD)', fmtPerf(perf.changeYTD)));
+  }
+
+  const quoteCells: Array<Array<Record<string, any>>> = [];
+  const addRow = (label: string, value?: string) => {
+    if (value !== undefined && value !== '--') quoteCells.push(mkCell(label, value));
+  };
+  addRow('今开', quote.open !== undefined ? fmtPrice(quote.open) : undefined);
+  addRow('昨收', quote.previousClose !== undefined ? fmtPrice(quote.previousClose) : undefined);
+  addRow('最高', quote.high !== undefined ? fmtPrice(quote.high) : undefined);
+  addRow('最低', quote.low !== undefined ? fmtPrice(quote.low) : undefined);
+  addRow('成交量', quote.volume !== undefined ? fmtVol(quote.volume) : undefined);
+  addRow('日振幅', (quote.high !== undefined && quote.low !== undefined && quote.previousClose) ? `${((quote.high - quote.low) / quote.previousClose * 100).toFixed(2)}%` : undefined);
+  addRow('总市值', quote.marketCap ? `$${fmtCap(quote.marketCap)}` : undefined);
+  addRow('市盈率 (PE)', quote.pe !== undefined ? quote.pe.toFixed(2) : undefined);
+  addRow('市净率 (PB)', quote.pb !== undefined ? quote.pb.toFixed(2) : undefined);
+  addRow('换手率', quote.turnoverRate !== undefined ? `${quote.turnoverRate.toFixed(2)}%` : undefined);
+  addRow('52周最高', quote.high52 && quote.low52 ? fmtPrice(quote.high52) : undefined);
+  addRow('52周最低', quote.high52 && quote.low52 ? fmtPrice(quote.low52) : undefined);
+
   return [
     {
       type: 'paragraph',
@@ -71,23 +102,19 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
         { type: 'bold', text: ['当日涨跌：'] },
         `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n`,
         ...recSection,
-        { type: 'bold', text: ['📊 阶段涨跌表现：'] },
-        `\n• 近1个月：${fmtPerf(perf?.change1M)}  |  近3个月：${fmtPerf(perf?.change3M)}` +
-        `\n• 近6个月：${fmtPerf(perf?.change6M)}  |  近1年：${fmtPerf(perf?.change1Y)}` +
-        `\n• 今年以来 (YTD)：${fmtPerf(perf?.changeYTD)}\n\n`,
-        { type: 'bold', text: ['📋 当日行情：'] },
-        `\n• 今开：${quote.open !== undefined ? fmtPrice(quote.open) : '--'}` +
-        `  |  昨收：${quote.previousClose !== undefined ? fmtPrice(quote.previousClose) : '--'}` +
-        `\n• 最高：${quote.high !== undefined ? fmtPrice(quote.high) : '--'}` +
-        `  |  最低：${quote.low !== undefined ? fmtPrice(quote.low) : '--'}` +
-        `\n• 成交量：${quote.volume !== undefined ? fmtVol(quote.volume) : '--'}` +
-        (quote.high52 && quote.low52 ? `\n• 52周最高：${fmtPrice(quote.high52)}  |  52周最低：${fmtPrice(quote.low52)}` : '') +
-        ((quote.high !== undefined && quote.low !== undefined && quote.previousClose) ? `\n• 日振幅：${((quote.high - quote.low) / quote.previousClose * 100).toFixed(2)}%` : '') +
-        (quote.marketCap ? `\n• 总市值：$${fmtCap(quote.marketCap)}` : '') +
-        (quote.pe !== undefined ? `\n• 市盈率 (PE)：${quote.pe.toFixed(2)}` : '') +
-        (quote.pb !== undefined ? `\n• 市净率 (PB)：${quote.pb.toFixed(2)}` : '') +
-        (quote.turnoverRate !== undefined ? `\n• 换手率：${quote.turnoverRate.toFixed(2)}%` : '') +
-        `\n\n`,
+      ]
+    },
+    ...(perfCells.length ? [
+      { type: 'paragraph', text: [{ type: 'bold', text: ['📊 阶段涨跌表现：'] }] },
+      { type: 'table', cells: perfCells, is_bordered: true, is_striped: true },
+    ] : []),
+    ...(quoteCells.length ? [
+      { type: 'paragraph', text: [{ type: 'bold', text: ['📋 当日行情：'] }] },
+      { type: 'table', cells: quoteCells, is_bordered: true, is_striped: true },
+    ] : []),
+    {
+      type: 'paragraph',
+      text: [
         { type: 'bold', text: ['市场：'] },
         `${quote.market}\n`,
         { type: 'bold', text: ['数据时间：'] },
@@ -148,14 +175,15 @@ export function registerStockHandler(
       const blocksPayload = buildStockBlocks(quote);
 
       const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
-      const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
+      const detailUrl = `https://www.tradingview.com/symbols/${tvSymbol.replace(':', '-')}/`;
+      const chartUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
       await ctx.api.sendRichMessage(ctx.chat.id, { blocks: blocksPayload as any }, {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '📊 查看详情', web_app: { url: webAppUrl } },
-              { text: '📈 K线图', web_app: { url: webAppUrl } }
+              { text: '📊 查看详情', web_app: { url: detailUrl } },
+              { text: '📈 K线图', web_app: { url: chartUrl } }
             ]
           ]
         }
