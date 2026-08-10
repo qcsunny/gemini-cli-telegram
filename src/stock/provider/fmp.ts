@@ -17,7 +17,7 @@ import { logger } from '../../utils/logger.js';
 
 const FMP_BASE = 'https://financialmodelingprep.com/stable/income-statement';
 const FETCH_TIMEOUT_MS = 3000;
-const MAX_PERIODS = 4;
+const MAX_PERIODS = 8;
 
 /**
  * Fetches the most recent quarterly income statements for a symbol via FMP.
@@ -71,7 +71,23 @@ export async function fetchRecentFinancials(
       });
     }
     if (financials.length === 0) return null;
-    return financials;
+    for (let i = 0; i < financials.length; i++) {
+      const cur = financials[i];
+      const prev = financials[i + 1]; // previous quarter (older)
+      const yearAgo = financials[i + 4]; // same quarter, previous year
+      const pct = (base: number | undefined, cmp: number | undefined): number | null | undefined =>
+        base !== undefined && cmp !== undefined && cmp !== 0 ? ((base - cmp) / cmp) * 100 : null;
+      cur.revenueYoY = pct(cur.revenue, yearAgo?.revenue);
+      cur.revenueQoQ = pct(cur.revenue, prev?.revenue);
+      cur.netIncomeYoY = pct(cur.netIncome, yearAgo?.netIncome);
+      cur.netIncomeQoQ = pct(cur.netIncome, prev?.netIncome);
+      cur.grossMargin =
+        cur.grossProfit !== undefined && cur.revenue !== 0
+          ? (cur.grossProfit / cur.revenue) * 100
+          : null;
+      cur.netMargin = cur.revenue !== 0 ? (cur.netIncome / cur.revenue) * 100 : null;
+    }
+    return financials.slice(0, 4);
   } catch (err) {
     logger.warn(`[FMP] Fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
     return null;

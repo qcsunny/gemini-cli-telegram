@@ -16,6 +16,7 @@ import type { StockQuote, StockFinancial } from '../../../stock/types.js';
 import { marketService } from '../../../stock/service/quote.js';
 import { getStockMarketApiKey } from '../../../config/userConfig.js';
 import { fetchRecentFinancials } from '../../../stock/provider/fmp.js';
+import { fetchAStockFinancials, fetchHKFinancials } from '../../../stock/provider/eastmoney.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -129,8 +130,8 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
 }
 
 /**
- * Builds the "近期财报" section as a list of collapsible details blocks — one
- * per reported quarter — to avoid making the stock card too long.
+ * Builds the "近期财报" section as a single table — one row per reported
+ * quarter — including YoY/QoQ growth columns to keep the card compact.
  */
 export function buildFinancialBlocks(
   financials: StockFinancial[],
@@ -143,34 +144,59 @@ export function buildFinancialBlocks(
     if (val >= 1e6) return `${cur}${(val / 1e6).toFixed(2)}M`;
     return `${cur}${val.toFixed(0)}`;
   };
-  const mkCell = (label: string, value: string): Array<Record<string, any>> => [
-    { text: { type: 'bold', text: [label] }, align: 'left', valign: 'middle' },
-    { text: value, align: 'center', valign: 'middle' },
-  ];
+  const fmtPct = (val?: number | null) =>
+    val === undefined || val === null || isNaN(val) ? '--' : `${val > 0 ? '+' : ''}${val.toFixed(2)}%`;
 
-  const detailsBlocks: Array<Record<string, any>> = [];
+  const header = (label: string): Record<string, any> => ({
+    text: { type: 'bold', text: [label] },
+    is_header: true,
+    align: 'center',
+    valign: 'middle',
+  });
+  const cell = (value: string): Record<string, any> => ({
+    text: value,
+    align: 'center',
+    valign: 'middle',
+  });
+
+  const rows: Array<Array<Record<string, any>>> = [
+    [
+      header('报告期'),
+      header('营收'),
+      header('营收同比'),
+      header('营收环比'),
+      header('净利润'),
+      header('净利同比'),
+      header('净利环比'),
+      header('毛利率'),
+      header('EPS'),
+    ],
+  ];
   for (const f of financials) {
-    const margin = f.revenue ? ((f.netIncome / f.revenue) * 100).toFixed(2) : undefined;
-    const cells: Array<Array<Record<string, any>>> = [];
-    cells.push(mkCell('报告期', `${f.period}（${f.date}）`));
-    cells.push(mkCell('营收', fmtAmount(f.revenue)));
-    cells.push(mkCell('毛利', fmtAmount(f.grossProfit)));
-    cells.push(mkCell('营业利润', fmtAmount(f.operatingIncome)));
-    cells.push(mkCell('净利润', fmtAmount(f.netIncome)));
-    cells.push(mkCell('净利率', margin ? `${margin}%` : '--'));
-    cells.push(mkCell('每股收益 (EPS)', f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--'));
-    detailsBlocks.push({
-      type: 'details',
-      summary: `📊 ${f.period} · 营收 ${fmtAmount(f.revenue)} · 净利 ${fmtAmount(f.netIncome)}`,
-      blocks: [
-        { type: 'table', cells, is_bordered: true, is_striped: true },
-      ],
-    });
+    rows.push([
+      cell(`${f.period}（${f.date}）`),
+      cell(fmtAmount(f.revenue)),
+      cell(fmtPct(f.revenueYoY)),
+      cell(fmtPct(f.revenueQoQ)),
+      cell(fmtAmount(f.netIncome)),
+      cell(fmtPct(f.netIncomeYoY)),
+      cell(fmtPct(f.netIncomeQoQ)),
+      cell(fmtPct(f.grossMargin)),
+      cell(f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--'),
+    ]);
   }
 
   return [
-    { type: 'paragraph', text: [{ type: 'bold', text: ['📅 近期财报（最近' + String(financials.length) + '个季度）：'] }] },
-    ...detailsBlocks,
+    {
+      type: 'paragraph',
+      text: [{ type: 'bold', text: ['📅 近期财报（最近' + String(financials.length) + '个季度）：'] }],
+    },
+    {
+      type: 'table',
+      cells: rows,
+      is_bordered: true,
+      is_striped: true,
+    },
   ];
 }
 
@@ -197,16 +223,24 @@ export async function ensureQuotePerformance(quote: StockQuote): Promise<StockQu
 }
 
 /**
- * Enriches a quote with recent quarterly financials (FMP) when an API key is
- * configured. No-op when the key is missing or data already present.
+ * Enriches a quote with recent quarterly financials, routing by market:
+ * A-shares/HK stocks use the free Eastmoney datacenter API; US stocks use
+ * FMP when an API key is configured. No-op when data already present.
  */
 export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuote> {
   if (quote.financials) return quote;
-  const apiKey = getStockMarketApiKey();
-  if (!apiKey) return quote;
   try {
-    const financials = await fetchRecentFinancials(quote.symbol, apiKey);
-    if (financials) quote.financials = financials;
+    let financials: StockFinancial[] | null = null;
+    if (quote.market === 'SSE' || quote.market === 'SZSE') {
+      financials = await fetchAStockFinancials(quote.symbol);
+    } else if (quote.market === 'HKEX') {
+      financials = await fetchHKFinancials(quote.symbol);
+    } else {
+      const apiKey = getStockMarketApiKey();
+      if (!apiKey) return quote;
+      financials = await fetchRecentFinancials(quote.symbol, apiKey);
+    }
+    if (financials && financials.length) quote.financials = financials;
   } catch (err) {
     logger.warn(`[ensureQuoteFinancials] failed for ${quote.symbol}: ${err}`);
   }

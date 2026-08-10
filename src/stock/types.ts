@@ -76,6 +76,18 @@ export interface StockFinancial {
   netIncome: number;
   /** Diluted earnings per share. */
   epsDiluted?: number;
+  /** Revenue YoY growth in percent (null when unavailable). */
+  revenueYoY?: number | null;
+  /** Revenue QoQ growth in percent (null when unavailable). */
+  revenueQoQ?: number | null;
+  /** Net income YoY growth in percent (null when unavailable). */
+  netIncomeYoY?: number | null;
+  /** Net income QoQ growth in percent (null when unavailable). */
+  netIncomeQoQ?: number | null;
+  /** Gross margin in percent (null when unavailable). */
+  grossMargin?: number | null;
+  /** Net margin in percent (null when unavailable). */
+  netMargin?: number | null;
   /** Reported currency code (e.g. 'USD'). */
   currency?: string;
 }
