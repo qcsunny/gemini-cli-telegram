@@ -1102,7 +1102,6 @@ export function registerInlineHandler(
     const targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path || defaultOptions.cwd;
 
     // Phase 4 Inline Mode: Stock / Crypto Ticker — ONLY triggered when starting with $ (e.g. $NVDA, $英伟达, $600519, $BTC)
-    let stockResultCard: any = null;
     const tickerMatch = rawQuery.trim().match(/^\$([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
     if (tickerMatch) {
       const queryStr = tickerMatch[1];
@@ -1123,7 +1122,7 @@ export function registerInlineHandler(
         const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
         const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
-        stockResultCard = {
+        const stockResultCard = {
           type: 'article' as const,
           id: `stock-${quote.symbol}`,
           title: `${icon} ${quote.name} ($${quote.symbol})`,
@@ -1142,6 +1141,9 @@ export function registerInlineHandler(
             ],
           },
         };
+
+        await ctx.answerInlineQuery([stockResultCard], { cache_time: 10, is_personal: true }).catch(() => {});
+        return;
       }
     }
 
@@ -1371,7 +1373,6 @@ export function registerInlineHandler(
       }
 
       const results = [
-        ...(stockResultCard ? [stockResultCard] : []),
         {
           type: 'article' as const,
           id: resultId,
