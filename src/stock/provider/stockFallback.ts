@@ -122,7 +122,7 @@ export class StockFallbackProvider implements MarketDataProvider {
     // 2. Default to US stock lookup (api.nasdaq.com)
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4000);
+      const timer = setTimeout(() => controller.abort(), 1200);
       const url = `https://api.nasdaq.com/api/quote/${cleanSym}/info?assetclass=stocks`;
       const res = await undiciFetch(url, {
         headers: {
@@ -170,6 +170,55 @@ export class StockFallbackProvider implements MarketDataProvider {
       logger.warn(`[NasdaqProvider] Direct fetch failed for ${cleanSym}: ${err}`);
     }
 
+    // 3. Fallback: try fetching quote via Eastmoney search for US equities if Nasdaq endpoint timed out
+    try {
+      const searchRes = await this.searchSymbols(cleanSym);
+      if (searchRes && searchRes.length > 0) {
+        const item = searchRes[0] as any;
+        const secid = item.secid || `105.${cleanSym}`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2000);
+        const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=2`;
+        const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+        if (res.ok) {
+          const json = (await res.json()) as any;
+          const klines = json?.data?.klines;
+          if (Array.isArray(klines) && klines.length > 0) {
+            const last = klines[klines.length - 1].split(',');
+            const price = parseFloat(last[2]) || 0;
+            const open = parseFloat(last[1]) || price;
+            const high = parseFloat(last[3]) || price;
+            const low = parseFloat(last[4]) || price;
+            const prevClose = json?.data?.preKPrice || open;
+            const change = price - prevClose;
+            const changePercent = prevClose ? (change / prevClose) * 100 : 0;
+
+            if (price > 0) {
+              return {
+                symbol: cleanSym,
+                name: item.name || `${cleanSym} Inc.`,
+                price,
+                change,
+                changePercent,
+                open,
+                high,
+                low,
+                previousClose: prevClose,
+                volume: parseInt(last[5], 10) || 0,
+                market: item.exchange || 'NASDAQ',
+                currency: 'USD',
+                timestamp: Math.floor(Date.now() / 1000),
+                source: 'EastmoneyBackup',
+                isDelayed: true,
+              };
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
     return null;
   }
 
@@ -206,7 +255,7 @@ export class StockFallbackProvider implements MarketDataProvider {
       }
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
+      const timer = setTimeout(() => controller.abort(), 1500);
       const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=365`;
       const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
 

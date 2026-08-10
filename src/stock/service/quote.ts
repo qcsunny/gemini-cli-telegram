@@ -40,19 +40,18 @@ export class MarketService {
       try {
         const quote = await provider.getQuote(cleanSym);
         if (quote) {
-          // Asynchronously attempt to enrich quote with performance metrics (1M, 3M, 6M, 1Y, YTD)
-          try {
-            const candles = await this.getCandles(cleanSym, '1d', '1y');
+          // Enrich quote with institutional analyst consensus rating & probability metrics
+          const { generateAnalystRating } = await import('../utils/analystRating.js');
+          quote.recommendations = generateAnalystRating(cleanSym, quote.price, quote.performance?.changeYTD);
+
+          // Asynchronously attempt to enrich quote with performance metrics in background without blocking inline response
+          this.getCandles(cleanSym, '1d', '1y').then(async (candles) => {
             if (candles && candles.data) {
               const { calculatePerformance } = await import('../utils/performance.js');
               quote.performance = calculatePerformance(quote.price, candles.data);
+              marketCache.set(cacheKey, quote, QUOTE_TTL_MS);
             }
-            // Enrich quote with institutional analyst consensus rating & probability metrics
-            const { generateAnalystRating } = await import('../utils/analystRating.js');
-            quote.recommendations = generateAnalystRating(cleanSym, quote.price, quote.performance?.changeYTD);
-          } catch {
-            // Ignore performance calculation errors gracefully
-          }
+          }).catch(() => {});
 
           marketCache.set(cacheKey, quote, QUOTE_TTL_MS);
           return quote;
