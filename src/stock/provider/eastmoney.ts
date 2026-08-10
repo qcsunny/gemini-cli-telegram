@@ -158,7 +158,50 @@ export async function fetchHKFinancials(symbol: string): Promise<StockFinancial[
   });
   const rows = await fetchRows(params);
   if (!rows.length) return null;
-  return toHKFinancials(rows).map((f) => ({ ...f, currency: 'HKD' }));
+  const financials = toHKFinancials(rows).map((f) => ({ ...f, currency: 'HKD' }));
+
+  // Long-form income statement detail (科目明细) via RPT_HKF10_FN_INCOME.
+  const detailParams = new URLSearchParams({
+    sortColumns: 'STD_REPORT_DATE',
+    sortTypes: '-1',
+    pageSize: '500',
+    pageNumber: '1',
+    reportName: 'RPT_HKF10_FN_INCOME',
+    columns: 'ALL',
+    source: 'WEB',
+    client: 'WEB',
+    filter: `(SECURITY_CODE="${symbol}")`,
+  });
+  const detailRows = await fetchRows(detailParams);
+  if (detailRows.length) {
+    const byDate = new Map<string, Map<string, number>>();
+    for (const r of detailRows) {
+      const d = cleanDate(String(r['STD_REPORT_DATE'] ?? r['REPORT_DATE'] ?? ''));
+      const code = String(r['STD_ITEM_CODE'] ?? '');
+      const amt = num(r, 'AMOUNT');
+      if (!d || !code || amt === null) continue;
+      if (!byDate.has(d)) byDate.set(d, new Map());
+      byDate.get(d)!.set(code, amt);
+    }
+    for (const f of financials) {
+      const items = byDate.get(f.date);
+      if (!items) continue;
+      const cost = items.get('004005001');
+      if (cost !== undefined) f.costOfRevenue = cost;
+      const opEx = (items.get('004010003') ?? 0) + (items.get('004010004') ?? 0);
+      if (opEx > 0) f.operatingExpenses = opEx;
+      const opProfit = items.get('004010999');
+      if (opProfit !== undefined) f.operatingIncome = opProfit;
+      f.incomeBeforeTax = items.get('004011999') ?? f.incomeBeforeTax;
+      f.incomeTaxExpense = items.get('004012001') ?? f.incomeTaxExpense;
+      const netInc = items.get('004025002');
+      if (netInc !== undefined) f.netIncome = netInc;
+      if (f.grossProfit === undefined && f.costOfRevenue !== undefined && f.revenue !== undefined) {
+        f.grossProfit = f.revenue - f.costOfRevenue;
+      }
+    }
+  }
+  return financials;
 }
 
 const F10_BASE = 'https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax';
