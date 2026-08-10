@@ -17,25 +17,51 @@ function cleanDate(d: string): string {
   return d ? d.slice(0, 10) : '';
 }
 
-function toFinancials(rows: RawFinancialRow[]): StockFinancial[] {
+/** A-share 业绩报表 (RPT_LICO_FN_CPD) → StockFinancial. Field names are A-share specific. */
+function toAStockFinancials(rows: RawFinancialRow[]): StockFinancial[] {
   return rows.map((row) => ({
-    date: cleanDate(String(row['REPORTDATE'] ?? row['REPORT_DATE'] ?? '')),
+    date: cleanDate(String(row['REPORTDATE'] ?? '')),
     filingDate: undefined,
-    period: String(row['QDATE'] ?? row['REPORT_TYPE'] ?? ''),
-    revenue: num(row, 'TOTAL_OPERATE_INCOME') ?? num(row, 'OPERATE_INCOME') ?? 0,
-    grossProfit: num(row, 'GROSS_PROFIT') ?? undefined,
-    operatingIncome: num(row, 'OPERATING_INCOME') ?? undefined,
-    netIncome: num(row, 'PARENT_NETPROFIT') ?? num(row, 'HOLDER_PROFIT') ?? 0,
+    period: String(row['QDATE'] ?? ''),
+    revenue: num(row, 'TOTAL_OPERATE_INCOME') ?? 0,
+    grossProfit: undefined,
+    operatingIncome: undefined,
+    netIncome: num(row, 'PARENT_NETPROFIT') ?? 0,
     epsDiluted: num(row, 'BASIC_EPS') ?? undefined,
-    revenueYoY: num(row, 'YSTZ') ?? num(row, 'OPERATE_INCOME_YOY') ?? undefined,
-    revenueQoQ: num(row, 'YSHZ') ?? num(row, 'OPERATE_INCOME_QOQ') ?? undefined,
-    netIncomeYoY: num(row, 'SJLTZ') ?? num(row, 'HOLDER_PROFIT_YOY') ?? undefined,
-    netIncomeQoQ: num(row, 'SJLHZ') ?? num(row, 'HOLDER_PROFIT_QOQ') ?? undefined,
-    grossMargin: num(row, 'XSMLL') ?? num(row, 'GROSS_PROFIT_RATIO') ?? undefined,
-    netMargin: num(row, 'XSJLL') ?? num(row, 'NET_PROFIT_RATIO') ?? (num(row, 'PARENT_NETPROFIT') && num(row, 'TOTAL_OPERATE_INCOME') ? (num(row, 'PARENT_NETPROFIT')! / num(row, 'TOTAL_OPERATE_INCOME')!) * 100 : undefined),
+    revenueYoY: num(row, 'YSTZ') ?? undefined,
+    revenueQoQ: num(row, 'YSHZ') ?? undefined,
+    netIncomeYoY: num(row, 'SJLTZ') ?? undefined,
+    netIncomeQoQ: num(row, 'SJLHZ') ?? undefined,
+    grossMargin: num(row, 'XSMLL') ?? undefined,
+    netMargin: num(row, 'XSJLL') ?? (num(row, 'PARENT_NETPROFIT') && num(row, 'TOTAL_OPERATE_INCOME') ? (num(row, 'PARENT_NETPROFIT')! / num(row, 'TOTAL_OPERATE_INCOME')!) * 100 : undefined),
     roe: num(row, 'WEIGHTAVG_ROE') ?? num(row, 'ROE_WEIGHT') ?? num(row, 'ROE') ?? undefined,
     bps: num(row, 'BPS') ?? undefined,
     eps: num(row, 'BASIC_EPS') ?? undefined,
+    currency: undefined,
+  }));
+}
+
+/** HK-stock 主要指标 (RPT_HKF10_FN_MAININDICATOR) → StockFinancial. Field names are HK specific. */
+function toHKFinancials(rows: RawFinancialRow[]): StockFinancial[] {
+  return rows.map((row) => ({
+    date: cleanDate(String(row['STD_REPORT_DATE'] ?? row['REPORT_DATE'] ?? '')),
+    filingDate: undefined,
+    period: String(row['REPORT_TYPE'] ?? ''),
+    revenue: num(row, 'OPERATE_INCOME') ?? 0,
+    grossProfit: num(row, 'GROSS_PROFIT') ?? undefined,
+    operatingIncome: num(row, 'OPERATE_PROFIT') ?? undefined,
+    netIncome: num(row, 'HOLDER_PROFIT') ?? 0,
+    epsDiluted: num(row, 'DILUTED_EPS') ?? undefined,
+    revenueYoY: num(row, 'OPERATE_INCOME_YOY') ?? undefined,
+    revenueQoQ: num(row, 'OPERATE_INCOME_QOQ') ?? undefined,
+    netIncomeYoY: num(row, 'HOLDER_PROFIT_YOY') ?? undefined,
+    netIncomeQoQ: num(row, 'HOLDER_PROFIT_QOQ') ?? undefined,
+    grossMargin: num(row, 'GROSS_PROFIT_RATIO') ?? undefined,
+    netMargin: num(row, 'NET_PROFIT_RATIO') ?? (num(row, 'HOLDER_PROFIT') && num(row, 'OPERATE_INCOME') ? (num(row, 'HOLDER_PROFIT')! / num(row, 'OPERATE_INCOME')!) * 100 : undefined),
+    roe: num(row, 'ROE_AVG') ?? num(row, 'ROE_YEARLY') ?? undefined,
+    bps: num(row, 'BPS') ?? undefined,
+    eps: num(row, 'BASIC_EPS') ?? undefined,
+    incomeBeforeTax: num(row, 'PRETAX_PROFIT') ?? undefined,
     currency: undefined,
   }));
 }
@@ -62,6 +88,11 @@ async function fetchRows(params: URLSearchParams): Promise<RawFinancialRow[]> {
   }
 }
 
+/** Exchange suffix for A-share SECUCODE queries: SH for 6xxxxx, SZ otherwise. */
+function aShareExchange(symbol: string): string {
+  return /^6/.test(symbol) ? 'SH' : 'SZ';
+}
+
 /** A-share quarterly performance (业绩报表) via Eastmoney datacenter. symbol: 6-digit code e.g. '600519'. */
 export async function fetchAStockFinancials(symbol: string): Promise<StockFinancial[] | null> {
   const params = new URLSearchParams({
@@ -77,7 +108,7 @@ export async function fetchAStockFinancials(symbol: string): Promise<StockFinanc
   });
   const rows = await fetchRows(params);
   if (!rows.length) return null;
-  const financials = toFinancials(rows);
+  const financials = toAStockFinancials(rows);
   const detailRows = await fetchRows(
     new URLSearchParams({
       sortColumns: 'REPORT_DATE',
@@ -88,7 +119,7 @@ export async function fetchAStockFinancials(symbol: string): Promise<StockFinanc
       columns: 'ALL',
       source: 'WEB',
       client: 'WEB',
-      filter: `(SECUCODE="${symbol}.SH")`,
+      filter: `(SECUCODE="${symbol}.${aShareExchange(symbol)}")`,
     }),
   );
   if (detailRows.length) {
@@ -127,7 +158,7 @@ export async function fetchHKFinancials(symbol: string): Promise<StockFinancial[
   });
   const rows = await fetchRows(params);
   if (!rows.length) return null;
-  return toFinancials(rows).map((f) => ({ ...f, currency: 'HKD' }));
+  return toHKFinancials(rows).map((f) => ({ ...f, currency: 'HKD' }));
 }
 
 const F10_BASE = 'https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax';
@@ -143,7 +174,7 @@ export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceS
     columns: 'ALL',
     source: 'WEB',
     client: 'WEB',
-    filter: `(SECUCODE="${symbol}.SH")`,
+    filter: `(SECUCODE="${symbol}.${aShareExchange(symbol)}")`,
   });
   const rows = await fetchRows(params);
   if (!rows.length) return null;
@@ -184,7 +215,7 @@ export async function fetchACashFlows(symbol: string): Promise<StockCashFlow[] |
     columns: 'ALL',
     source: 'WEB',
     client: 'WEB',
-    filter: `(SECUCODE="${symbol}.SH")`,
+    filter: `(SECUCODE="${symbol}.${aShareExchange(symbol)}")`,
   });
   const rows = await fetchRows(params);
   if (!rows.length) return null;
@@ -319,4 +350,59 @@ export async function fetchHKCashFlows(symbol: string): Promise<StockCashFlow[] 
       };
     })
     .filter((c): c is StockCashFlow => c !== null);
+}
+
+/** A-share annual dividend yield via Eastmoney RPT_SHAREBONUS_DET.
+ *  Computes (per-share cash dividend) / (current price) * 100. Falls back to the
+ *  latest ex-dividend record when the newest plan has no per-10-shares amount.
+ *  symbol: 6-digit A-share code e.g. '600519'. Returns null on failure. */
+export async function fetchADividendYield(symbol: string, price: number): Promise<number | null> {
+  try {
+    const params = new URLSearchParams({
+      sortColumns: 'EX_DIVIDEND_DATE',
+      sortTypes: '-1',
+      pageSize: '5',
+      pageNumber: '1',
+      reportName: 'RPT_SHAREBONUS_DET',
+      columns: 'ALL',
+      source: 'WEB',
+      client: 'WEB',
+      filter: `(SECURITY_CODE="${symbol}")`,
+    });
+    const rows = await fetchRows(params);
+    if (!rows.length || !price) return null;
+    const per10 = num(rows[0], 'PRETAX_BONUS_RMB');
+    if (per10 !== null && per10 > 0) return (per10 / 10 / price) * 100;
+    for (const row of rows) {
+      const v = num(row, 'PRETAX_BONUS_RMB');
+      if (v !== null && v > 0) return (v / 10 / price) * 100;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** HK-stock dividend yield (percent) via RPT_HKF10_FN_MAININDICATOR DIVIDEND_RATE.
+ *  symbol: 5-digit code e.g. '00700'. Returns null on failure. */
+export async function fetchHKDividendYield(symbol: string): Promise<number | null> {
+  try {
+    const params = new URLSearchParams({
+      sortColumns: 'STD_REPORT_DATE',
+      sortTypes: '-1',
+      pageSize: '1',
+      pageNumber: '1',
+      reportName: 'RPT_HKF10_FN_MAININDICATOR',
+      columns: 'ALL',
+      source: 'WEB',
+      client: 'WEB',
+      filter: `(SECURITY_CODE="${symbol}")`,
+    });
+    const rows = await fetchRows(params);
+    if (!rows.length) return null;
+    const v = num(rows[0], 'DIVIDEND_RATE');
+    return v;
+  } catch {
+    return null;
+  }
 }

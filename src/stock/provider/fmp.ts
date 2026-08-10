@@ -257,3 +257,28 @@ export async function fetchRecentCashFlows(
     clearTimeout(timer);
   }
 }
+
+/** Fetches the latest annual dividend yield (percent) for a US symbol via FMP
+ *  /stable/dividends. Returns null when unavailable. */
+export async function fetchUSDividendYield(symbol: string, apiKey: string): Promise<number | null> {
+  if (!apiKey) return null;
+  const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
+  if (!cleanSym) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const url = `https://financialmodelingprep.com/stable/dividends?symbol=${encodeURIComponent(cleanSym)}&apikey=${encodeURIComponent(apiKey)}`;
+    const res = await undiciFetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+    const json = (await res.json()) as any[];
+    if (!Array.isArray(json) || json.length === 0) return null;
+    const latest = json[0] as any;
+    const y = typeof latest['yield'] === 'number' ? latest['yield'] : parseFloat(String(latest['yield'] ?? ''));
+    return Number.isFinite(y) ? y : null;
+  } catch (err) {
+    logger.warn(`[FMP] Dividend yield fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

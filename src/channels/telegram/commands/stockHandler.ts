@@ -25,6 +25,7 @@ import {
   fetchCompanyProfile,
   fetchRecentBalanceSheets,
   fetchRecentCashFlows,
+  fetchUSDividendYield,
 } from '../../../stock/provider/fmp.js';
 import {
   fetchAStockFinancials,
@@ -34,6 +35,8 @@ import {
   fetchACashFlows,
   fetchHKBalanceSheets,
   fetchHKCashFlows,
+  fetchADividendYield,
+  fetchHKDividendYield,
 } from '../../../stock/provider/eastmoney.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
@@ -412,6 +415,9 @@ export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuo
       if ((f.netMargin === undefined || f.netMargin === null) && f.netIncome && f.revenue) {
         f.netMargin = (f.netIncome / f.revenue) * 100;
       }
+      if ((f.operatingMargin === undefined || f.operatingMargin === null) && f.operatingIncome && f.revenue) {
+        f.operatingMargin = (f.operatingIncome / f.revenue) * 100;
+      }
     }
   } catch (err) {
     logger.warn(`[ensureQuoteFinancials] failed for ${quote.symbol}: ${err}`);
@@ -490,4 +496,29 @@ export function registerStockHandler(
       await ctx.reply(`${ICONS.error} <b>Error fetching market quote for ${symbol}</b>`);
     }
   });
+}
+
+/**
+ * Enriches a quote with the latest annual dividend yield (percentage), routed by
+ * market: A-shares via Eastmoney RPT_SHAREBONUS_DET, HK via RPT_HKF10_FN_MAININDICATOR,
+ * US via FMP /stable/dividends. No-op when already present.
+ */
+export async function ensureQuoteDividendYield(quote: StockQuote): Promise<StockQuote> {
+  if (quote.dividendYield !== undefined && quote.dividendYield !== null) return quote;
+  try {
+    let yieldPct: number | null = null;
+    if (quote.market === 'SSE' || quote.market === 'SZSE') {
+      yieldPct = await fetchADividendYield(quote.symbol, quote.price);
+    } else if (quote.market === 'HKEX') {
+      yieldPct = await fetchHKDividendYield(quote.symbol);
+    } else {
+      const apiKey = getStockMarketApiKey();
+      if (!apiKey) return quote;
+      yieldPct = await fetchUSDividendYield(quote.symbol, apiKey);
+    }
+    if (yieldPct !== null && yieldPct > 0) quote.dividendYield = yieldPct;
+  } catch (err) {
+    logger.warn(`[ensureQuoteDividendYield] failed for ${quote.symbol}: ${err}`);
+  }
+  return quote;
 }

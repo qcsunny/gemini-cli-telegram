@@ -117,6 +117,7 @@ export class StockFallbackProvider implements MarketDataProvider {
               const changePercent = prevClose ? (change / prevClose) * 100 : 0;
               const volume = parseInt(parts[8], 10) || 0;
 
+              const snap = await this.fetchSnapshot(cleanSym, 'A');
               return {
                 symbol: cleanSym,
                 name,
@@ -133,6 +134,10 @@ export class StockFallbackProvider implements MarketDataProvider {
                 timestamp: Math.floor(Date.now() / 1000),
                 source: 'SinaFinance',
                 isDelayed: false,
+                marketCap: snap?.marketCap,
+                pe: snap?.pe,
+                pb: snap?.pb,
+                turnoverRate: snap?.turnoverRate,
               };
             } else if (isHK && parts.length >= 18) {
               const name = parts[1] || parts[0];
@@ -144,6 +149,7 @@ export class StockFallbackProvider implements MarketDataProvider {
               const change = parseFloat(parts[7]) || (price - prevClose);
               const changePercent = parseFloat(parts[8]) || (prevClose ? (change / prevClose) * 100 : 0);
 
+              const snap = await this.fetchSnapshot(cleanSym, 'H');
               return {
                 symbol: cleanSym,
                 name,
@@ -160,6 +166,10 @@ export class StockFallbackProvider implements MarketDataProvider {
                 timestamp: Math.floor(Date.now() / 1000),
                 source: 'SinaFinance',
                 isDelayed: false,
+                marketCap: snap?.marketCap,
+                pe: snap?.pe,
+                pb: snap?.pb,
+                turnoverRate: snap?.turnoverRate,
               };
             }
           }
@@ -307,6 +317,37 @@ export class StockFallbackProvider implements MarketDataProvider {
       if (q) quotes.push(q);
     }
     return quotes;
+  }
+
+  private async fetchSnapshot(
+    symbol: string,
+    type: 'A' | 'H',
+  ): Promise<{ marketCap?: number; pe?: number; pb?: number; turnoverRate?: number } | null> {
+    try {
+      let secid: string;
+      if (type === 'H') {
+        secid = `116.${symbol}`;
+      } else {
+        const s = symbol.toLowerCase();
+        secid = s.startsWith('6') || s.startsWith('9') ? `1.${symbol}` : `0.${symbol}`;
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 800);
+      const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f43,f57,f116,f163,f167,f168`;
+      const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      if (!res.ok) return null;
+      const json = (await res.json()) as any;
+      const d = json?.data;
+      if (!d) return null;
+      return {
+        marketCap: typeof d.f116 === 'number' ? d.f116 : undefined,
+        pe: typeof d.f163 === 'number' ? d.f163 / 100 : undefined,
+        pb: typeof d.f167 === 'number' ? d.f167 / 100 : undefined,
+        turnoverRate: typeof d.f168 === 'number' ? d.f168 / 100 : undefined,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async getCandles(symbol: string, interval: string, range: string): Promise<StockCandles | null> {

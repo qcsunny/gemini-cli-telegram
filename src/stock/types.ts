@@ -27,6 +27,7 @@ export interface StockQuote {
   pe?: number; // Price-to-earnings ratio (TTM)
   pb?: number; // Price-to-book ratio
   turnoverRate?: number; // Percentage
+  dividendYield?: number; // Annual dividend yield in percentage
   market: string;
   currency: string;
   timestamp: number;

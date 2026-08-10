@@ -35,6 +35,7 @@ import {
   ensureQuotePerformance,
   ensureQuoteFinancials,
   ensureQuoteProfile,
+  ensureQuoteDividendYield,
   buildFinancialBlocks,
 } from './stockHandler.js';
 
@@ -455,11 +456,26 @@ function scoreValuation(quote: StockQuote): InvestDimension {
 function scoreShareholderYield(quote: StockQuote): InvestDimension {
   const notes: string[] = [];
   let points = 0;
-  const dy = quote.turnoverRate !== undefined ? null : null; // dividend yield not available in this quote model
+  const dy = quote.dividendYield;
 
-  if (dy === null) {
+  if (dy === undefined || dy === null || !isNum(dy)) {
     notes.push('股息率数据缺失（当前数据源未提供）');
     points += 40;
+  } else if (dy >= 4) {
+    notes.push(`股息率 ${dy.toFixed(2)}%，高分红、回报突出`);
+    points += 100;
+  } else if (dy >= 2.5) {
+    notes.push(`股息率 ${dy.toFixed(2)}%，分红较稳定，回报良好`);
+    points += 80;
+  } else if (dy >= 1) {
+    notes.push(`股息率 ${dy.toFixed(2)}%，有分红但吸引力一般`);
+    points += 55;
+  } else if (dy > 0) {
+    notes.push(`股息率 ${dy.toFixed(2)}%，分红较低，成长型公司常见`);
+    points += 30;
+  } else {
+    notes.push('当前无现金分红');
+    points += 10;
   }
   return { id: 'shareholderYield', name: '股东回报', score: clamp(points), weight: 0.05, notes };
 }
@@ -623,6 +639,7 @@ export function registerInvestHandler(
       await ensureQuotePerformance(quote);
       await ensureQuoteFinancials(quote);
       await ensureQuoteProfile(quote);
+      await ensureQuoteDividendYield(quote);
 
       const result = analyzeInvest(quote);
       const blocks = buildInvestBlocks(result);
