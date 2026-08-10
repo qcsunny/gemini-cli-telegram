@@ -31,6 +31,8 @@ export interface AgyRunOptions {
   model?: string;
   /** Proxy server override */
   proxy?: string;
+  /** agy --print-timeout override (e.g. "30m"); defaults to agy's 5m */
+  printTimeout?: string;
 }
 
 export interface AgyRunResult {

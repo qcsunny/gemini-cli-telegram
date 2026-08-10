@@ -4,6 +4,13 @@ import type { DaemonSession } from '../types.js';
 import { logger } from '../../utils/logger.js';
 import { getAgyDataDir } from '../../config/userConfig.js';
 
+function mediaTypeFromExt(ext: string): 'photo' | 'video' | 'audio' | 'voice' | 'document' {
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) return 'photo';
+  if (['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext)) return 'video';
+  if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) return 'audio';
+  return 'document';
+}
+
 export async function detectAndSendNewArtifacts(
   session: DaemonSession,
   conversationId: string,
@@ -12,16 +19,22 @@ export async function detectAndSendNewArtifacts(
   if (!session.sendMedia || !conversationId) return;
 
   const baseDir = getAgyDataDir();
-
   const artifactDir = path.join(baseDir, 'brain', conversationId);
+
+  const projectCwd = session.currentProject?.path || undefined;
+  const dirs = projectCwd ? [artifactDir, projectCwd] : [artifactDir];
+
+  const photos: { filePath: string; file: string }[] = [];
+
   try {
-    const files = await fs.readdir(artifactDir).catch(() => [] as string[]);
-    const photos: { filePath: string; file: string }[] = [];
+  for (const dir of dirs) {
+    const isProjectDir = dir === projectCwd;
+    const files = await fs.readdir(dir).catch(() => [] as string[]);
     for (const file of files) {
       if (file.startsWith('.') || file === 'scratch' || file === '.system_generated' || file === '.user_uploaded') {
         continue;
       }
-      const filePath = path.join(artifactDir, file);
+      const filePath = path.join(dir, file);
       const stat = await fs.stat(filePath).catch(() => null);
       if (!stat || !stat.isFile()) continue;
 
@@ -29,13 +42,12 @@ export async function detectAndSendNewArtifacts(
       // We subtract 2000ms (2s) to handle any clock skew or system clock resolution issues
       if (stat.mtimeMs >= turnStartTime - 2000) {
         const ext = path.extname(file).toLowerCase();
-        let mediaType: 'photo' | 'video' | 'audio' | 'voice' | 'document' = 'document';
-        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) {
-          mediaType = 'photo';
-        } else if (['.mp4', '.mov', '.avi', '.mkv'].includes(ext)) {
-          mediaType = 'video';
-        } else if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) {
-          mediaType = 'audio';
+        let mediaType: 'photo' | 'video' | 'audio' | 'voice' | 'document' = mediaTypeFromExt(ext);
+
+        // For project cwd scans, only surface files the model generated this turn
+        // (e.g. *.md analysis reports), not config/build outputs.
+        if (isProjectDir && !(mediaType === 'photo' || mediaType === 'video' || mediaType === 'audio' || file.endsWith('.md'))) {
+          continue;
         }
 
         if (mediaType === 'photo') {
@@ -51,6 +63,7 @@ export async function detectAndSendNewArtifacts(
         }
       }
     }
+  }
 
     if (photos.length > 0) {
       if (photos.length === 1 || !session.sendMediaGroup) {

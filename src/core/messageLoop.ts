@@ -43,6 +43,14 @@ const sleep = (ms: number) => {
  * Streams output to the channel in real-time, manages session mappings,
  * and handles autonomous Autopilot loops entirely on the Node side.
  */
+function agyPrintTimeout(): string {
+  const tuning = getTuningConfig();
+  const hard = tuning.modelRunHardTimeoutMs ?? 900_000;
+  const min = Math.max(hard + 300_000, 1_800_000);
+  const m = Math.ceil(min / 60_000);
+  return `${m}m`;
+}
+
 export async function processMessage(
   session: DaemonSession,
   input: MultimodalInput,
@@ -289,6 +297,7 @@ export async function processMessage(
               conversationId: session.conversationId,
               model: modelToUse,
               proxy: session.proxy,
+              printTimeout: agyPrintTimeout(),
               signal: runSignal,
               extraDirs: mediaExtraDirs,
               onActivity: () => resetInactivity(),
