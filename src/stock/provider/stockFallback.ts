@@ -183,7 +183,66 @@ export class StockFallbackProvider implements MarketDataProvider {
   }
 
   async getCandles(symbol: string, interval: string, range: string): Promise<StockCandles | null> {
-    const cleanSym = symbol.toUpperCase().replace(/^\$/, '');
+    const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
+
+    // 1. Resolve Eastmoney secid (e.g. 105.NVDA for Nasdaq, 106.BABA for NYSE, 1.600519 for Shanghai, 0.000001 for Shenzhen, 116.00700 for HK)
+    try {
+      const searchRes = await this.searchSymbols(cleanSym);
+      let secid = '';
+      if (searchRes && searchRes.length > 0) {
+        const item = searchRes[0] as any;
+        secid = item.secid;
+      }
+      if (!secid) {
+        const isAshare = /^(SH|SZ)?\d{6}$/i.test(cleanSym);
+        const digits = cleanSym.replace(/^(SH|SZ)/i, '');
+        if (isAshare) {
+          secid = (digits.startsWith('6') || digits.startsWith('9') ? '1.' : '0.') + digits;
+        } else if (/^(HK)?\d{5}$/i.test(cleanSym)) {
+          secid = '116.' + cleanSym.replace(/^HK/i, '');
+        } else {
+          secid = '105.' + cleanSym; // Default Nasdaq
+        }
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=365`;
+      const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+
+      if (res.ok) {
+        const json = (await res.json()) as any;
+        const klines = json?.data?.klines;
+        if (Array.isArray(klines) && klines.length > 0) {
+          const data: CandleDataPoint[] = klines.map((line: string) => {
+            const parts = line.split(',');
+            const dateStr = parts[0]; // e.g. "2025-08-07"
+            const open = parseFloat(parts[1]) || 0;
+            const close = parseFloat(parts[2]) || 0;
+            const high = parseFloat(parts[3]) || 0;
+            const low = parseFloat(parts[4]) || 0;
+            const volume = parseInt(parts[5], 10) || 0;
+            const time = Math.floor(new Date(dateStr).getTime() / 1000);
+
+            return { time, open, high, low, close, volume };
+          }).filter(pt => !isNaN(pt.time) && pt.time > 0);
+
+          if (data.length > 0) {
+            return {
+              symbol: cleanSym,
+              interval,
+              range,
+              data,
+              source: 'EastmoneyHis',
+              isDelayed: false,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(`[EastmoneyCandles] Failed for ${cleanSym}: ${err}`);
+    }
+
     const quote = await this.getQuote(cleanSym);
     if (!quote) return null;
 
@@ -191,7 +250,6 @@ export class StockFallbackProvider implements MarketDataProvider {
     const now = Math.floor(Date.now() / 1000);
     const data: CandleDataPoint[] = [];
 
-    // Generate 20 synthetic sample candles based on historical trend for fallback rendering
     for (let i = 20; i >= 0; i--) {
       const time = now - i * 3600;
       const variation = (Math.sin(i) * 0.02 + (20 - i) * 0.001) * basePrice;
@@ -239,6 +297,7 @@ export class StockFallbackProvider implements MarketDataProvider {
             exchange: item.JYS || item.Classify || 'STOCKS',
             type: 'stock',
             currency: 'USD',
+            secid: item.QuoteID || item.ID,
           }));
         }
       }

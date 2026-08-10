@@ -230,9 +230,10 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
   }
 
   // 2. REST API: GET /api/stocks/{symbol} or /api/stocks/{symbol}/quote
-  const stockMatch = url.match(/^\/api\/stocks\/([A-Za-z0-9-]+)(\/quote)?$/);
-  if (stockMatch && method === 'GET') {
-    const symbol = stockMatch[1].toUpperCase();
+  const decodedUrl = decodeURIComponent(url);
+  const stockMatch = decodedUrl.match(/^\/api\/stocks\/([^/]+)(\/quote)?$/);
+  if (stockMatch && method === 'GET' && !url.includes('/candles')) {
+    const symbol = stockMatch[1].trim();
     const quote = await marketService.getQuote(symbol);
     if (!quote) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
