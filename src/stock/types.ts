@@ -56,6 +56,10 @@ export interface StockQuote {
   };
   /** Recent quarterly financial statements (income statement), newest first. Filled when a stock market API key is configured. */
   financials?: StockFinancial[];
+  /** Recent quarterly balance sheets, newest first. Filled alongside financials when available. */
+  balanceSheets?: StockBalanceSheet[];
+  /** Recent quarterly cash-flow statements, newest first. Filled alongside financials when available. */
+  cashFlows?: StockCashFlow[];
   /** Company main-business description (主营业务简介). Optional, shown when available. */
   profile?: string;
 }
@@ -90,7 +94,81 @@ export interface StockFinancial {
   grossMargin?: number | null;
   /** Net margin in percent (null when unavailable). */
   netMargin?: number | null;
+  /** Weighted return on equity in percent (null when unavailable). */
+  roe?: number | null;
+  /** Earnings per share (basic), distinct from diluted eps. */
+  eps?: number | null;
+  /** Cost of revenue in reported currency (营业成本). */
+  costOfRevenue?: number;
+  /** EBITDA in reported currency. */
+  ebitda?: number;
+  /** Total operating expenses in reported currency (营业费用). */
+  operatingExpenses?: number;
+  /** Income before tax in reported currency (税前利润). */
+  incomeBeforeTax?: number;
+  /** Income tax expense in reported currency (所得税). */
+  incomeTaxExpense?: number;
+  /** Net profit excluding non-recurring items (扣非净利润). */
+  deductedNetProfit?: number;
+  /** Operating margin in percent (营业利润率 = operatingIncome / revenue). */
+  operatingMargin?: number | null;
   /** Reported currency code (e.g. 'USD'). */
+  currency?: string;
+}
+
+/**
+ * A single period's balance-sheet (资产负债表) data. Amounts in reported
+ * currency; null/absent fields mean the provider did not report them.
+ */
+export interface StockBalanceSheet {
+  /** Report date (e.g. '2026-03-31'). */
+  date: string;
+  /** Total assets (总资产). */
+  totalAssets: number;
+  /** Total liabilities (总负债). */
+  totalLiabilities: number;
+  /** Net assets (净资产 = totalAssets - totalLiabilities). */
+  netAssets: number;
+  /** Equity attributable to parent shareholders (归母权益). */
+  parentEquity?: number;
+  /** Total current assets (流动资产合计). */
+  currentAssets?: number;
+  /** Total current liabilities (流动负债合计). */
+  currentLiabilities?: number;
+  /** Cash and cash equivalents (货币资金/现金及等价物). */
+  cash?: number;
+  /** Inventory (存货). */
+  inventory?: number;
+  /** Accounts receivable (应收账款). */
+  accountsReceivable?: number;
+  /** Goodwill (商誉). */
+  goodwill?: number;
+  /** Short-term debt (短期借款). */
+  shortTermDebt?: number;
+  /** Long-term debt (长期借款). */
+  longTermDebt?: number;
+  /** Debt-to-asset ratio in percent (资产负债率 = totalLiabilities / totalAssets). */
+  debtRatio?: number | null;
+  /** Reported currency code (e.g. 'CNY'). */
+  currency?: string;
+}
+
+/**
+ * A single period's cash-flow statement (现金流量表) data. Amounts in reported
+ * currency; null/absent fields mean the provider did not report them.
+ */
+export interface StockCashFlow {
+  /** Report date (e.g. '2026-03-31'). */
+  date: string;
+  /** Net cash from operating activities (经营活动现金流量净额). */
+  netCashOperating: number;
+  /** Net cash from investing activities (投资活动现金流量净额). */
+  netCashInvesting: number;
+  /** Net cash from financing activities (筹资活动现金流量净额). */
+  netCashFinancing: number;
+  /** Cash and cash equivalents at period end (期末现金). */
+  endCash: number;
+  /** Reported currency code (e.g. 'CNY'). */
   currency?: string;
 }
 

@@ -12,7 +12,7 @@
  */
 
 import { fetch as undiciFetch } from 'undici';
-import type { StockFinancial } from '../types.js';
+import type { StockFinancial, StockBalanceSheet, StockCashFlow } from '../types.js';
 import { logger } from '../../utils/logger.js';
 
 const FMP_BASE = 'https://financialmodelingprep.com/stable/income-statement';
@@ -67,6 +67,12 @@ export async function fetchRecentFinancials(
         operatingIncome: num(raw['operatingIncome']),
         netIncome,
         epsDiluted: num(raw['epsDiluted']),
+        eps: num(raw['eps']),
+        costOfRevenue: num(raw['costOfRevenue']),
+        ebitda: num(raw['ebitda']),
+        operatingExpenses: num(raw['operatingExpenses']),
+        incomeBeforeTax: num(raw['incomeBeforeTax']),
+        incomeTaxExpense: num(raw['incomeTaxExpense']),
         currency: typeof raw['reportedCurrency'] === 'string' ? raw['reportedCurrency'] : undefined,
       });
     }
@@ -86,6 +92,10 @@ export async function fetchRecentFinancials(
           ? (cur.grossProfit / cur.revenue) * 100
           : null;
       cur.netMargin = cur.revenue !== 0 ? (cur.netIncome / cur.revenue) * 100 : null;
+      cur.operatingMargin =
+        cur.operatingIncome !== undefined && cur.revenue !== 0
+          ? (cur.operatingIncome / cur.revenue) * 100
+          : null;
     }
     return financials.slice(0, 4);
   } catch (err) {
@@ -122,6 +132,126 @@ export async function fetchCompanyProfile(
     return typeof desc === 'string' && desc.trim() ? desc.trim() : null;
   } catch (err) {
     logger.warn(`[FMP] Profile fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetches recent quarterly balance sheets via FMP /stable/balance-sheet-statement.
+ * Returns an array of StockBalanceSheet (newest first), or null when unavailable.
+ */
+export async function fetchRecentBalanceSheets(
+  symbol: string,
+  apiKey: string,
+): Promise<StockBalanceSheet[] | null> {
+  if (!apiKey) return null;
+  const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
+  if (!cleanSym) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const url = `https://financialmodelingprep.com/stable/balance-sheet-statement?symbol=${encodeURIComponent(cleanSym)}&period=quarter&limit=${MAX_PERIODS}&apikey=${encodeURIComponent(apiKey)}`;
+    const res = await undiciFetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      logger.warn(`[FMP] BalanceSheet failed for ${cleanSym}: HTTP ${res.status}`);
+      return null;
+    }
+    const json = (await res.json()) as Array<Record<string, unknown>>;
+    if (!Array.isArray(json) || json.length === 0) {
+      logger.warn(`[FMP] No balance-sheet data for ${cleanSym}`);
+      return null;
+    }
+    const num = (v: unknown): number | undefined => {
+      const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const sheets: StockBalanceSheet[] = [];
+    for (const raw of json) {
+      const date = typeof raw['date'] === 'string' ? raw['date'] : '';
+      const totalAssets = num(raw['totalAssets']);
+      const totalLiabilities = num(raw['totalLiabilities']);
+      if (!date || totalAssets === undefined || totalLiabilities === undefined) continue;
+      const netAssets = totalAssets - totalLiabilities;
+      const shortTermDebt = num(raw['shortTermDebt']);
+      const longTermDebt = num(raw['longTermDebt']);
+      sheets.push({
+        date,
+        totalAssets,
+        totalLiabilities,
+        netAssets,
+        parentEquity: num(raw['totalStockholdersEquity']),
+        currentAssets: num(raw['totalCurrentAssets']),
+        currentLiabilities: num(raw['totalCurrentLiabilities']),
+        cash: num(raw['cashAndCashEquivalents']),
+        inventory: num(raw['inventory']),
+        accountsReceivable: num(raw['netReceivables']),
+        goodwill: num(raw['goodwill']),
+        shortTermDebt,
+        longTermDebt,
+        debtRatio: totalAssets !== 0 ? (totalLiabilities / totalAssets) * 100 : null,
+        currency: typeof raw['reportedCurrency'] === 'string' ? raw['reportedCurrency'] : undefined,
+      });
+    }
+    return sheets.length ? sheets.slice(0, 4) : null;
+  } catch (err) {
+    logger.warn(`[FMP] BalanceSheet fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetches recent quarterly cash-flow statements via FMP /stable/cash-flow-statement.
+ * Returns an array of StockCashFlow (newest first), or null when unavailable.
+ */
+export async function fetchRecentCashFlows(
+  symbol: string,
+  apiKey: string,
+): Promise<StockCashFlow[] | null> {
+  if (!apiKey) return null;
+  const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
+  if (!cleanSym) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const url = `https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${encodeURIComponent(cleanSym)}&period=quarter&limit=${MAX_PERIODS}&apikey=${encodeURIComponent(apiKey)}`;
+    const res = await undiciFetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      logger.warn(`[FMP] CashFlow failed for ${cleanSym}: HTTP ${res.status}`);
+      return null;
+    }
+    const json = (await res.json()) as Array<Record<string, unknown>>;
+    if (!Array.isArray(json) || json.length === 0) {
+      logger.warn(`[FMP] No cash-flow data for ${cleanSym}`);
+      return null;
+    }
+    const num = (v: unknown): number | undefined => {
+      const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const flows: StockCashFlow[] = [];
+    for (const raw of json) {
+      const date = typeof raw['date'] === 'string' ? raw['date'] : '';
+      const netCashOperating = num(raw['operatingCashFlow']);
+      const endCash = num(raw['cashAndCashEquivalentsAtEnd']);
+      if (!date || netCashOperating === undefined || endCash === undefined) continue;
+      flows.push({
+        date,
+        netCashOperating,
+        netCashInvesting: num(raw['investingCashFlow']) ?? 0,
+        netCashFinancing: num(raw['financingCashFlow']) ?? 0,
+        endCash,
+        currency: typeof raw['reportedCurrency'] === 'string' ? raw['reportedCurrency'] : undefined,
+      });
+    }
+    return flows.length ? flows.slice(0, 4) : null;
+  } catch (err) {
+    logger.warn(`[FMP] CashFlow fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
     return null;
   } finally {
     clearTimeout(timer);

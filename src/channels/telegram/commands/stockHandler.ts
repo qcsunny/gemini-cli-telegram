@@ -12,11 +12,29 @@
 import type { Bot } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
-import type { StockQuote, StockFinancial } from '../../../stock/types.js';
+import type {
+  StockQuote,
+  StockFinancial,
+  StockBalanceSheet,
+  StockCashFlow,
+} from '../../../stock/types.js';
 import { marketService } from '../../../stock/service/quote.js';
 import { getStockMarketApiKey } from '../../../config/userConfig.js';
-import { fetchRecentFinancials, fetchCompanyProfile } from '../../../stock/provider/fmp.js';
-import { fetchAStockFinancials, fetchHKFinancials, fetchAStockProfile } from '../../../stock/provider/eastmoney.js';
+import {
+  fetchRecentFinancials,
+  fetchCompanyProfile,
+  fetchRecentBalanceSheets,
+  fetchRecentCashFlows,
+} from '../../../stock/provider/fmp.js';
+import {
+  fetchAStockFinancials,
+  fetchHKFinancials,
+  fetchAStockProfile,
+  fetchABalanceSheets,
+  fetchACashFlows,
+  fetchHKBalanceSheets,
+  fetchHKCashFlows,
+} from '../../../stock/provider/eastmoney.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -66,10 +84,6 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
     { text: value, align: 'center', valign: 'middle' },
   ];
 
-  /** Caps the company description so the card stays compact. */
-  const truncateProfile = (p: string): string =>
-    p.length > 300 ? `${p.slice(0, 300)}…` : p;
-
   const perfCells: Array<Array<Record<string, any>>> = [];
   if (perf) {
     perfCells.push(mkCell('近1个月', fmtPerf(perf.change1M)));
@@ -79,9 +93,9 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
     perfCells.push(mkCell('今年以来 (YTD)', fmtPerf(perf.changeYTD)));
   }
 
-  const quoteCells: Array<Array<Record<string, any>>> = [];
+  const quotePairs: Array<Array<Record<string, any>>> = [];
   const addRow = (label: string, value?: string) => {
-    if (value !== undefined && value !== '--') quoteCells.push(mkCell(label, value));
+    if (value !== undefined && value !== '--') quotePairs.push(mkCell(label, value));
   };
   addRow('今开', quote.open !== undefined ? fmtPrice(quote.open) : undefined);
   addRow('昨收', quote.previousClose !== undefined ? fmtPrice(quote.previousClose) : undefined);
@@ -95,6 +109,12 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
   addRow('换手率', quote.turnoverRate !== undefined ? `${quote.turnoverRate.toFixed(2)}%` : undefined);
   addRow('52周最高', quote.high52 && quote.low52 ? fmtPrice(quote.high52) : undefined);
   addRow('52周最低', quote.high52 && quote.low52 ? fmtPrice(quote.low52) : undefined);
+  const quoteCells: Array<Array<Record<string, any>>> = [];
+  for (let i = 0; i < quotePairs.length; i += 2) {
+    const row: Array<Record<string, any>> = [...quotePairs[i]];
+    if (quotePairs[i + 1]) row.push(...quotePairs[i + 1]);
+    quoteCells.push(row);
+  }
 
   return [
     {
@@ -107,20 +127,28 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
         { type: 'bold', text: ['当前价格：'] },
         `${quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$'}${quote.price.toFixed(2)}\n`,
         { type: 'bold', text: ['当日涨跌：'] },
-        `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n`,
-        ...(quote.profile ? [{ type: 'bold', text: ['🏢 公司简介：'] }, `${truncateProfile(quote.profile)}\n\n`] : []),
-        ...recSection,
+        `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n`,
       ]
     },
-    ...(perfCells.length ? [
-      { type: 'paragraph', text: [{ type: 'bold', text: ['📊 阶段涨跌表现：'] }] },
-      { type: 'table', cells: perfCells, is_bordered: true, is_striped: true },
-    ] : []),
     ...(quoteCells.length ? [
       { type: 'paragraph', text: [{ type: 'bold', text: ['📋 当日行情：'] }] },
       { type: 'table', cells: quoteCells, is_bordered: true, is_striped: true },
     ] : []),
-    ...(quote.financials?.length ? buildFinancialBlocks(quote.financials, quote.currency) : []),
+    ...(perfCells.length ? [
+      { type: 'paragraph', text: [{ type: 'bold', text: ['📊 阶段涨跌表现：'] }] },
+      { type: 'table', cells: perfCells, is_bordered: true, is_striped: true },
+    ] : []),
+    ...(recSection.length ? [{ type: 'paragraph', text: recSection }] : []),
+    ...(quote.financials?.length
+      ? buildFinancialBlocks(quote.financials, quote.balanceSheets, quote.cashFlows, quote.currency)
+      : []),
+    ...(quote.profile ? [
+      {
+        type: 'details',
+        summary: { type: 'bold', text: ['🏢 公司简介'] },
+        blocks: [{ type: 'paragraph', text: [quote.profile] }],
+      },
+    ] : []),
     {
       type: 'paragraph',
       text: [
@@ -134,75 +162,192 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
   ];
 }
 
+const fmtAmount = (val: number | undefined, currency?: string): string => {
+  if (val === undefined || isNaN(val)) return '--';
+  const cur = currency === 'CNY' ? '¥' : currency === 'HKD' ? 'HK$' : '$';
+  if (val >= 1e9) return `${cur}${(val / 1e9).toFixed(2)}B`;
+  if (val >= 1e6) return `${cur}${(val / 1e6).toFixed(2)}M`;
+  return `${cur}${val.toFixed(0)}`;
+};
+
+const fmtPct = (val?: number | null): string =>
+  val === undefined || val === null || isNaN(val) ? '--' : `${val > 0 ? '+' : ''}${val.toFixed(2)}%`;
+
+const header = (label: string): Record<string, any> => ({
+  text: { type: 'bold', text: [label] },
+  is_header: true,
+  align: 'center',
+  valign: 'middle',
+});
+
+const cell = (value: string): Record<string, any> => ({
+  text: value,
+  align: 'center',
+  valign: 'middle',
+});
+
 /**
- * Builds the "近期财报" section as a single table — one row per reported
- * quarter — including YoY/QoQ growth columns to keep the card compact.
+ * Builds the four financial report fold blocks (业绩汇总 / 利润表 / 资产负债表 /
+ * 现金流量表), one row per reported quarter, sharing period-aligned columns.
  */
 export function buildFinancialBlocks(
   financials: StockFinancial[],
+  balanceSheets: StockBalanceSheet[] | undefined,
+  cashFlows: StockCashFlow[] | undefined,
   currency?: string,
 ): Array<Record<string, any>> {
-  const cur = currency === 'CNY' ? '¥' : currency === 'HKD' ? 'HK$' : '$';
-  const fmtAmount = (val?: number) => {
-    if (val === undefined || isNaN(val)) return '--';
-    if (val >= 1e9) return `${cur}${(val / 1e9).toFixed(2)}B`;
-    if (val >= 1e6) return `${cur}${(val / 1e6).toFixed(2)}M`;
-    return `${cur}${val.toFixed(0)}`;
-  };
-  const fmtPct = (val?: number | null) =>
-    val === undefined || val === null || isNaN(val) ? '--' : `${val > 0 ? '+' : ''}${val.toFixed(2)}%`;
+  if (!financials?.length) return [];
 
-  const header = (label: string): Record<string, any> => ({
-    text: { type: 'bold', text: [label] },
-    is_header: true,
-    align: 'center',
-    valign: 'middle',
-  });
-  const cell = (value: string): Record<string, any> => ({
-    text: value,
-    align: 'center',
-    valign: 'middle',
-  });
+  const blocks: Array<Record<string, any>> = [];
 
-  const rows: Array<Array<Record<string, any>>> = [
-    [
-      header('报告期'),
-      header('营收'),
-      header('营收同比'),
-      header('营收环比'),
-      header('净利润'),
-      header('净利同比'),
-      header('净利环比'),
-      header('毛利率'),
-      header('EPS'),
-    ],
-  ];
-  for (const f of financials) {
-    rows.push([
-      cell(`${f.period}（${f.date}）`),
-      cell(fmtAmount(f.revenue)),
-      cell(fmtPct(f.revenueYoY)),
-      cell(fmtPct(f.revenueQoQ)),
-      cell(fmtAmount(f.netIncome)),
-      cell(fmtPct(f.netIncomeYoY)),
-      cell(fmtPct(f.netIncomeQoQ)),
-      cell(fmtPct(f.grossMargin)),
-      cell(f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--'),
-    ]);
+  const summaryFold = buildIncomeTableBlocks(financials, currency, '📊 业绩汇总', [
+    ['营收', (f) => fmtAmount(f.revenue, currency)],
+    ['营收同比', (f) => fmtPct(f.revenueYoY)],
+    ['营收环比', (f) => fmtPct(f.revenueQoQ)],
+    ['净利润', (f) => fmtAmount(f.netIncome, currency)],
+    ['净利同比', (f) => fmtPct(f.netIncomeYoY)],
+    ['净利环比', (f) => fmtPct(f.netIncomeQoQ)],
+    ['营业利润', (f) => (f.operatingIncome !== undefined ? fmtAmount(f.operatingIncome, currency) : '--')],
+    ['毛利率', (f) => fmtPct(f.grossMargin)],
+    ['净利率', (f) => fmtPct(f.netMargin)],
+    ['EPS', (f) => (f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--')],
+    ['ROE', (f) => fmtPct(f.roe)],
+  ]);
+  if (summaryFold) blocks.push(summaryFold);
+
+  const incomeFold = buildIncomeTableBlocks(financials, currency, '📋 利润表', [
+    ['营业总收入', (f) => fmtAmount(f.revenue, currency)],
+    ['营业成本', (f) => (f.costOfRevenue !== undefined ? fmtAmount(f.costOfRevenue, currency) : '--')],
+    ['毛利', (f) => (f.grossProfit !== undefined ? fmtAmount(f.grossProfit, currency) : '--')],
+    ['营业费用', (f) => (f.operatingExpenses !== undefined ? fmtAmount(f.operatingExpenses, currency) : '--')],
+    ['EBITDA', (f) => (f.ebitda !== undefined ? fmtAmount(f.ebitda, currency) : '--')],
+    ['营业利润', (f) => (f.operatingIncome !== undefined ? fmtAmount(f.operatingIncome, currency) : '--')],
+    ['营业利润率', (f) => fmtPct(f.operatingMargin)],
+    ['税前利润', (f) => (f.incomeBeforeTax !== undefined ? fmtAmount(f.incomeBeforeTax, currency) : '--')],
+    ['所得税', (f) => (f.incomeTaxExpense !== undefined ? fmtAmount(f.incomeTaxExpense, currency) : '--')],
+    ['净利润', (f) => fmtAmount(f.netIncome, currency)],
+    ['归母净利', (f) => (f.deductedNetProfit !== undefined ? fmtAmount(f.deductedNetProfit, currency) : '--')],
+    ['毛利率', (f) => fmtPct(f.grossMargin)],
+    ['净利率', (f) => fmtPct(f.netMargin)],
+    ['EPS(摊薄)', (f) => (f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--')],
+  ]);
+  if (incomeFold) blocks.push(incomeFold);
+
+  if (balanceSheets?.length) {
+    blocks.push(buildBalanceSheetFold(balanceSheets, currency));
+  }
+  if (cashFlows?.length) {
+    blocks.push(buildCashFlowFold(cashFlows, currency));
   }
 
-  return [
-    {
-      type: 'paragraph',
-      text: [{ type: 'bold', text: ['📅 近期财报（最近' + String(financials.length) + '个季度）：'] }],
-    },
-    {
-      type: 'table',
-      cells: rows,
-      is_bordered: true,
-      is_striped: true,
-    },
+  return blocks;
+}
+
+function buildIncomeTableBlocks(
+  financials: StockFinancial[],
+  currency: string | undefined,
+  summary: string,
+  metrics: Array<[string, (f: StockFinancial) => string]>,
+): Record<string, any> | null {
+  const rows: Array<Array<Record<string, any>>> = [
+    [
+      header('指标'),
+      ...financials.map((f) => header(`${f.period}\n${f.date}`)),
+    ],
   ];
+  for (const [label, fn] of metrics) {
+    rows.push([header(label), ...financials.map((f) => cell(fn(f)))]);
+  }
+
+  return {
+    type: 'details',
+    summary: { type: 'bold', text: [`${summary}（最近${String(financials.length)}个季度）`] },
+    blocks: [
+      {
+        type: 'table',
+        cells: rows,
+        is_bordered: true,
+        is_striped: true,
+      },
+    ],
+  };
+}
+
+function buildBalanceSheetFold(
+  sheets: StockBalanceSheet[],
+  currency?: string,
+): Record<string, any> {
+  const rows: Array<Array<Record<string, any>>> = [
+    [
+      header('指标'),
+      ...sheets.map((s) => header(`${s.date.slice(0, 7)}`)),
+    ],
+  ];
+  const metrics: Array<[string, (s: StockBalanceSheet) => string]> = [
+    ['总资产', (s) => fmtAmount(s.totalAssets, currency)],
+    ['总负债', (s) => fmtAmount(s.totalLiabilities, currency)],
+    ['净资产', (s) => fmtAmount(s.netAssets, currency)],
+    ['股东权益', (s) => (s.parentEquity !== undefined ? fmtAmount(s.parentEquity, currency) : '--')],
+    ['流动资产', (s) => (s.currentAssets !== undefined ? fmtAmount(s.currentAssets, currency) : '--')],
+    ['流动负债', (s) => (s.currentLiabilities !== undefined ? fmtAmount(s.currentLiabilities, currency) : '--')],
+    ['货币资金', (s) => (s.cash !== undefined ? fmtAmount(s.cash, currency) : '--')],
+    ['存货', (s) => (s.inventory !== undefined ? fmtAmount(s.inventory, currency) : '--')],
+    ['应收账款', (s) => (s.accountsReceivable !== undefined ? fmtAmount(s.accountsReceivable, currency) : '--')],
+    ['商誉', (s) => (s.goodwill !== undefined ? fmtAmount(s.goodwill, currency) : '--')],
+    ['短期借款', (s) => (s.shortTermDebt !== undefined ? fmtAmount(s.shortTermDebt, currency) : '--')],
+    ['长期借款', (s) => (s.longTermDebt !== undefined ? fmtAmount(s.longTermDebt, currency) : '--')],
+    ['资产负债率', (s) => fmtPct(s.debtRatio)],
+  ];
+  for (const [label, fn] of metrics) {
+    rows.push([header(label), ...sheets.map((s) => cell(fn(s)))]);
+  }
+
+  return {
+    type: 'details',
+    summary: { type: 'bold', text: [`🏦 资产负债表（最近${String(sheets.length)}个季度）`] },
+    blocks: [
+      {
+        type: 'table',
+        cells: rows,
+        is_bordered: true,
+        is_striped: true,
+      },
+    ],
+  };
+}
+
+function buildCashFlowFold(
+  flows: StockCashFlow[],
+  currency?: string,
+): Record<string, any> {
+  const rows: Array<Array<Record<string, any>>> = [
+    [
+      header('指标'),
+      ...flows.map((f) => header(`${f.date.slice(0, 7)}`)),
+    ],
+  ];
+  const metrics: Array<[string, (f: StockCashFlow) => string]> = [
+    ['经营净现金流', (f) => fmtAmount(f.netCashOperating, currency)],
+    ['投资净现金流', (f) => fmtAmount(f.netCashInvesting, currency)],
+    ['筹资净现金流', (f) => fmtAmount(f.netCashFinancing, currency)],
+    ['期末现金', (f) => fmtAmount(f.endCash, currency)],
+  ];
+  for (const [label, fn] of metrics) {
+    rows.push([header(label), ...flows.map((f) => cell(fn(f)))]);
+  }
+
+  return {
+    type: 'details',
+    summary: { type: 'bold', text: [`💵 现金流量表（最近${String(flows.length)}个季度）`] },
+    blocks: [
+      {
+        type: 'table',
+        cells: rows,
+        is_bordered: true,
+        is_striped: true,
+      },
+    ],
+  };
 }
 
 export async function ensureQuotePerformance(quote: StockQuote): Promise<StockQuote> {
@@ -228,24 +373,35 @@ export async function ensureQuotePerformance(quote: StockQuote): Promise<StockQu
 }
 
 /**
- * Enriches a quote with recent quarterly financials, routing by market:
- * A-shares/HK stocks use the free Eastmoney datacenter API; US stocks use
- * FMP when an API key is configured. No-op when data already present.
+ * Enriches a quote with recent quarterly financials, balance sheets and cash
+ * flows, routing by market: A-shares/HK stocks use the free Eastmoney datacenter
+ * API; US stocks use FMP when an API key is configured. No-op when data already
+ * present.
  */
 export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuote> {
   if (quote.financials) return quote;
   try {
     let financials: StockFinancial[] | null = null;
+    let balanceSheets: StockBalanceSheet[] | null = null;
+    let cashFlows: StockCashFlow[] | null = null;
     if (quote.market === 'SSE' || quote.market === 'SZSE') {
       financials = await fetchAStockFinancials(quote.symbol);
+      balanceSheets = await fetchABalanceSheets(quote.symbol);
+      cashFlows = await fetchACashFlows(quote.symbol);
     } else if (quote.market === 'HKEX') {
       financials = await fetchHKFinancials(quote.symbol);
+      balanceSheets = await fetchHKBalanceSheets(quote.symbol);
+      cashFlows = await fetchHKCashFlows(quote.symbol);
     } else {
       const apiKey = getStockMarketApiKey();
       if (!apiKey) return quote;
       financials = await fetchRecentFinancials(quote.symbol, apiKey);
+      balanceSheets = await fetchRecentBalanceSheets(quote.symbol, apiKey);
+      cashFlows = await fetchRecentCashFlows(quote.symbol, apiKey);
     }
     if (financials && financials.length) quote.financials = financials;
+    if (balanceSheets && balanceSheets.length) quote.balanceSheets = balanceSheets;
+    if (cashFlows && cashFlows.length) quote.cashFlows = cashFlows;
   } catch (err) {
     logger.warn(`[ensureQuoteFinancials] failed for ${quote.symbol}: ${err}`);
   }
