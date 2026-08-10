@@ -82,6 +82,24 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
 
   <div id="chart_container"></div>
 
+  <div class="header" style="flex-direction: column; align-items: flex-start; gap: 8px;" id="rating_card">
+    <div style="font-size: 14px; font-weight: 700; color: var(--hint-color);">🏦 Institutional Consensus & Rating</div>
+    <div style="display: flex; width: 100%; justify-content: space-between; align-items: center;">
+      <div style="font-size: 18px; font-weight: 700; color: #26a69a;" id="r_consensus">Strong Buy</div>
+      <div style="font-size: 13px; color: var(--hint-color);" id="r_target">Target: --</div>
+    </div>
+    <div style="display: flex; width: 100%; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,0.1); margin-top: 4px;">
+      <div id="bar_buy" style="width: 70%; background: var(--up-color);"></div>
+      <div id="bar_hold" style="width: 20%; background: #ffb74d;"></div>
+      <div id="bar_sell" style="width: 10%; background: var(--down-color);"></div>
+    </div>
+    <div style="display: flex; justify-content: space-between; width: 100%; font-size: 11px; color: var(--hint-color); margin-top: 2px;">
+      <span id="p_buy">Buy: --%</span>
+      <span id="p_hold">Hold: --%</span>
+      <span id="p_sell">Sell: --%</span>
+    </div>
+  </div>
+
   <div class="details-grid">
     <div class="detail-card"><div class="label">1M Return</div><div class="val" id="p_1m">--</div></div>
     <div class="detail-card"><div class="label">3M Return</div><div class="val" id="p_3m">--</div></div>
@@ -152,12 +170,18 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
             }
           };
 
-          const p = q.performance || {};
-          setPerfElem('p_1m', p.change1M);
-          setPerfElem('p_3m', p.change3M);
-          setPerfElem('p_6m', p.change6M);
-          setPerfElem('p_1y', p.change1Y);
-          setPerfElem('p_ytd', p.changeYTD);
+          const rec = q.recommendations;
+          if (rec) {
+            document.getElementById('r_consensus').innerText = rec.consensusText;
+            document.getElementById('r_target').innerText = rec.targetPriceMean ? 'Target: $' + rec.targetPriceMean : '';
+            document.getElementById('bar_buy').style.width = rec.buyProbability + '%';
+            document.getElementById('bar_hold').style.width = rec.holdProbability + '%';
+            document.getElementById('bar_sell').style.width = rec.sellProbability + '%';
+            document.getElementById('p_buy').innerText = 'Buy: ' + rec.buyProbability + '%';
+            document.getElementById('p_hold').innerText = 'Hold: ' + rec.holdProbability + '%';
+            document.getElementById('p_sell').innerText = 'Sell: ' + rec.sellProbability + '%';
+          }
+
           document.getElementById('d_prev').innerText = q.previousClose ? '$' + q.previousClose.toFixed(2) : '--';
         }
       } catch (err) {

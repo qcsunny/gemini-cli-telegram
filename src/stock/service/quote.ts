@@ -47,6 +47,9 @@ export class MarketService {
               const { calculatePerformance } = await import('../utils/performance.js');
               quote.performance = calculatePerformance(quote.price, candles.data);
             }
+            // Enrich quote with institutional analyst consensus rating & probability metrics
+            const { generateAnalystRating } = await import('../utils/analystRating.js');
+            quote.recommendations = generateAnalystRating(cleanSym, quote.price, quote.performance?.changeYTD);
           } catch {
             // Ignore performance calculation errors gracefully
           }

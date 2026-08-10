@@ -53,6 +53,16 @@ export function registerStockHandler(
         return `${s}${val.toFixed(2)}%`;
       };
 
+      const rec = quote.recommendations;
+      const recSection = rec ? [
+        { type: 'bold', text: ['🏦 华尔街/机构评级建议：'] },
+        `\n• 综合评级：${rec.consensusText}` +
+        `\n• 建议买入比例：${rec.buyProbability}%  (买入:${rec.buy+rec.strongBuy}家)` +
+        `\n• 建议持有比例：${rec.holdProbability}%  (持有:${rec.hold}家)` +
+        `\n• 建议卖出比例：${rec.sellProbability}%  (卖出:${rec.sell+rec.strongSell}家)` +
+        (rec.targetPriceMean ? `\n• 机构目标均价：$${rec.targetPriceMean} (最高:$${rec.targetPriceHigh} / 最低:$${rec.targetPriceLow})\n\n` : '\n\n')
+      ] : [];
+
       const blocksPayload = [
         {
           type: 'paragraph',
@@ -65,6 +75,7 @@ export function registerStockHandler(
             `${quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$'}${quote.price.toFixed(2)}\n`,
             { type: 'bold', text: ['当日涨跌：'] },
             `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n\n`,
+            ...recSection,
             { type: 'bold', text: ['📊 阶段涨跌表现：'] },
             `\n• 近1个月：${fmtPerf(perf?.change1M)}  |  近3个月：${fmtPerf(perf?.change3M)}` +
             `\n• 近6个月：${fmtPerf(perf?.change6M)}  |  近1年：${fmtPerf(perf?.change1Y)}` +

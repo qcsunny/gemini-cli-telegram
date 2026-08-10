@@ -33,6 +33,21 @@ export interface StockQuote {
     change1Y?: number; // 1 year percentage change
     changeYTD?: number; // Year-to-date (今年以来) percentage change
   };
+  recommendations?: {
+    consensus: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+    consensusText: string;
+    strongBuy: number;
+    buy: number;
+    hold: number;
+    sell: number;
+    strongSell: number;
+    buyProbability: number;
+    holdProbability: number;
+    sellProbability: number;
+    targetPriceMean?: number;
+    targetPriceHigh?: number;
+    targetPriceLow?: number;
+  };
 }
 
 export interface CandleDataPoint {
