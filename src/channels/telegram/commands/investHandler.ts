@@ -271,7 +271,10 @@ function scoreFinancialHealth(bs: StockBalanceSheet[], cf: StockCashFlow[]): Inv
   const cash = cur?.cash;
   const currentAssets = cur?.currentAssets;
   const currentLiabilities = cur?.currentLiabilities;
-  const totalDebt = (cur?.shortTermDebt ?? 0) + (cur?.longTermDebt ?? 0);
+  const sd = cur?.shortTermDebt;
+  const ld = cur?.longTermDebt;
+  const hasDebtData = isNum(sd) || isNum(ld);
+  const totalDebt = hasDebtData ? (sd ?? 0) + (ld ?? 0) : null;
   const cashTotal = cash ?? 0;
   const currentRatio =
     isNum(currentAssets) && isNum(currentLiabilities) && currentLiabilities !== 0
@@ -305,7 +308,7 @@ function scoreFinancialHealth(bs: StockBalanceSheet[], cf: StockCashFlow[]): Inv
   }
 
   // Net cash: cash vs total debt
-  if (cashTotal > 0 && totalDebt > 0) {
+  if (isNum(totalDebt) && cashTotal > 0 && totalDebt > 0) {
     const coverage = cashTotal / totalDebt;
     if (coverage >= 1.5) {
       notes.push('净现金充裕（现金/有息负债 >1.5x）');
@@ -320,6 +323,9 @@ function scoreFinancialHealth(bs: StockBalanceSheet[], cf: StockCashFlow[]): Inv
   } else if (totalDebt === 0) {
     notes.push('几乎无有息负债');
     points += 25;
+  } else if (totalDebt === null) {
+    notes.push('有息负债数据缺失');
+    points += 10;
   } else {
     points += 10;
   }
@@ -585,6 +591,57 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
     .map((d) => `- ${d.name} ${d.score}/100：${d.notes.join('；')}`)
     .join('\n');
 
+  const pick = (v: unknown, label: string): string | null =>
+    v === undefined || v === null || (typeof v === 'number' && !isFinite(v))
+      ? null
+      : `${label} ${v}`;
+  const fsParts = [
+    pick(fs?.revenue, '营收'),
+    pick(fs?.costOfRevenue, '营业成本'),
+    pick(fs?.grossProfit, '毛利'),
+    pick(fs?.operatingIncome, '营业利润'),
+    pick(fs?.incomeBeforeTax, '税前利润'),
+    pick(fs?.incomeTaxExpense, '所得税'),
+    pick(fs?.netIncome, '净利'),
+    pick(fs?.grossMargin, '毛利率'),
+    pick(fs?.netMargin, '净利率'),
+    pick(fs?.operatingMargin, '营业利润率'),
+    pick(fs?.roe, 'ROE'),
+    pick(fs?.epsDiluted, 'EPS'),
+    pick(fs?.bps, '每股净资产'),
+    pick(fs?.revenueYoY, '营收同比'),
+    pick(fs?.netIncomeYoY, '净利同比'),
+  ].filter(Boolean);
+  const bsParts = [
+    pick(bs?.totalAssets, '总资产'),
+    pick(bs?.totalLiabilities, '总负债'),
+    pick(bs?.netAssets, '净资产'),
+    pick(bs?.parentEquity, '股东权益'),
+    pick(bs?.currentAssets, '流动资产'),
+    pick(bs?.currentLiabilities, '流动负债'),
+    pick(bs?.cash, '货币资金'),
+    pick(bs?.inventory, '存货'),
+    pick(bs?.accountsReceivable, '应收账款'),
+    pick(bs?.goodwill, '商誉'),
+    pick(bs?.shortTermDebt, '短期借款'),
+    pick(bs?.longTermDebt, '长期借款'),
+    pick(bs?.debtRatio, '资产负债率'),
+  ].filter(Boolean);
+  const cfParts = [
+    pick(cf?.netCashOperating, '经营现金流'),
+    pick(cf?.netCashInvesting, '投资现金流'),
+    pick(cf?.netCashFinancing, '筹资现金流'),
+    pick(cf?.endCash, '期末现金'),
+  ].filter(Boolean);
+  const quoteParts = [
+    pick(quote.price, '当前价'),
+    pick(quote.pe, 'PE'),
+    pick(quote.pb, 'PB'),
+    pick(quote.marketCap, '总市值'),
+    pick(quote.high52, '52周最高'),
+    pick(quote.low52, '52周最低'),
+  ].filter(Boolean);
+
   return [
     `请对股票 ${quote.name}（${quote.symbol}，市场 ${quote.market}）做一份专业的价值投资深度分析报告。`,
     '',
@@ -594,14 +651,10 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
     result.redFlags.length ? `红旗警示：${result.redFlags.join('；')}` : '',
     '',
     '## 最新一期财务数据',
-    fs
-      ? `营收 ${fs.revenue}，营业成本 ${fs.costOfRevenue}，毛利 ${fs.grossProfit}，营业利润 ${fs.operatingIncome}，税前利润 ${fs.incomeBeforeTax}，所得税 ${fs.incomeTaxExpense}，净利 ${fs.netIncome}，毛利率 ${fs.grossMargin}%，净利率 ${fs.netMargin}%，营业利润率 ${fs.operatingMargin}%，ROE ${fs.roe}%，EPS ${fs.epsDiluted}，每股净资产 ${fs.bps}，营收同比 ${fs.revenueYoY}%，净利同比 ${fs.netIncomeYoY}%`
-      : '无',
-    bs
-      ? `总资产 ${bs.totalAssets}，总负债 ${bs.totalLiabilities}，净资产 ${bs.netAssets}，股东权益 ${bs.parentEquity}，流动资产 ${bs.currentAssets}，流动负债 ${bs.currentLiabilities}，货币资金 ${bs.cash}，存货 ${bs.inventory}，应收账款 ${bs.accountsReceivable}，商誉 ${bs.goodwill}，短期借款 ${bs.shortTermDebt}，长期借款 ${bs.longTermDebt}，资产负债率 ${bs.debtRatio}%`
-      : '',
-    cf ? `经营现金流 ${cf.netCashOperating}，投资现金流 ${cf.netCashInvesting}，筹资现金流 ${cf.netCashFinancing}，期末现金 ${cf.endCash}` : '',
-    `当前价 ${quote.price}，PE ${quote.pe}，PB ${quote.pb}，总市值 ${quote.marketCap}，52周最高 ${quote.high52}，52周最低 ${quote.low52}`,
+    fsParts.length ? fsParts.join('，') : '无',
+    bsParts.length ? bsParts.join('，') : '',
+    cfParts.length ? cfParts.join('，') : '',
+    quoteParts.length ? quoteParts.join('，') : '',
     quote.profile ? `公司简介：${quote.profile.slice(0, 500)}` : '',
     '',
     '## 报告要求',

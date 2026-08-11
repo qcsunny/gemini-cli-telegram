@@ -243,7 +243,7 @@ export async function processMessage(
       let thoughtEventCount = 0;
       let textEventCount = 0;
 
-      let turnStartTime = 0;
+      const turnStartTime = Date.now();
 
       while (attempts < maxAttempts && !success && !signal.aborted) {
         attempts++;
@@ -284,7 +284,6 @@ export async function processMessage(
           }
 
           logger.info(`[messageLoop] Attempt ${attempts}/${maxAttempts}: Running prompt with model="${modelToUse}" (model retry ${failsForModel + 1}/${retriesPerModel})`);
-          turnStartTime = Date.now();
           // Stale-event guard: once this attempt settles (resolves OR rejects),
           // ignore any late events from the just-killed child (SIGINT on timeout)
           // so they never pollute the next attempt's shared stream buffers.

@@ -24,11 +24,10 @@ export async function detectAndSendNewArtifacts(
   const projectCwd = session.currentProject?.path || undefined;
   const dirs = projectCwd ? [artifactDir, projectCwd] : [artifactDir];
 
-  const photos: { filePath: string; file: string }[] = [];
-
   try {
   for (const dir of dirs) {
     const isProjectDir = dir === projectCwd;
+    const photos: { filePath: string; file: string }[] = [];
     const files = await fs.readdir(dir).catch(() => [] as string[]);
     for (const file of files) {
       if (file.startsWith('.') || file === 'scratch' || file === '.system_generated' || file === '.user_uploaded') {
@@ -46,7 +45,7 @@ export async function detectAndSendNewArtifacts(
 
         // For project cwd scans, only surface files the model generated this turn
         // (e.g. *.md analysis reports), not config/build outputs.
-        if (isProjectDir && !(mediaType === 'photo' || mediaType === 'video' || mediaType === 'audio' || file.endsWith('.md'))) {
+        if (isProjectDir && !(mediaType === 'photo' || mediaType === 'video' || mediaType === 'audio' || ext === '.md')) {
           continue;
         }
 
@@ -63,7 +62,6 @@ export async function detectAndSendNewArtifacts(
         }
       }
     }
-  }
 
     if (photos.length > 0) {
       if (photos.length === 1 || !session.sendMediaGroup) {
@@ -89,6 +87,7 @@ export async function detectAndSendNewArtifacts(
         }
       }
     }
+  }
   } catch (e) {
     logger.warn(`[messageLoop] Error detecting new artifacts: ${e}`);
   }
