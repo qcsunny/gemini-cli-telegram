@@ -205,6 +205,7 @@ export async function fetchHKFinancials(symbol: string): Promise<StockFinancial[
 }
 
 const F10_BASE = 'https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax';
+const F10_NEW_BASE = 'https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis';
 
 /** A-share quarterly balance sheets via Eastmoney datacenter RPT_F10_FINANCE_GBALANCE. symbol: 6-digit code e.g. '600519'. */
 export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceSheet[] | null> {
@@ -220,7 +221,9 @@ export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceS
     filter: `(SECUCODE="${symbol}.${aShareExchange(symbol)}")`,
   });
   const rows = await fetchRows(params);
-  if (!rows.length) return null;
+  if (!rows.length) {
+    return fetchBankOrInsuranceBalanceSheets(symbol);
+  }
   return rows
     .map((row): StockBalanceSheet | null => {
       const totalAssets = num(row, 'TOTAL_ASSETS');
@@ -242,6 +245,88 @@ export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceS
         longTermDebt: num(row, 'LONG_LOAN') ?? undefined,
         debtRatio: totalLiabilities && totalAssets ? (totalLiabilities / totalAssets) * 100 : null,
         currency: 'CNY',
+      };
+    })
+    .filter((b): b is StockBalanceSheet => b !== null);
+}
+
+async function fetchF10Text(path: string, code: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await undiciFetch(`${F10_NEW_BASE}/${path}`, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+        Referer: `${F10_NEW_BASE}/Index?type=web&code=${encodeURIComponent(code)}`,
+      },
+    });
+    if (!res.ok) {
+      logger.warn(`[EastmoneyF10] ${path} HTTP ${res.status}`);
+      return null;
+    }
+    return await res.text();
+  } catch (e) {
+    logger.warn(`[EastmoneyF10] ${path} failed: ${(e as Error).message}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchF10Json<T>(path: string, code: string): Promise<T | null> {
+  const text = await fetchF10Text(path, code);
+  if (!text) return null;
+  const start = text.indexOf('{');
+  return start === -1 ? null : (JSON.parse(text.slice(start)) as T);
+}
+
+/** Banks / insurers don't report through RPT_F10_FINANCE_GBALANCE; fall back to emweb PC_HSF10 (companyType: bank/security=3, insurance=2). */
+async function fetchBankOrInsuranceBalanceSheets(symbol: string): Promise<StockBalanceSheet[] | null> {
+  const code = `${aShareExchange(symbol)}${symbol}`;
+  const page = await fetchF10Text(`Index?type=web&code=${encodeURIComponent(code)}`, code);
+  let companyType = 4;
+  if (page) {
+    const m = page.match(/id="hidctype"[^>]*value="(\d+)"/);
+    if (m?.[1]) companyType = Number(m[1]);
+  }
+  const dateJson = await fetchF10Json<{ data?: Array<{ REPORT_DATE?: string }> }>(
+    `zcfzbDateAjaxNew?companyType=${companyType}&reportDateType=0&code=${encodeURIComponent(code)}`,
+    code,
+  );
+  const dates = (dateJson?.data ?? [])
+    .map((d) => String(d.REPORT_DATE ?? '').slice(0, 10))
+    .filter(Boolean)
+    .slice(0, 4);
+  if (!dates.length) return null;
+  const sheetJson = await fetchF10Json<{ data?: RawFinancialRow[] }>(
+    `zcfzbAjaxNew?companyType=${companyType}&reportDateType=0&reportType=1&dates=${encodeURIComponent(dates.join(','))}&code=${encodeURIComponent(code)}`,
+    code,
+  );
+  const rows = sheetJson?.data ?? [];
+  if (!rows.length) return null;
+  return rows
+    .map((row): StockBalanceSheet | null => {
+      const totalAssets = num(row, 'TOTAL_ASSETS');
+      const totalLiabilities = num(row, 'TOTAL_LIABILITIES');
+      if (totalAssets === null || totalLiabilities === null) return null;
+      const parentEquity = num(row, 'TOTAL_PARENT_EQUITY');
+      return {
+        date: cleanDate(String(row['REPORT_DATE'] ?? '')),
+        totalAssets,
+        totalLiabilities,
+        netAssets: parentEquity ?? totalAssets - totalLiabilities,
+        parentEquity: parentEquity ?? undefined,
+        currentAssets: undefined,
+        currentLiabilities: undefined,
+        cash: num(row, 'CASH_DEPOSIT_PBC') ?? undefined,
+        inventory: undefined,
+        accountsReceivable: undefined,
+        goodwill: undefined,
+        shortTermDebt: undefined,
+        longTermDebt: num(row, 'BOND_PAYABLE') ?? undefined,
+        debtRatio: (totalLiabilities / totalAssets) * 100,
+        currency: String(row['CURRENCY'] ?? 'CNY'),
       };
     })
     .filter((b): b is StockBalanceSheet => b !== null);
