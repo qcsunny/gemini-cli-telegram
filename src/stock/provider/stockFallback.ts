@@ -20,8 +20,8 @@ export class StockFallbackProvider implements MarketDataProvider {
   async getQuote(symbol: string): Promise<StockQuote | null> {
     let cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
 
-    // If query is Chinese name or non-ticker string (e.g. 苹果, 阿里巴巴, 贵州茅台)
-    if (/[\u4e00-\u9fa5]/.test(symbol)) {
+    // If query is Chinese name or ticker alias (e.g. tcl, 苹果, 阿里巴巴, 贵州茅台)
+    if (/[\u4e00-\u9fa5]/.test(symbol) || (!/^\d{5,6}$/.test(cleanSym) && !/^(SH|SZ|HK)\d+/i.test(cleanSym))) {
       const searchRes = await this.searchSymbols(symbol);
       if (searchRes.length > 0) {
         const item = searchRes[0] as any;

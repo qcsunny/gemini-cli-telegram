@@ -20,6 +20,8 @@ const backendHealth = new Map<string, BackendHealth>();
 const COOLDOWN_INITIAL_MS = 30_000;   // 30 seconds
 const COOLDOWN_MAX_MS = 300_000;      // 5 minutes
 
+/** Tracks which keys were last persisted to DB so we can incrementally update. */
+const lastPersistedKeys = new Set<string>();
 let isLoaded = false;
 
 function loadFromDbIfNeeded(): void {
