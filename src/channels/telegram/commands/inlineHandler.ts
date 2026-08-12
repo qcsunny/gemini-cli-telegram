@@ -803,7 +803,21 @@ export function registerInlineHandler(
         return;
       }
 
-      await ctx.answerCallbackQuery({ text: '🔄 Regenerating answer, please wait...' }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: '🔄 正在重新生成，请稍候...' }).catch(() => {});
+
+      // Immediately edit the message text to show loading feedback so the user knows it's actively thinking!
+      if (regen.task !== 'image') {
+        const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
+        const initMarkdown = `✨ **AI 推理引擎重新启动中**\n\n**🧠 目标模型：** \`${displayModelName(regen.model)}\`\n\n**💬 问题：**\n> ${displayPrompt}\n\n*🚀 正在重新深度推演，生成完成后将自动在此处刷新...*`;
+        await ctx.api.raw.editMessageText({
+          inline_message_id: inlineMessageId,
+          rich_message: { markdown: initMarkdown },
+          reply_markup: {
+            inline_keyboard: [[{ text: '⏹ 停止生成', callback_data: `inline_stop:${resultId}` }]],
+          },
+        } as any).catch((e: Error) => logger.warn(`[InlineResult] Regenerate initial edit failed: ${e}`));
+      }
+
       const ctrl = new AbortController();
       userControllers.set(resultId, ctrl);
       const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
