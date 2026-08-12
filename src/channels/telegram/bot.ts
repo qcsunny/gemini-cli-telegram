@@ -664,7 +664,9 @@ export class TelegramBot {
         logger.error(`Scheduled task execution failed: ${e}`);
         try {
           await this.bot.api.sendMessage(chatId, `${ICONS.error} Scheduled task failed: ${e instanceof Error ? e.message : String(e)}`);
-        } catch { /* ignore */ }
+        } catch (notifyErr) {
+          logger.warn(`Failed to notify chat ${chatId} about scheduled task failure: ${notifyErr}`);
+        }
       }
     }).catch(e => logger.error(`Failed to initialize scheduler: ${e}`));
   }

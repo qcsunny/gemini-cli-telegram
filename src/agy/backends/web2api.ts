@@ -7,7 +7,7 @@ import * as http from 'node:http';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig, getBackendUrl, getWeb2ApiKey } from '../../config/userConfig.js';
-import { saveMessage, getHistory } from '../messageStore.js';
+import { saveMessageTurn, getHistory } from '../messageStore.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { web2apiHistories, makeWeb2ApiConvId } from '../conversationManager.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
@@ -129,9 +129,8 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
             if (firstKey !== undefined) web2apiHistories.delete(firstKey);
           }
         }
-        // Persist to SQLite for restart survival
-        saveMessage(convId, 'user', prompt, 'web2api');
-        saveMessage(convId, 'assistant', outputBuf, 'web2api');
+        // Persist to SQLite atomically for restart survival
+        saveMessageTurn(convId, 'web2api', prompt, outputBuf);
         // Upstream returned no content (e.g. Gemini web rate-limit / empty reply).
         // Surface a clear message instead of sending a blank message.
         if (!outputBuf.trim()) {

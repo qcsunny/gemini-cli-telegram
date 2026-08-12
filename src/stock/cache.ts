@@ -16,6 +16,28 @@ interface CacheEntry<T> {
 
 export class MarketCache {
   private cache = new Map<string, CacheEntry<any>>();
+  private readonly maxEntries: number;
+
+  constructor(maxEntries = 2000) {
+    this.maxEntries = maxEntries;
+    // Periodic sweep to drop expired entries and cap growth even when keys
+    // are never re-read (prevents unbounded memory growth in long-running bots).
+    const sweeper = setInterval(() => this.sweepExpired(), 5 * 60 * 1000);
+    sweeper.unref?.();
+  }
+
+  private sweepExpired(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache) {
+      if (now > entry.expiresAt) this.cache.delete(key);
+    }
+    // Enforce a hard size cap as a final safety net.
+    if (this.cache.size > this.maxEntries) {
+      const overflow = this.cache.size - this.maxEntries;
+      const oldestKeys = Array.from(this.cache.keys()).slice(0, overflow);
+      for (const key of oldestKeys) this.cache.delete(key);
+    }
+  }
 
   get<T>(key: string): T | null {
     const entry = this.cache.get(key);
@@ -32,6 +54,9 @@ export class MarketCache {
       data,
       expiresAt: Date.now() + ttlMs,
     });
+    if (this.cache.size > this.maxEntries) {
+      this.sweepExpired();
+    }
   }
 
   delete(key: string): void {

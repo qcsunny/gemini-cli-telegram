@@ -38,6 +38,8 @@ vi.mock('../../agy/conversationManager.js', () => ({
 
 vi.mock('../../agy/messageStore.js', () => ({
   saveMessage: vi.fn(),
+  saveMessageTurn: vi.fn(),
+  deleteKnownConversation: vi.fn(),
 }));
 
 vi.mock('../../config/userConfig.js', async (importOriginal) => {

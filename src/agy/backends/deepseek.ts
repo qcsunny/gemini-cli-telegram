@@ -8,7 +8,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../../utils/logger.js';
 import { getTuningConfig, getBackendUrl, getDefaultModels } from '../../config/userConfig.js';
 import { loadUserConfig } from '../../config/userConfig.js';
-import { saveMessage, getHistory } from '../messageStore.js';
+import { saveMessageTurn, getHistory } from '../messageStore.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { deepseekHistories, makeDeepSeekConvId } from '../conversationManager.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
@@ -136,8 +136,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
             if (firstKey !== undefined) deepseekHistories.delete(firstKey);
           }
         }
-        saveMessage(convId, 'user', prompt, 'deepseek');
-        saveMessage(convId, 'assistant', finalOutput, 'deepseek');
+        saveMessageTurn(convId, 'deepseek', prompt, finalOutput);
         resolve({ conversationId: convId, output: finalOutput, exitCode: 0, stderr: '' });
       });
 

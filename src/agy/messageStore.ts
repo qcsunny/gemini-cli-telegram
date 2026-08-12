@@ -75,8 +75,59 @@ export function saveMessage(
   }
 }
 
+/**
+ * Atomically persist a full user→assistant turn inside a single transaction so a
+ * crash mid-write never leaves an orphaned user turn without its reply.
+ * Empty assistant content is skipped (no spurious empty rows).
+ */
+export function saveMessageTurn(
+  conversationId: string,
+  backend: Backend,
+  userContent: string,
+  assistantContent: string,
+  usage?: { input: number; output: number; cached: number; thinking: number }
+): void {
+  try {
+    const db = getDb();
+    const timestamp = new Date().toISOString();
+    db.transaction((tx) => {
+      tx.insert(schema.messages).values({
+        conversationId,
+        role: 'user',
+        content: userContent,
+        backend,
+        createdAt: timestamp,
+      }).run();
+      if (assistantContent && assistantContent.trim()) {
+        tx.insert(schema.messages).values({
+          conversationId,
+          role: 'assistant',
+          content: assistantContent,
+          backend,
+          createdAt: timestamp,
+          usage: usage ? JSON.stringify(usage) : null,
+        }).run();
+      }
+    });
+  } catch (e) {
+    logger.warn(`[messageStore] saveMessageTurn failed: ${e}`);
+  }
+}
+
 /** Known conversation IDs (backend|convId) for lazy loading. */
 const knownConversationIds = new Set<string>();
+
+/**
+ * Remove a conversation id from the known set (e.g. after deletion), across
+ * all backends that may reference it. Prevents unbounded set growth.
+ */
+export function deleteKnownConversation(conversationId: string): void {
+  for (const key of knownConversationIds) {
+    if (key.endsWith(`|${conversationId}`)) {
+      knownConversationIds.delete(key);
+    }
+  }
+}
 
 /**
  * Register known conversation IDs from database at startup.

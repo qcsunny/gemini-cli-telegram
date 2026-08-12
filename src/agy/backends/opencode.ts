@@ -27,6 +27,9 @@ function getOpenCodePath(): string {
 
 const SESSION_TITLE_PREFIX = 'gemini-cli-telegram:';
 
+/** Grace period (ms) between SIGINT and SIGKILL escalation on abort. */
+const ABORT_SIGKILL_GRACE_MS = 5000;
+
 /**
  * Look up an existing opencode session id by the bot's conversation marker.
  * The bot tags every session it creates with title "gemini-cli-telegram:<convId>"
@@ -162,6 +165,15 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       logger.debug('[opencode] Aborting');
       settled = true;
       child.kill('SIGINT');
+      // Escalate to SIGKILL if the process ignores SIGINT (prevents orphaned children)
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          logger.warn('[opencode] Abort escalation — sending SIGKILL to child process');
+          try { child.kill('SIGKILL'); } catch { /* process already gone */ }
+        }
+      }, ABORT_SIGKILL_GRACE_MS);
+      killTimer.unref?.();
+      child.once('close', () => clearTimeout(killTimer));
     }, { once: true });
 
     child.on('error', (err) => {
@@ -197,6 +209,11 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
         { role: 'user', content: prompt },
         { role: 'assistant', content: trimmedOutput },
       ]);
+      // Prevent unbounded Map growth (mirrors BUG-04 in web2api/deepseek).
+      if (opencodeHistories.size > 500) {
+        const firstKey = opencodeHistories.keys().next().value;
+        if (firstKey !== undefined) opencodeHistories.delete(firstKey);
+      }
       saveMessage(convId, 'user', prompt, 'opencode');
       saveMessage(convId, 'assistant', trimmedOutput, 'opencode', usage);
 

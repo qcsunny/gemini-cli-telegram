@@ -49,6 +49,7 @@ vi.mock('./agy/conversationStore.js', () => ({
 
 vi.mock('./agy/messageStore.js', () => ({
   saveMessage: vi.fn(),
+  saveMessageTurn: vi.fn(),
   getHistory: vi.fn((_map: Map<string, any[]>) => []),
 }));
 

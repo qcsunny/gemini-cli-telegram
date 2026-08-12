@@ -291,7 +291,22 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
   // 6. REST API: POST /api/watchlist
   if (url.startsWith('/api/watchlist') && method === 'POST') {
     let bodyStr = '';
-    for await (const chunk of req) bodyStr += chunk;
+    let bodyBytes = 0;
+    const MAX_BODY_BYTES = 16 * 1024; // 16 KiB — watchlist entries are tiny
+    let tooLarge = false;
+    for await (const chunk of req) {
+      bodyBytes += (chunk as Buffer).length;
+      if (bodyBytes > MAX_BODY_BYTES) {
+        tooLarge = true;
+        break;
+      }
+      bodyStr += chunk;
+    }
+    if (tooLarge) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Request body too large' }));
+      return true;
+    }
     try {
       const { userId, symbol } = JSON.parse(bodyStr);
       const { addToWatchlist } = await import('../service/watchlist.js');

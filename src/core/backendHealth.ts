@@ -72,8 +72,9 @@ export function isBackendAvailable(channel: string | null): boolean {
   const health = backendHealth.get(channel);
   if (!health) return true;
   if (Date.now() >= health.cooldownUntil) {
+    // Read paths must not write to the DB: just drop the expired entry from the
+    // in-memory map. The next write (fail/healthy) persists that state.
     backendHealth.delete(channel);
-    saveToDb();
     return true;
   }
   return false;

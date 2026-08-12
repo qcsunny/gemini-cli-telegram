@@ -43,13 +43,16 @@ function getSessionMetadata(uuid: string, defaultMtimeMs: number): { title: stri
     const dbPath = path.join(agyDir, 'conversation_summaries.db');
     if (fs.existsSync(dbPath)) {
       const db = new Database(dbPath, { readonly: true });
-      const row = db.prepare('SELECT title, preview, last_modified_time FROM conversation_summaries WHERE conversation_id = ?').get(uuid) as { title?: string; preview?: string; last_modified_time?: string } | undefined;
-      db.close();
-      if (row) {
-        const text = (row.preview || row.title || '').trim();
-        const title = text ? text.replace(/^[#*`\- >]+/g, '').substring(0, 25) : uuid.slice(0, 8);
-        const date = row.last_modified_time ? new Date(row.last_modified_time) : new Date(defaultMtimeMs);
-        return { title, date };
+      try {
+        const row = db.prepare('SELECT title, preview, last_modified_time FROM conversation_summaries WHERE conversation_id = ?').get(uuid) as { title?: string; preview?: string; last_modified_time?: string } | undefined;
+        if (row) {
+          const text = (row.preview || row.title || '').trim();
+          const title = text ? text.replace(/^[#*`\- >]+/g, '').substring(0, 25) : uuid.slice(0, 8);
+          const date = row.last_modified_time ? new Date(row.last_modified_time) : new Date(defaultMtimeMs);
+          return { title, date };
+        }
+      } finally {
+        db.close();
       }
     }
   } catch {
@@ -144,11 +147,18 @@ export async function resumeSession(
   let targetUuid = identifier;
   if (!isNaN(idx) && idx >= 1 && idx <= sessions.length) {
     targetUuid = sessions[idx - 1].uuid;
+  } else if (identifier.toLowerCase() === 'latest') {
+    // 'latest' is an accepted keyword: resolve to the newest session if known,
+    // else keep as-is (the caller/historyManager handles the actual lookup).
+    if (sessions.length > 0) targetUuid = sessions[0].uuid;
+  } else if (!/^[a-zA-Z0-9-]{8,64}$/.test(targetUuid)) {
+    // Reject arbitrary/garbage identifiers instead of persisting a dirty UUID.
+    throw new Error(`Invalid session identifier: "${identifier}". Use a numeric index from /resume or a valid session UUID.`);
   }
-  
-  session.conversationId = targetUuid;
+
   if (session.chatId) {
     const { setConversation } = await import('../agy/conversationStore.js');
+    // Persist first so a DB failure leaves in-memory state untouched (no fork).
     await setConversation(
       session.chatId,
       targetUuid,
@@ -157,5 +167,6 @@ export async function resumeSession(
       session.threadId
     );
   }
+  session.conversationId = targetUuid;
   return `Successfully switched active agy session to ${targetUuid}`;
 }

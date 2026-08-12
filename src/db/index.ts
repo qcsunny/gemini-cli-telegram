@@ -20,6 +20,9 @@ import { getDbPath } from '../config/userConfig.js';
 let dbInstance: BetterSQLite3Database<typeof schema> | null = null;
 let sqliteDb: InstanceType<typeof Database> | null = null;
 
+/** Current schema revision embedded in SQLite PRAGMA user_version. */
+const SCHEMA_VERSION = 3;
+
 /**
  * Returns default absolute path to the SQLite database file.
  * Internal — use getDb() instead.
@@ -59,8 +62,20 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   }
 
   const targetPath = dbPath || getDefaultDbPath();
-  const sqlite = new Database(targetPath);
+  let sqlite: InstanceType<typeof Database>;
+  try {
+    sqlite = new Database(targetPath);
+  } catch (e) {
+    // A corrupted/unopenable DB (or permission error) must surface clearly
+    // instead of silently letting the daemon run with persistence disabled.
+    logger.error(`[db] Failed to open SQLite database at ${targetPath}: ${e}`);
+    throw e;
+  }
+  // SQLITE_BUSY handling: wait (ms) for concurrent writers instead of failing
+  // immediately. Prevents silent message loss when two instances contend on WAL.
   sqlite.pragma('journal_mode = WAL');
+  sqlite.pragma('busy_timeout = 5000');
+  const prevVersion = sqlite.pragma('user_version', { simple: true }) as number;
 
   // Automatically ensure the conversations table exists on initialization
   sqlite.exec(`
@@ -164,6 +179,13 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
     if (!e.message?.includes('duplicate column name')) {
       logger.warn(`[db] Notice on adding 'sender_username' column: ${e.message}`);
     }
+  }
+
+  // Stamp the schema revision so future migrations can detect drift and
+  // upgrade in a controlled, versioned manner.
+  if (prevVersion !== SCHEMA_VERSION) {
+    sqlite.pragma(`user_version = ${SCHEMA_VERSION}`);
+    logger.info(`[db] Schema version ${prevVersion} → ${SCHEMA_VERSION}`);
   }
 
   const instance = drizzle(sqlite, { schema });

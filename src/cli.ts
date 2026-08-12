@@ -31,6 +31,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
+/**
+ * Verify a PID actually refers to this project's daemon process, not just any
+ * live process that happened to be assigned the same recycled PID.
+ * Reads /proc/<pid>/cmdline (Linux) as an extra identity check.
+ */
+function isOurDaemonPid(pid: number): boolean {
+  try {
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+    return cmdline.includes('cli.js') || cmdline.includes('gemini-cli-telegram') || cmdline.includes('dist/cli');
+  } catch {
+    // /proc unavailable (non-Linux) — fall back to the plain liveness check only.
+    return true;
+  }
+}
+
+/** Check whether pid points to our (or any) live process. */
+function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function acquirePidLock(pidPath: string): boolean {
   try {
     const fd = fs.openSync(pidPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o644);
@@ -76,21 +101,24 @@ program
     if (fs.existsSync(pidPath)) {
       try {
         const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
-        try {
-          process.kill(existingPid, 0); // Check if process is alive
+        if (!(Number.isInteger(existingPid) && existingPid > 0)) {
+          console.error(`[PID CHECK] Invalid pid file content: ${fs.readFileSync(pidPath, 'utf-8').trim()}`);
+          console.error(`[PID CHECK] Removing invalid pid file and continuing...`);
+          try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
+        } else if (pidIsAlive(existingPid) && isOurDaemonPid(existingPid)) {
           if (!isLive) {
             console.error(`Daemon is already running (pid ${existingPid}). Use 'gemini-cli-telegram stop' first.`);
             process.exit(1);
           }
-        } catch (killErr: any) {
-          if (killErr.code === 'ESRCH') {
-            console.error(`[PID CHECK] Stale pid file detected: ${pidPath}, content: ${existingPid}`);
-            console.error(`[PID CHECK] Removing stale pid file and continuing...`);
-            try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
-          } else {
-            console.error(`[PID CHECK] Failed to check process status: ${killErr.code}`);
-            throw killErr;
-          }
+        } else if (pidIsAlive(existingPid)) {
+          // PID is alive but belongs to a different process (PID reused or a
+          // foreign Daemon). Never kill it — treat the pid file as stale.
+          console.error(`[PID CHECK] pid ${existingPid} is alive but not this daemon. Treating pid file as stale and continuing...`);
+          try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
+        } else {
+          console.error(`[PID CHECK] Stale pid file detected: ${pidPath}, content: ${existingPid}`);
+          console.error(`[PID CHECK] Removing stale pid file and continuing...`);
+          try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
         }
       } catch (err) {
         console.error(`[PID CHECK] Error reading pid file: ${err instanceof Error ? err.message : String(err)}`);
@@ -138,6 +166,11 @@ program
       const logStream = fs.createWriteStream(getLogPath(config), { flags: 'a' });
       process.stdout.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stdout.write;
       process.stderr.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stderr.write;
+
+      // Flush the log stream before exiting so redirected buffers aren't lost.
+      process.once('exit', () => {
+        try { logStream.end(); } catch { /* ignore */ }
+      });
 
       // SIGTERM/SIGINT: delete PID, let index.ts drain bot and exit
       process.once('SIGTERM', () => { try { fs.unlinkSync(pidPath); } catch { /* ignore */ } });
@@ -187,7 +220,9 @@ program
         if (data.ok && data.result?.username) {
           console.log(`\nChat: https://t.me/${data.result.username}`);
         }
-      } catch { /* ignore — non-critical */ }
+      } catch (e) {
+        console.warn(`Could not fetch bot username from Telegram (bot may need a moment): ${e instanceof Error ? e.message : e}`);
+      }
 
       process.exit(0);
     }
@@ -215,7 +250,12 @@ program
         console.log(`[PID CHECK] Found daemon.pid: ${pid}`);
 
         try {
-          process.kill(pid, 0);
+          if (!pidIsAlive(pid)) throw Object.assign(new Error(), { code: 'ESRCH' });
+          if (!isOurDaemonPid(pid)) {
+            console.error(`[PID CHECK] Process ${pid} is alive but is NOT this daemon (PID was reused).`);
+            console.error(`[PID CHECK] Treating pid file as stale. Remove it: rm ${pidPath}`);
+            process.exit(1);
+          }
           console.log(`[PID CHECK] Process ${pid} is running (verified)`);
           console.log(`[PID CHECK] Daemon is running. Use 'gemini-cli-telegram stop' to stop it.`);
           process.exit(0);
@@ -246,6 +286,13 @@ program
       process.exit(0);
     }
     const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+    if (pidIsAlive(pid) && !isOurDaemonPid(pid)) {
+      // The pid is alive but NOT our daemon (PID recycled by another process).
+      // Do NOT send signals to it — just remove the stale pid file.
+      console.error(`[stop] pid ${pid} is alive but not this daemon. Removing stale pid file without killing it.`);
+      fs.unlinkSync(pidPath);
+      process.exit(0);
+    }
     try {
       process.kill(pid, 'SIGTERM');
       fs.unlinkSync(pidPath);
@@ -267,13 +314,17 @@ program
       process.exit(0);
     }
     const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
-    try {
-      process.kill(pid, 0); // signal 0 = check if alive
-      console.log(`Daemon is running (pid ${pid}).`);
-    } catch {
+    if (!pidIsAlive(pid)) {
       fs.unlinkSync(pidPath);
       console.log('Daemon is not running (cleaned up stale pid file).');
+      process.exit(0);
     }
+    if (!isOurDaemonPid(pid)) {
+      console.error(`Daemon is not running (pid ${pid} is alive but not this daemon; removed stale pid file).`);
+      fs.unlinkSync(pidPath);
+      process.exit(0);
+    }
+    console.log(`Daemon is running (pid ${pid}).`);
     process.exit(0);
   });
 

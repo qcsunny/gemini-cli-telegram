@@ -11,16 +11,14 @@
  * and provides the `startTelegramDaemon` bootstrap function for programmatically starting the bot daemon.
  */
 
-import {
-  TelegramBot,
-  type TelegramBotOptions,
-} from './channels/telegram/bot.js';
+import { TelegramBot, type TelegramBotOptions } from './channels/telegram/bot.js';
 import { logger } from './utils/logger.js';
 import { loadUserConfig, clearConfigCache } from './config/userConfig.js';
 import { clearDefaultModelsCache, restoreHistoriesFromDb } from './agy/agyCli.js';
 import { clearModelOrderCache } from './core/modelRegistry.js';
 import { startHealthServer, stopHealthServer } from './utils/healthServer.js';
 import { initExchangeRate } from './utils/exchangeRate.js';
+import { closeDb } from './db/index.js';
 
 export type { ChannelReply, DaemonSession, SessionOptions, MessageFormatter } from './core/types.js';
 export { SessionManager } from './core/session.js';
@@ -44,19 +42,52 @@ export async function startTelegramDaemon(
 ): Promise<void> {
   if (!options.token) {
     throw new Error(
-      'Telegram bot token is required. Set TELEGRAM_BOT_TOKEN or pass --token.',
+      'Telegram bot token is required. Set it in config.json (telegramBotToken) or pass --token.',
     );
   }
 
-  // Global safety net: log unhandled promise rejections / exceptions instead
-  // of letting them crash the daemon. Real errors are still visible in error.log.
+  // Global safety net: log unhandled promise rejections instead of crashing.
+  // For uncaught exceptions, log and exit (the systemd unit restarts the daemon)
+  // rather than keep running in a state Node may have corrupted.
+  const shutdown = async (): Promise<void> => {
+    logger.info('Shutting down...');
+    // Hard fallback so the process never hangs in a half-closed state.
+    const forceTimer = setTimeout(() => {
+      logger.error('[shutdown] Timed out waiting for graceful shutdown — forcing exit');
+      process.exit(1);
+    }, 15000);
+    forceTimer.unref?.();
+
+    try {
+      stopHealthServer();
+    } catch (e) {
+      logger.warn(`[shutdown] Error stopping health server: ${e}`);
+    }
+    try {
+      await bot.stop();
+    } catch (e) {
+      logger.error(`[shutdown] Error stopping bot (children were force-killed): ${e}`);
+    }
+    // Close the SQLite connection cleanly (flushes WAL checkpoint).
+    try {
+      closeDb();
+    } catch (e) {
+      logger.warn(`[shutdown] Error closing database: ${e}`);
+    }
+    clearTimeout(forceTimer);
+    process.exit(0);
+  };
+
   process.on('unhandledRejection', (reason: unknown) => {
     logger.error(`[unhandledRejection] ${reason instanceof Error ? reason.stack || reason.message : String(reason)}`);
   });
   process.on('uncaughtException', (err: Error) => {
     logger.error(`[uncaughtException] ${err.stack || err.message}`);
-    // Do NOT re-throw — keep the daemon alive. Severe internal errors are
-    // still surfaced in error.log for human review.
+    logger.error('[uncaughtException] Node state may be corrupted — triggering graceful shutdown (systemd will restart).');
+    void shutdown().catch((shutdownErr) => {
+      logger.error(`[uncaughtException] Graceful shutdown failed, forcing exit: ${shutdownErr}`);
+      process.exit(1);
+    });
   });
 
   const bot = new TelegramBot(options.token, options);
@@ -66,13 +97,6 @@ export async function startTelegramDaemon(
   if (config?.healthPort) {
     startHealthServer(config.healthPort);
   }
-
-  const shutdown = async () => {
-    logger.info('Shutting down...');
-    stopHealthServer();
-    await bot.stop();
-    process.exit(0);
-  };
 
   process.once('SIGTERM', () => void shutdown());
   process.once('SIGINT', () => void shutdown());

@@ -76,13 +76,24 @@ async function updateCache(): Promise<void> {
 
 let _fetching = false;
 
+/** Run updateCache(), always resetting the in-flight guard so future TTL refreshes can happen. */
+async function refreshWithGuard(): Promise<void> {
+  try {
+    await updateCache();
+  } finally {
+    _fetching = false;
+  }
+}
+
 /**
  * Initialize exchange rate on startup: fetch live rate in background.
  */
 export function initExchangeRate(): void {
   if (_fetching) return;
   _fetching = true;
-  updateCache().catch(() => {});
+  refreshWithGuard().catch((e) => {
+    logger.debug(`[exchangeRate] Background refresh failed: ${e}`);
+  });
 }
 
 /**
@@ -94,7 +105,7 @@ export function getCachedUsdToCnyRate(): number {
   if (cachedRate) {
     if (Date.now() - cachedRate.fetchedAt > CACHE_TTL_MS && !_fetching) {
       _fetching = true;
-      updateCache().catch(() => {});
+      refreshWithGuard().catch(() => {});
     }
     return cachedRate.rate;
   }
@@ -103,13 +114,13 @@ export function getCachedUsdToCnyRate(): number {
     cachedRate = disk;
     if (Date.now() - disk.fetchedAt > CACHE_TTL_MS && !_fetching) {
       _fetching = true;
-      updateCache().catch(() => {});
+      refreshWithGuard().catch(() => {});
     }
     return disk.rate;
   }
   if (!_fetching) {
     _fetching = true;
-    updateCache().catch(() => {});
+    refreshWithGuard().catch(() => {});
   }
   return DEFAULT_RATE;
 }

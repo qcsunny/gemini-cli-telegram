@@ -106,8 +106,20 @@ export function registerProjectHandlers(
       browsePath = getBrowseRoot();
     } else if (arg.startsWith('~')) {
       browsePath = arg.replace(/^~(?=$|\/|\\)/, os.homedir());
+    } else if (arg.startsWith('/')) {
+      // Explicit absolute path — allowed as-is (user is whitelisted).
+      browsePath = path.resolve(arg);
     } else {
-      browsePath = path.resolve(baseDir, arg);
+      // Relative path: resolve within the session base dir and clamp any
+      // `../` traversal that would escape it.
+      const resolved = path.resolve(baseDir, arg);
+      const baseRoot = path.resolve(baseDir);
+      browsePath = resolved.startsWith(baseRoot + path.sep) || resolved === baseRoot
+        ? resolved
+        : baseRoot;
+      if (browsePath !== resolved) {
+        logger.warn(`[project_browse] Clamped traversal "${arg}" to ${baseRoot}`);
+      }
     }
 
     await ctx.reply(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });

@@ -39,6 +39,9 @@ export { getConversationsDir } from './protobuf.js';
 
 let _agyPath: string | undefined;
 
+/** Grace period (ms) between SIGINT and SIGKILL escalation on abort. */
+const ABORT_SIGKILL_GRACE_MS = 5000;
+
 /** Path to the agy binary — prefer explicit env var, then search PATH, then common fallbacks. Cached after first resolution. */
 function getAgyPath(): string {
   if (_agyPath) return _agyPath;
@@ -291,6 +294,15 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       settled = true;
       logger.debug('[agyCli] Aborting — sending SIGINT to agy process');
       child.kill('SIGINT');
+      // Escalate to SIGKILL if the process ignores SIGINT (prevents orphaned children)
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          logger.warn('[agyCli] Abort escalation — sending SIGKILL to agy process');
+          try { child.kill('SIGKILL'); } catch { /* process already gone */ }
+        }
+      }, ABORT_SIGKILL_GRACE_MS);
+      killTimer.unref?.();
+      child.once('close', () => clearTimeout(killTimer));
     }, { once: true });
 
     child.on('error', err => {

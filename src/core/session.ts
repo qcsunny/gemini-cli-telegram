@@ -29,6 +29,9 @@ type SendMediaFactory = (chatId: number) => SendMediaFn;
 /** Factory function type for building chat-bound media-group (album) sender functions */
 type SendMediaGroupFactory = (chatId: number) => SendMediaGroupFn;
 
+/** Grace period (ms) before force-killing a lingering model child during destroy/shutdown. */
+const SHUTDOWN_SIGKILL_GRACE_MS = 3000;
+
 /**
  * Utility class for discovering, caching, and managing local software projects/workspaces.
  * Scans directories for indicator files (e.g. package.json, Cargo.toml, .git) and persists
@@ -339,6 +342,21 @@ export class SessionManager {
 
     if (session) {
       session.abortController.abort('Session destroyed');
+      const pid = session.childPid;
+      // Safety net: force-kill any lingering model child process after a grace
+      // period so it never becomes an orphan (SIGKILL escalation fallback).
+      if (pid !== undefined) {
+        const killTimer = setTimeout(() => {
+          try {
+            process.kill(pid, 0);
+            process.kill(pid, 'SIGKILL');
+            logger.info(`[session] Force-killed lingering child pid ${pid} during destroy`);
+          } catch {
+            // process already gone
+          }
+        }, SHUTDOWN_SIGKILL_GRACE_MS);
+        killTimer.unref?.();
+      }
       this.sessions.delete(key);
       logger.info(`Session destroyed for chat ${key}`);
     }
@@ -363,6 +381,15 @@ export class SessionManager {
       const threadId = threadIdStr !== undefined ? Number(threadIdStr) : undefined;
       await this.destroy(chatId, threadId);
     }
+    // Stop the persistent scheduler so no tasks fire during shutdown
+    try {
+      this.chatScheduler.destroy();
+    } catch (e) {
+      logger.warn(`Error stopping scheduler: ${e}`);
+    }
+    // Allow the SIGKILL escalation for lingering children to settle before the
+    // parent exits, so no model child process is left orphaned.
+    await new Promise((r) => setTimeout(r, SHUTDOWN_SIGKILL_GRACE_MS));
     logger.info('All sessions destroyed');
   }
 
@@ -415,8 +442,13 @@ export class SessionManager {
     // Check for write access to the workspace directory
     try {
       const testFile = path.join(cwd, `.write_test_${sessionId}`);
-      await fs.writeFile(testFile, 'test');
-      await fs.unlink(testFile);
+      try {
+        await fs.writeFile(testFile, 'test');
+      } finally {
+        // Ensure the probe file never lingers in the user's project directory,
+        // even if write or unlink fails.
+        try { await fs.rm(testFile, { force: true }); } catch { /* ignore */ }
+      }
       logger.debug(`Write access verified for ${cwd}`);
     } catch (e) {
       logger.warn(`Potential write access issue in ${cwd}: ${e}`);

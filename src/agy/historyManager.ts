@@ -72,8 +72,9 @@ export function undoLastTurn(uuid: string): boolean {
   const dbPath = path.join(getConversationsDir(), `${uuid}.db`);
   if (!fs.existsSync(dbPath)) return false;
 
+  let db: Database.Database | null = null;
   try {
-    const db = new Database(dbPath);
+    db = new Database(dbPath, { timeout: 5000 });
 
     // Antigravity (agy) records many steps per turn (thinking, tools, generation).
     // The safest "undo" without deep protobuf parsing is to delete the last ~5 to 10 indices
@@ -85,9 +86,17 @@ export function undoLastTurn(uuid: string): boolean {
 
     if (result && result.max_idx !== null && result.max_idx !== undefined && result.max_idx >= 0) {
       const max_idx = result.max_idx;
-      const deleteStmt = db.prepare('DELETE FROM steps WHERE idx > ?');
-      // Delete last 15 steps which should clear the last assistant generation and user prompt
-      deleteStmt.run(Math.max(0, max_idx - 15));
+      // Guard against deleting into another conversation's steps: never delete
+      // below 2 (the conversation header/title steps). Also run inside a
+      // transaction so a crash mid-delete can't tear the step sequence.
+      const lowerBound = Math.max(2, max_idx - 15);
+      if (max_idx <= 2) {
+        db.close();
+        return false;
+      }
+      db.transaction(() => {
+        db!.prepare('DELETE FROM steps WHERE idx > ?').run(lowerBound);
+      })();
       db.close();
       return true;
     }
@@ -95,7 +104,11 @@ export function undoLastTurn(uuid: string): boolean {
     db.close();
     return false;
   } catch (e) {
-    logger.error(`Error undoing turn in ${uuid}: ${e}`);
+    // SQLITE_BUSY (timeout exceeded) — the session DB is likely locked by a
+    // running agy process; surface a clear message instead of silently failing.
+    logger.error(`Error undoing turn in ${uuid}${e instanceof Error && e.message.includes('busy') ? ' (database locked, is the session active?)' : ''}: ${e}`);
     return false;
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
   }
 }

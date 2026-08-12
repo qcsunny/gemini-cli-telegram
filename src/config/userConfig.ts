@@ -494,6 +494,13 @@ export function saveUserConfig(config: UserConfig): void {
   const validated = userConfigSchema.parse(config);
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   const content = JSON.stringify(validated, null, 2) + '\n';
-  fs.writeFileSync(CONFIG_PATH, content, { mode: 0o600 });
+  // Atomic write: write to temp file then rename so a crash mid-write never
+  // leaves config.json truncated/corrupted.
+  const tmpPath = `${CONFIG_PATH}.tmp`;
+  fs.writeFileSync(tmpPath, content, { mode: 0o600 });
+  fs.renameSync(tmpPath, CONFIG_PATH);
+  // Invalidate the read cache so callers immediately see the new value and
+  // concurrent writers don't clobber each other within the previous TTL window.
+  _configCache = undefined;
 }
 

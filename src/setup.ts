@@ -246,6 +246,7 @@ export async function runSetup(only?: SetupStep): Promise<void> {
   }
 
   const config: UserConfig = {
+    ...(existing ?? {}),
     telegramBotToken: token,
     allowedUsers,
     ...(model && { model }),

@@ -5,14 +5,11 @@
  * primary via grammY API methods, with automatic fallback to direct cURL HTTP multipart requests if API calls fail.
  */
 
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { InputFile } from 'grammy';
 import type { Api } from 'grammy';
 import { markdownToHtml } from './formatter.js';
 import { logger } from '../../utils/logger.js';
-
-const execAsync = promisify(exec);
 
 /** Supported media categories for Telegram outbound transmission */
 type MediaType =
@@ -73,6 +70,29 @@ const EXTENSION_TO_MEDIA_TYPE: Record<string, MediaType> = {
 function detectMediaType(filePath: string): MediaType {
   const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
   return EXTENSION_TO_MEDIA_TYPE[ext] ?? 'document';
+}
+
+/** Execute curl via argv array (no shell interprets the args), resolving with stdout. */
+function runCurl(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('curl', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (code: number | null) => {
+      if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(`curl exited with code ${code}: ${stderr || 'no stderr'}`));
+      }
+    });
+  });
 }
 
 /**
@@ -157,21 +177,19 @@ export function createTelegramSendMedia(
             auto: 'document',
           };
           const field = fieldMap[resolvedType] || 'document';
-          
-          let cmd = `curl -s -X POST "https://api.telegram.org/bot${token}/${method}"`;
+
+          const curlArgs: string[] = ['-s', '-X', 'POST', `https://api.telegram.org/bot${token}/${method}`];
           if (proxy) {
-            cmd += ` -x "${proxy}"`;
+            curlArgs.push('-x', proxy);
           }
-          cmd += ` -F "chat_id=${chatId}"`;
-          cmd += ` -F "${field}=@${filePath}"`;
+          curlArgs.push('-F', `chat_id=${chatId}`, '-F', `${field}=@${filePath}`);
           const supportsCaption: MediaType[] = ['photo', 'voice', 'audio', 'video', 'animation', 'document', 'auto'];
           if (caption && supportsCaption.includes(resolvedType)) {
-            cmd += ` -F "caption=${markdownToHtml(caption)}"`;
-            cmd += ` -F "parse_mode=HTML"`;
+            curlArgs.push('-F', `caption=${markdownToHtml(caption)}`, '-F', 'parse_mode=HTML');
           }
-          
+
           logger.info(`Executing curl fallback command`);
-          const { stdout } = await execAsync(cmd);
+          const stdout = await runCurl(curlArgs);
           const res = JSON.parse(stdout);
           if (res.ok) {
             logger.info(`Curl fallback delivered media successfully.`);
@@ -235,17 +253,19 @@ export function createTelegramSendMediaGroup(
               media: `attach://file${idx}`,
               ...(item.caption ? { caption: markdownToHtml(item.caption), parse_mode: 'HTML' } : {}),
             });
-            return `-F "${field}=${itemJson}" -F "file${idx}=@${item.filePath}"`;
+            return { args: ['-F', `${field}=${itemJson}`, '-F', `file${idx}=@${item.filePath}`] };
           });
-          let cmd = `curl -s -X POST "https://api.telegram.org/bot${token}/sendMediaGroup"`;
+          const curlArgs: string[] = ['-s', '-X', 'POST', `https://api.telegram.org/bot${token}/sendMediaGroup`];
           if (proxy) {
-            cmd += ` -x "${proxy}"`;
+            curlArgs.push('-x', proxy);
           }
-          cmd += ` -F "chat_id=${chatId}"`;
-          cmd += ` ${parts.join(' ')}`;
+          curlArgs.push('-F', `chat_id=${chatId}`);
+          for (const part of parts) {
+            curlArgs.push(...part.args);
+          }
 
           logger.info(`Executing curl fallback media group command`);
-          const { stdout } = await execAsync(cmd);
+          const stdout = await runCurl(curlArgs);
           const res = JSON.parse(stdout);
           if (res.ok) {
             logger.info(`Curl fallback delivered media group successfully.`);

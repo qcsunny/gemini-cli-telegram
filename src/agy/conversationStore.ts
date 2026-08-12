@@ -16,6 +16,7 @@ import { eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import { logger } from '../utils/logger.js';
 import { getAgyConversationsPath } from '../config/userConfig.js';
+import { deleteKnownConversation } from './messageStore.js';
 
 /**
  * Persisted entry structure mapping a Telegram chat ID to an agy conversation context.
@@ -172,13 +173,33 @@ export async function setConversation(
 
 /**
  * Delete the stored conversation for a chat (and optional topic) (e.g. on /reset).
+ * Also deletes the associated `messages` history rows so orphaned records
+ * (and the derived knownConversationIds set) do not grow unboundedly.
  */
 export async function deleteConversation(chatId: number, threadId?: number): Promise<void> {
   await migrateLegacyJsonIfNeeded();
   const db = getDb();
+  const chatIdStr = getSessionKey(chatId, threadId);
+
+  const existing = db
+    .select({ conversationId: schema.conversations.conversationId })
+    .from(schema.conversations)
+    .where(eq(schema.conversations.chatId, chatIdStr))
+    .get();
+  if (existing?.conversationId) {
+    try {
+      db.delete(schema.messages)
+        .where(eq(schema.messages.conversationId, existing.conversationId))
+        .run();
+      deleteKnownConversation(existing.conversationId);
+    } catch (e) {
+      logger.warn(`[conversationStore] Failed to delete history rows for conv ${existing.conversationId}: ${e}`);
+    }
+  }
+
   db.delete(schema.conversations)
-    .where(eq(schema.conversations.chatId, getSessionKey(chatId, threadId)))
+    .where(eq(schema.conversations.chatId, chatIdStr))
     .run();
 
-  logger.info(`[conversationStore] Deleted conversation for chatId=${getSessionKey(chatId, threadId)}`);
+  logger.info(`[conversationStore] Deleted conversation for chatId=${chatIdStr}`);
 }
