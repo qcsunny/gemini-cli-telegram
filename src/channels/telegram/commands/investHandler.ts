@@ -549,7 +549,7 @@ export function analyzeInvest(quote: StockQuote): InvestResult {
 
 // ── Rich-message rendering ──
 
-function buildInvestBlocks(result: InvestResult): Array<Record<string, any>> {
+export function buildInvestBlocks(result: InvestResult): Array<Record<string, any>> {
   const blocks: Array<Record<string, any>> = [
     {
       type: 'paragraph',

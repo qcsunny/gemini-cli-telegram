@@ -18,6 +18,7 @@ import { marketService } from '../../../stock/service/quote.js';
 import { marketCache } from '../../../stock/cache.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { buildStockBlocks, ensureQuoteFinancials, ensureQuotePerformance, ensureQuoteProfile } from './stockHandler.js';
+import { analyzeInvest, buildInvestBlocks } from './investHandler.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -43,6 +44,7 @@ interface PendingResult {
 export const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
 export const pendingStockRequests = new Map<string, { queryStr: string; webAppUrl: string }>();
+export const pendingInvestRequests = new Map<string, { symbol: string }>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
 
 interface RegenerateContext {
@@ -1129,6 +1131,33 @@ export function registerInlineHandler(
       targetProjectPath = targetProjectPath || activeSession?.currentProject?.path || defaultOptions.cwd;
     }
 
+    // Phase 4.5 Inline Mode: /invest <symbol> value-investing analysis card.
+    // Mirrors private-chat /invest: instant placeholder card → async quote +
+    // analyzeInvest scoring → in-place rich-message update on chosen result.
+    const investMatch = rawQuery.trim().match(/^\/invest\s+([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/i);
+    logger.info(`[InlineInvestCheck] rawQuery="${rawQuery}" match=${!!investMatch}`);
+    if (investMatch) {
+      const symbol = investMatch[1];
+      const resultId = `investreq-${Date.now()}-${fromId}`;
+      pendingInvestRequests.set(resultId, { symbol });
+      const card = {
+        type: 'article' as const,
+        id: resultId,
+        title: `⚖️ 价值投资分析: ${symbol}`,
+        description: `点击对 ${symbol} 进行六维度量化评分与深度价值投资分析`,
+        thumbnail_url: THUMBNAILS.sparkles,
+        input_message_content: {
+          rich_message: {
+            markdown: `⚖️ **正在分析 ${symbol}（value invest）...**\n\n*🚀 正在抓取行情与财务数据并计算六维度量化评分，请稍候...*`,
+          },
+        } as any,
+      };
+      await ctx.answerInlineQuery([card as any], { cache_time: 0, is_personal: true }).catch((e) => {
+        logger.error(`[InlineInvest] answerInlineQuery error: ${e}`);
+      });
+      return;
+    }
+
     // Phase 4 Inline Mode: Stock / Crypto Ticker ($NVDA, $英伟达, $600519, $BTC)
     // Instant 0ms placeholder popup card -> asynchronously loads quote & updates in-place via chosen_inline_result!
     const tickerMatch = rawQuery.trim().match(/^\$([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
@@ -1492,6 +1521,38 @@ export function registerInlineHandler(
             ],
           },
         } as any).catch((e: Error) => logger.warn(`[ChosenInlineStock] Edit message failed: ${e}`));
+      }
+      return;
+    }
+
+    const investReq = pendingInvestRequests.get(chosen.result_id);
+    if (investReq) {
+      pendingInvestRequests.delete(chosen.result_id);
+      logger.info(`[ChosenInlineInvest] Analyzing "${investReq.symbol}"`);
+      try {
+        const quote = await marketService.getQuote(investReq.symbol);
+        if (!quote) {
+          await ctx.api.raw.editMessageText({
+            inline_message_id: chosen.inline_message_id,
+            rich_message: { markdown: `⚠️ **Symbol not found:** ${investReq.symbol}\n\n请检查代码后重试。` },
+          } as any).catch(() => {});
+          return;
+        }
+        await ensureQuoteFinancials(quote);
+        await ensureQuotePerformance(quote);
+        await ensureQuoteProfile(quote);
+        const result = analyzeInvest(quote);
+        const blocks = buildInvestBlocks(result);
+        await ctx.api.raw.editMessageText({
+          inline_message_id: chosen.inline_message_id,
+          rich_message: { blocks },
+        } as any).catch((e: Error) => logger.warn(`[ChosenInlineInvest] Edit failed: ${e}`));
+      } catch (e) {
+        logger.warn(`[ChosenInlineInvest] Analysis failed for ${investReq.symbol}: ${e}`);
+        await ctx.api.raw.editMessageText({
+          inline_message_id: chosen.inline_message_id,
+          rich_message: { markdown: `${ICONS.error} **分析 ${investReq.symbol} 失败**：${(e as Error)?.message || e}` },
+        } as any).catch(() => {});
       }
       return;
     }

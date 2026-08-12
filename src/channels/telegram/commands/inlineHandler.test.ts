@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, pendingInvestRequests } from './inlineHandler.js';
 import { displayModelName } from '../../../core/modelRegistry.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
@@ -351,6 +351,57 @@ describe('registerInlineHandler', () => {
         }),
       ]),
       expect.objectContaining({ cache_time: 0 }),
+    );
+  });
+
+  it('should return invest analysis card for /invest <symbol> query', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/invest BTBT' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    expect(mockCtx.answerInlineQuery).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringMatching(/^investreq-/),
+          title: expect.stringContaining('价值投资分析'),
+          input_message_content: expect.objectContaining({
+            rich_message: expect.objectContaining({
+              markdown: expect.stringContaining('BTBT'),
+            }),
+          }),
+        }),
+      ]),
+      expect.objectContaining({ cache_time: 0, is_personal: true }),
+    );
+    // Registers a pending invest request keyed to the result id.
+    expect(pendingInvestRequests.size).toBeGreaterThan(0);
+  });
+
+  it('should treat lowercase /invest as an invest analysis query', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const mockCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/invest 600519' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+
+    await inlineQueryHandler!(mockCtx);
+
+    expect(mockCtx.answerInlineQuery).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringMatching(/^investreq-/),
+          title: expect.stringContaining('600519'),
+        }),
+      ]),
+      expect.objectContaining({ cache_time: 0, is_personal: true }),
     );
   });
 
