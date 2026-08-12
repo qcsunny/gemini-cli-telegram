@@ -61,6 +61,7 @@ export interface StockQuote {
   balanceSheets?: StockBalanceSheet[];
   /** Recent quarterly cash-flow statements, newest first. Filled alongside financials when available. */
   cashFlows?: StockCashFlow[];
+  fmpRateLimited?: boolean;
   /** Company main-business description (主营业务简介). Optional, shown when available. */
   profile?: string;
 }

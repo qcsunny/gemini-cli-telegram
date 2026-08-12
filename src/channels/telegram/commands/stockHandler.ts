@@ -447,9 +447,16 @@ export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuo
     } else {
       const apiKey = getStockMarketApiKey();
       if (!apiKey) return quote;
-      financials = await fetchRecentFinancials(quote.symbol, apiKey);
-      balanceSheets = await fetchRecentBalanceSheets(quote.symbol, apiKey);
-      cashFlows = await fetchRecentCashFlows(quote.symbol, apiKey);
+      try {
+        financials = await fetchRecentFinancials(quote.symbol, apiKey);
+        balanceSheets = await fetchRecentBalanceSheets(quote.symbol, apiKey);
+        cashFlows = await fetchRecentCashFlows(quote.symbol, apiKey);
+      } catch (err: any) {
+        if (err?.message?.includes('429')) quote.fmpRateLimited = true;
+      }
+      if (!financials && !balanceSheets) {
+        quote.fmpRateLimited = true;
+      }
     }
     if (financials && financials.length) quote.financials = financials;
     if (balanceSheets && balanceSheets.length) quote.balanceSheets = balanceSheets;
