@@ -107,7 +107,7 @@ async function get<T>(url: string, referer: string): Promise<T> {
 
 function num(v: unknown): number | null {
   if (typeof v !== 'string' && typeof v !== 'number') return null;
-  const n = parseFloat(String(v).replace(/,/g, '').trim());
+  const n = parseFloat(String(v).replace(/,/g, '').replace(/%/g, '').trim());
   return isFinite(n) ? n : null;
 }
 
@@ -383,7 +383,7 @@ export async function fetchFundInfo(code: string): Promise<FundInfo | null> {
 }
 
 export async function getFundDataset(symbol: string): Promise<FundDataset | null> {
-  const trimmed = symbol.trim().toUpperCase().replace(/^\$/, '');
+  const trimmed = symbol.trim().toUpperCase().replace(/^\$/, '').replace(/\.(OF|OFD|SH|SZ)$/i, '');
   const m = /^(SH|SZ)?(\d{6})$/i.exec(trimmed);
   if (!m) return null;
   const code = m[2]!;
