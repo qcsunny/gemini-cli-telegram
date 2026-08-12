@@ -349,26 +349,26 @@ export async function fetchFundInfo(code: string): Promise<FundInfo | null> {
     const j = (await res.json()) as { Datas?: Record<string, unknown> | null };
     const d = j.Datas;
     if (!d) return null;
-    const est = String(d.ESTABDATE ?? '').slice(0, 10);
-    const scaleYuan = Number(d.FEGM);
+    const est = String(d['ESTABDATE'] ?? '').slice(0, 10);
+    const scaleYuan = Number(d['FEGM']);
     return {
       code,
-      name: String(d.SHORTNAME ?? ''),
-      type: String(d.FTYPE ?? ''),
+      name: String(d['SHORTNAME'] ?? ''),
+      type: String(d['FTYPE'] ?? ''),
       establishedDate: /\d{4}-\d{2}-\d{2}/.test(est) ? est : null,
       scaleB: Number.isFinite(scaleYuan) && scaleYuan > 0 ? scaleYuan / 1e8 : null,
-      manager: String(d.JJJL ?? ''),
+      manager: String(d['JJJL'] ?? ''),
       managerTenure: null,
       returns: {
-        w1: num(d.SYL_Z),
-        m1: num(d.SYL_Y),
-        m3: num(d.SYL_3Y),
-        m6: num(d.SYL_6Y),
-        y1: num(d.SYL_1N),
-        y2: num(d.SYL_2N),
-        y3: num(d.SYL_3N),
-        ytd: num(d.SYL_JN),
-        sinceInception: num(d.SYL_LN),
+        w1: num(d['SYL_Z']),
+        m1: num(d['SYL_Y']),
+        m3: num(d['SYL_3Y']),
+        m6: num(d['SYL_6Y']),
+        y1: num(d['SYL_1N']),
+        y2: num(d['SYL_2N']),
+        y3: num(d['SYL_3N']),
+        ytd: num(d['SYL_JN']),
+        sinceInception: num(d['SYL_LN']),
       },
       managementFeePct: fees.managementFeePct,
       custodyFeePct: fees.custodyFeePct,
