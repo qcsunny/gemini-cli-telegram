@@ -91,6 +91,8 @@ const userConfigSchema = z.object({
   deepseekApiKey: z.string().optional(),
   /** API key for external stock market data provider (optional). */
   stockMarketApiKey: z.string().optional(),
+  /** API key for RapidAPI Yahoo Finance provider fallback (optional). */
+  rapidApiKey: z.string().optional(),
   /** HTTP health endpoint port (optional). If set, starts a /health HTTP server. */
   healthPort: z.number().optional(),
   /** Solidified project list (id/name/path/description). Kept in the local,
@@ -358,6 +360,11 @@ export function getDefaultModel(): string | null {
 /** Returns the configured stock market data API key (config.json "stockMarketApiKey"). Null when unset. */
 export function getStockMarketApiKey(): string | null {
   return loadUserConfig()?.stockMarketApiKey ?? null;
+}
+
+/** Returns the configured RapidAPI Key for Yahoo Finance API (config.json "rapidApiKey"). Null when unset. */
+export function getRapidApiKey(): string | null {
+  return loadUserConfig()?.rapidApiKey ?? null;
 }
 
 /**
