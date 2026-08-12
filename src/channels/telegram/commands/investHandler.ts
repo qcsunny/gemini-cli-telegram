@@ -668,6 +668,21 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
   ].filter(Boolean).join('\n');
 }
 
+function getInvestProjectPath(): string {
+  try {
+    const userConfig = loadUserConfig();
+    const investProj = userConfig?.projects?.find(
+      (p) => p.name === '价值投资分析专家' || p.path?.endsWith('value-invest-analysis')
+    );
+    if (investProj?.path) {
+      return investProj.path;
+    }
+  } catch (e) {
+    logger.warn(`Failed to resolve invest project path: ${e}`);
+  }
+  return process.cwd();
+}
+
 export function registerInvestHandler(
   bot: Bot,
   _sessionManager: SessionManager,
@@ -728,7 +743,7 @@ export function registerInvestHandler(
         const prompt = buildDeepReportPrompt(result, quote);
         const res = await runAgyPrint({
           prompt,
-          cwd: process.cwd(),
+          cwd: getInvestProjectPath(),
           model,
           proxy: loadUserConfig()?.proxy || undefined,
         });
