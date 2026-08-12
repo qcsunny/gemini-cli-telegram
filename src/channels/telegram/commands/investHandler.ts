@@ -38,6 +38,7 @@ import {
   ensureQuoteDividendYield,
   buildFinancialBlocks,
 } from './stockHandler.js';
+import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 
 // ── Dimension types ──
 
@@ -704,7 +705,21 @@ export function registerInvestHandler(
         quote.cashFlows,
         quote.currency,
       );
-      await ctx.api.sendRichMessage(ctx.chat.id, { blocks: [...blocks, ...finBlocks] as any });
+
+      const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
+      const detailUrl = `https://www.tradingview.com/symbols/${tvSymbol.replace(':', '-')}/`;
+      const chartUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
+
+      await ctx.api.sendRichMessage(ctx.chat.id, { blocks: [...blocks, ...finBlocks] as any }, {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '📊 查看详情', url: detailUrl },
+              { text: '📈 K线图', url: chartUrl }
+            ]
+          ]
+        }
+      });
 
       // Deep report via the model
       const model = getDefaultModel();
@@ -727,7 +742,7 @@ export function registerInvestHandler(
       }
     } catch (err) {
       logger.error(`Failed to handle /invest command for ${symbol}: ${err}`);
-      await ctx.reply(`${ICONS.error} <b>Error running invest analysis for ${symbol}</b>`);
+      await ctx.reply(`${ICONS.error} <b>Error running invest analysis for ${symbol}</b>: ${(err as Error)?.message || err}`);
     }
   });
 }

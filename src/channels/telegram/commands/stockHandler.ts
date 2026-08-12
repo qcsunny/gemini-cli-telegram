@@ -485,8 +485,8 @@ export function registerStockHandler(
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '📊 查看详情', web_app: { url: detailUrl } },
-              { text: '📈 K线图', web_app: { url: chartUrl } }
+              { text: '📊 查看详情', url: detailUrl },
+              { text: '📈 K线图', url: chartUrl }
             ]
           ]
         }
