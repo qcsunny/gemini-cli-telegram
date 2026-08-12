@@ -19,6 +19,8 @@ import { getDbPath } from '../config/userConfig.js';
 
 let dbInstance: BetterSQLite3Database<typeof schema> | null = null;
 let sqliteDb: InstanceType<typeof Database> | null = null;
+/** Path of the DB file the cached connection is bound to (for path-aware reconnect). */
+let dbInstancePath: string | null = null;
 
 /** Current schema revision embedded in SQLite PRAGMA user_version. */
 const SCHEMA_VERSION = 3;
@@ -55,13 +57,27 @@ function getDefaultDbPath(): string {
 /**
  * Get or initialize the Drizzle ORM database instance.
  * Accepts optional custom file path or in-memory sqlite instance string (e.g. ':memory:') for tests.
+ *
+ * The connection is cached per database path. If the config-driven default path
+ * changes after a SIGHUP (clearConfigCache), the cached connection is closed and
+ * reopened against the new path automatically.
  */
 export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
-  if (dbInstance && !dbPath) {
+  const targetPath = dbPath || getDefaultDbPath();
+  // Reuse the cached connection only while it points at the same target path.
+  if (dbInstance && sqliteDb && dbInstancePath === targetPath) {
     return dbInstance;
   }
-
-  const targetPath = dbPath || getDefaultDbPath();
+  // Path changed (e.g. config reloaded → new db path): drop stale connection.
+  if (sqliteDb) {
+    try {
+      sqliteDb.close();
+    } catch (e) {
+      logger.warn(`[db] Error closing stale database connection: ${e}`);
+    }
+    sqliteDb = null;
+    dbInstance = null;
+  }
   let sqlite: InstanceType<typeof Database>;
   try {
     sqlite = new Database(targetPath);
@@ -193,6 +209,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   if (!dbPath) {
     sqliteDb = sqlite;
     dbInstance = instance;
+    dbInstancePath = targetPath;
   }
 
   logger.debug(`[db] Initialized SQLite database at ${targetPath}`);
@@ -211,6 +228,10 @@ export function closeDb(): void {
     }
     sqliteDb = null;
     dbInstance = null;
+    dbInstancePath = null;
+  } else {
+    dbInstance = null;
+    dbInstancePath = null;
   }
 }
 

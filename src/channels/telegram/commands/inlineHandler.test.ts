@@ -444,7 +444,9 @@ describe('registerInlineHandler', () => {
       expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
         expect.objectContaining({
           inline_message_id: 'test_inline_msg_id_123',
-          text: expect.stringContaining('Generation stopped'),
+          rich_message: expect.objectContaining({
+            markdown: expect.stringContaining('生成已被手动停止'),
+          }),
         }),
       );
     } finally {

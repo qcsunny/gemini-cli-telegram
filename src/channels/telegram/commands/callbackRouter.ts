@@ -212,7 +212,7 @@ export function registerCallbackRouter(
 
     if (data === '/save') {
       ctx.answerCallbackQuery('Saving latest response...').catch(e => logger.error(`Failed callback: ${e}`));
-      const lastContext = messageCache.getLastReplyContext();
+      const lastContext = messageCache.getLastReplyContextForChat(chatId);
       if (!lastContext || (!lastContext.answerMarkdown.trim() && !lastContext.thinkingMarkdown.trim())) {
         // Fallback: try loading from DB (survives restart)
         const session = sessionManager.getSession(chatId, threadId);

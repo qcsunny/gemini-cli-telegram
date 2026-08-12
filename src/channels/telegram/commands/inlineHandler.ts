@@ -1709,14 +1709,27 @@ async function runInlineGeneration(
     }
   } else {
     const wasStopped = ctrl.signal.aborted;
+    const isTimeoutErr = result?.isTimeout;
     const displayPrompt = prompt.length > 200 ? prompt.slice(0, 200) + '...' : prompt;
-    const failText = wasStopped
-      ? `<b>💬 Question:</b> ${escapeHtmlText(displayPrompt)}\n\n⏹ <b>Generation stopped</b>\nTask was manually stopped.`
-      : `<b>💬 Question:</b> ${escapeHtmlText(displayPrompt)}\n\n⚠️ <b>Failed to generate answer</b>\nThe model returned no valid text output, please retry.`;
+
+    let reasonText: string;
+    if (wasStopped) {
+      reasonText = '⏹ **生成已被手动停止**';
+    } else if (isTimeoutErr) {
+      reasonText = '⏱️ **响应超时**\n后端模型装载或网络代理建立连接超时，请稍后重试。';
+    } else {
+      reasonText = '⚠️ **未能生成有效回答**\n模型通道未返回有效文本（可能是 API 配额受限或网络断开）。';
+    }
+
+    const failMarkdown = `**💬 问题：** ${displayPrompt}\n\n${reasonText}\n\n*💡 提示：您可以点击下方按钮重新尝试。*`;
     await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
-      text: failText,
-      parse_mode: 'HTML',
+      rich_message: { markdown: failMarkdown },
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }
+        ]],
+      },
     } as any).catch(() => {});
   }
 }

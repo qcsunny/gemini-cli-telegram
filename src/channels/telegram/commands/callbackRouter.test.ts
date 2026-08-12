@@ -26,6 +26,7 @@ vi.mock('../../../core/modelRegistry.js', () => ({
 vi.mock('../../../utils/messageCache.js', () => ({
   messageCache: {
     getLastReplyContext: vi.fn().mockReturnValue(null),
+    getLastReplyContextForChat: vi.fn().mockReturnValue(null),
   },
 }));
 vi.mock('../../../core/messageLoop.js', () => ({ processMessage: vi.fn() }));

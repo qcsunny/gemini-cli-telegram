@@ -7,7 +7,7 @@
 
 import { logger } from '../utils/logger.js';
 import { getDb, schema } from '../db/index.js';
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 
 // ── Backend Health Tracker ──────────────────────────────────────────────────
 
@@ -20,6 +20,16 @@ const backendHealth = new Map<string, BackendHealth>();
 const COOLDOWN_INITIAL_MS = 30_000;   // 30 seconds
 const COOLDOWN_MAX_MS = 300_000;      // 5 minutes
 
+/**
+ * Runtime state DB key prefix for backend health rows.
+ * Each channel is persisted as its own row (key = `${STORAGE_KEY_PREFIX}${channel}`)
+ * so concurrent instances can update only the channels they care about without
+ * clobbering the others' state.
+ */
+const STORAGE_KEY_PREFIX = 'backend_health:';
+
+/** Tracks which storage keys were last persisted, for incremental writes. */
+const lastPersistedKeys = new Set<string>();
 let isLoaded = false;
 
 function loadFromDbIfNeeded(): void {
@@ -27,11 +37,39 @@ function loadFromDbIfNeeded(): void {
   isLoaded = true;
   try {
     const db = getDb();
-    const row = db.select().from(schema.runtimeStates).where(eq(schema.runtimeStates.key, 'backend_health')).get();
-    if (row?.value) {
-      const data = JSON.parse(row.value);
-      for (const [k, v] of Object.entries(data)) {
-        backendHealth.set(k, v as BackendHealth);
+    // New format: one row per channel, keyed `backend_health:<channel>`.
+    const rows = db.select()
+      .from(schema.runtimeStates)
+      .where(like(schema.runtimeStates.key, `${STORAGE_KEY_PREFIX}%`))
+      .all();
+    for (const row of rows) {
+      const channel = row.key.slice(STORAGE_KEY_PREFIX.length);
+      try {
+        backendHealth.set(channel, JSON.parse(row.value) as BackendHealth);
+        lastPersistedKeys.add(row.key);
+      } catch {
+        // skip malformed rows
+      }
+    }
+    // Backwards-compatible load: a legacy single row whose whole map was
+    // JSON-serialized under the "backend_health" key (pre-incremental format).
+    const legacy = db.select()
+      .from(schema.runtimeStates)
+      .where(eq(schema.runtimeStates.key, STORAGE_KEY_PREFIX.slice(0, -1)))
+      .get();
+    if (legacy?.value) {
+      try {
+        const data = JSON.parse(legacy.value) as Record<string, BackendHealth>;
+        for (const [k, v] of Object.entries(data)) {
+          backendHealth.set(k, v);
+          lastPersistedKeys.add(STORAGE_KEY_PREFIX + k);
+        }
+        // Drop the legacy row; the per-channel rows persist from now on.
+        db.delete(schema.runtimeStates)
+          .where(eq(schema.runtimeStates.key, STORAGE_KEY_PREFIX.slice(0, -1)))
+          .run();
+      } catch {
+        // ignore malformed legacy payload
       }
     }
   } catch (err) {
@@ -42,23 +80,44 @@ function loadFromDbIfNeeded(): void {
 function saveToDb(): void {
   try {
     const db = getDb();
-    const data = Object.fromEntries(backendHealth.entries());
-    db.insert(schema.runtimeStates)
-      .values({
-        key: 'backend_health',
-        value: JSON.stringify(data),
-        updatedAt: new Date().toISOString(),
-      })
-      .onConflictDoUpdate({
-        target: schema.runtimeStates.key,
-        set: {
-          value: JSON.stringify(data),
-          updatedAt: new Date().toISOString(),
-        },
-      })
-      .run();
+    const nowStr = new Date().toISOString();
+
+    // Incremental persistence: only upsert channels whose state changed since
+    // the last save, so concurrent instances never clobber each other's rows.
+    for (const [channel, value] of backendHealth.entries()) {
+      const storageKey = STORAGE_KEY_PREFIX + channel;
+      if (!lastPersistedKeys.has(storageKey)) {
+        const valueStr = JSON.stringify(value);
+        db.insert(schema.runtimeStates)
+          .values({
+            key: storageKey,
+            value: valueStr,
+            updatedAt: nowStr,
+          })
+          .onConflictDoUpdate({
+            target: schema.runtimeStates.key,
+            set: {
+              value: valueStr,
+              updatedAt: nowStr,
+            },
+          })
+          .run();
+        lastPersistedKeys.add(storageKey);
+      }
+    }
+
+    // Clean up DB rows for channels that no longer exist in memory.
+    for (const storageKey of lastPersistedKeys) {
+      const channel = storageKey.slice(STORAGE_KEY_PREFIX.length);
+      if (!backendHealth.has(channel)) {
+        db.delete(schema.runtimeStates)
+          .where(eq(schema.runtimeStates.key, storageKey))
+          .run();
+        lastPersistedKeys.delete(storageKey);
+      }
+    }
   } catch (err) {
-    logger.warn(`[BackendHealth] Failed to save backend health to db: ${err}`);
+    logger.warn(`[BackendHealth] Failed to persist backend health to db: ${err}`);
   }
 }
 
@@ -114,14 +173,25 @@ export function markBackendHealthy(channel: string | null): void {
 export function clearBackendHealth(): void {
   backendHealth.clear();
   isLoaded = true; // prevent loading after clear
+  let db: ReturnType<typeof getDb> | null = null;
   try {
-    const db = getDb();
-    db.delete(schema.runtimeStates)
-      .where(eq(schema.runtimeStates.key, 'backend_health'))
-      .run();
-  } catch (err) {
-    // ignore
+    db = getDb();
+  } catch {
+    db = null;
   }
+  if (db) {
+    try {
+      // Delete the persisted rows for every tracked key.
+      for (const storageKey of lastPersistedKeys) {
+        db.delete(schema.runtimeStates)
+          .where(eq(schema.runtimeStates.key, storageKey))
+          .run();
+      }
+    } catch (err) {
+      // ignore
+    }
+  }
+  lastPersistedKeys.clear();
 }
 
 

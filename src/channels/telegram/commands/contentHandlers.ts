@@ -81,7 +81,7 @@ export function registerContentHandlers(
         }
       } else {
         // Option B: Auto-save latest AI response in session
-        let lastContext: ReplyContext | null = messageCache.getLastReplyContext();
+        let lastContext: ReplyContext | null = messageCache.getLastReplyContextForChat(chatId);
         if (!lastContext) {
           // If cache missed, try loading the most recent output from database for this chat
           try {

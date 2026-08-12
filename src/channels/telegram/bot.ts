@@ -1176,7 +1176,7 @@ export class TelegramBot {
 
       try {
         // Record current cache state before iteration
-        const prevContext = messageCache.getLastReplyContext();
+        const prevContext = messageCache.getLastReplyContextForChat(chatId);
 
         await processMessage(
           session,
@@ -1186,7 +1186,7 @@ export class TelegramBot {
         );
 
         // Fetch fresh context after this iteration
-        const currentContext = messageCache.getLastReplyContext();
+        const currentContext = messageCache.getLastReplyContextForChat(chatId);
         if (currentContext && currentContext !== prevContext) {
           const fullText = currentContext.answerMarkdown;
           if (fullText.includes('AUTOPILOT_COMPLETE') || fullText.includes('AUTOPILOT_STOP')) {
