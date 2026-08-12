@@ -39,6 +39,8 @@ import {
   buildFinancialBlocks,
 } from './stockHandler.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
+import { getFundDataset, type FundDataset } from '../../../stock/provider/fund.js';
+import { analyzeFund, type FundAnalysisResult } from '../../../stock/analyzer/fundAnalyzer.js';
 
 // ── Dimension types ──
 
@@ -681,6 +683,91 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
   ].filter(Boolean).join('\n');
 }
 
+function buildFundBlocks(result: FundAnalysisResult, ds: FundDataset): Array<Record<string, any>> {
+  const info = ds.info;
+  const blocks: Array<Record<string, any>> = [];
+
+  const dimText = result.dimensions
+    .map((d) => `• **${d.name}** (${d.score}分 - 权重${(d.weight * 100).toFixed(0)}%)\n  ${d.notes.join('；')}`)
+    .join('\n\n');
+
+  blocks.push({
+    type: 'paragraph',
+    text: [
+      { type: 'bold', text: [`🏦 基金/ETF 评价：${result.name} (${ds.symbol})`] },
+      `\n类型：${result.type} | 评级：`,
+      { type: 'bold', text: [`${result.rating} (${result.grade})`] },
+      ` | 综合得分：`,
+      { type: 'bold', text: [`${result.totalScore.toFixed(1)}/100`] },
+      `\n\n成立日期：${info?.establishedDate || '未知'} | 规模：${info?.scaleB ? info.scaleB.toFixed(2) + ' 亿元' : '未知'}\n基金经理：${info?.manager || '未知'}${info?.managerTenure ? ` (任期 ${info.managerTenure.days} 天，任职回报 ${info.managerTenure.returnPct != null ? (info.managerTenure.returnPct >= 0 ? '+' : '') + info.managerTenure.returnPct.toFixed(2) + '%' : '--'})` : ''}\n费率：管理费 ${info?.managementFeePct != null ? info.managementFeePct + '%' : '--'} / 托管费 ${info?.custodyFeePct != null ? info.custodyFeePct + '%' : '--'}`,
+      result.redFlags.length ? `\n\n⚠️ **关注风险**：${result.redFlags.join('；')}` : '',
+    ],
+  });
+
+  blocks.push({
+    type: 'details',
+    summary: { type: 'bold', text: ['📊 七维规则引擎量化打分明细'] },
+    blocks: [{ type: 'paragraph', text: [dimText] }],
+  });
+
+  if (ds.topHoldings?.length) {
+    const rows: Array<Array<Record<string, any>>> = [
+      [
+        { text: { type: 'bold', text: ['股票名称'] }, align: 'center' },
+        { text: { type: 'bold', text: ['代码'] }, align: 'center' },
+        { text: { type: 'bold', text: ['占净值比'] }, align: 'center' },
+      ],
+    ];
+    for (const h of ds.topHoldings.slice(0, 10)) {
+      rows.push([
+        { text: h.stockName, align: 'center' },
+        { text: h.stockCode, align: 'center' },
+        { text: `${h.ratioPct != null ? h.ratioPct.toFixed(2) + '%' : '--'}`, align: 'center' },
+      ]);
+    }
+    blocks.push({
+      type: 'details',
+      summary: { type: 'bold', text: [`📋 前 10 大重仓持仓明细（最新季报）`] },
+      blocks: [{ type: 'table', cells: rows, is_bordered: true, is_striped: true }],
+    });
+  }
+
+  return blocks;
+}
+
+function buildFundDeepReportPrompt(result: FundAnalysisResult, ds: FundDataset): string {
+  const info = ds.info;
+  const dimDetails = result.dimensions
+    .map((d) => `- ${d.name} ${d.score}/100：${d.notes.join('；')}`)
+    .join('\n');
+  const holdingsText = ds.topHoldings.length
+    ? ds.topHoldings.slice(0, 10).map((h) => `${h.stockName}(${h.stockCode}): ${h.ratioPct}%`).join('，')
+    : '无/未公开';
+
+  return [
+    `请对基金 ${result.name}（代码 ${ds.symbol}，类型 ${result.type}）做一份专业的基金深度价值投资诊断报告。`,
+    '',
+    '## 已计算的七维度量化评分',
+    dimDetails,
+    `综合评分 ${result.totalScore.toFixed(1)}/100，评级「${result.rating}」（${result.grade}）。`,
+    result.redFlags.length ? `关注风险：${result.redFlags.join('；')}` : '',
+    '',
+    '## 抓取的基金确定性基本面数据',
+    `成立日期：${info?.establishedDate || '未知'}`,
+    `最新规模：${info?.scaleB ? info.scaleB.toFixed(2) + ' 亿元' : '未知'}`,
+    `现任经理：${info?.manager || '未知'}${info?.managerTenure ? `（任期 ${info.managerTenure.days} 天，任职回报 ${info.managerTenure.returnPct != null ? info.managerTenure.returnPct.toFixed(2) + '%' : '--'}）` : ''}`,
+    `官方区间收益率：近1月 ${info?.returns.m1 != null ? info.returns.m1 + '%' : '--'}，近3月 ${info?.returns.m3 != null ? info.returns.m3 + '%' : '--'}，近6月 ${info?.returns.m6 != null ? info.returns.m6 + '%' : '--'}，近1年 ${info?.returns.y1 != null ? info.returns.y1 + '%' : '--'}，近3年 ${info?.returns.y3 != null ? info.returns.y3 + '%' : '--'}`,
+    `同类排名：${ds.peerRank ? `近1年同类名次 ${ds.peerRank.rank}/${ds.peerRank.total}（前 ${ds.peerRank.percentilePct}%）` : '未知'}`,
+    `费率：管理费 ${info?.managementFeePct != null ? info.managementFeePct + '%' : '--'} / 托管费 ${info?.custodyFeePct != null ? info.custodyFeePct + '%' : '--'}`,
+    `前10大重仓持仓：${holdingsText}`,
+    '',
+    '## 报告要求',
+    '1. 用中文输出，Markdown 格式。',
+    '2. 结构：基金概览与定位 → 投资策略与经理风格 → 收益与风险风控评估（夏普/回撤） → 持仓集中度与重仓股穿透分析 → 规模与费率合理性 → 综合诊断结论与配置建议。',
+    '3. 结合七维度量化评分与确定性抓取的数据给出明确结论（强烈看多/看多/中性/看空/强烈看空），并提示风险。',
+  ].join('\n');
+}
+
 function getInvestProjectPath(): string {
   try {
     const userConfig = loadUserConfig();
@@ -707,13 +794,42 @@ export function registerInvestHandler(
 
     if (!symbol) {
       await ctx.reply(
-        `${ICONS.info} <b>Invest Usage:</b>\n\n<code>/invest NVDA</code>\n<code>/invest 600519</code>\n<code>/invest 00700</code>`,
+        `${ICONS.info} <b>Invest Usage:</b>\n\n<code>/invest NVDA</code>\n<code>/invest 600519</code>\n<code>/invest 005827</code>`,
         { parse_mode: 'HTML' }
       );
       return;
     }
 
     try {
+      // 1. Check if symbol is a Fund / ETF (e.g. 005827, 012708, sh510300)
+      const fundDataset = await getFundDataset(symbol);
+      if (fundDataset && (fundDataset.info || fundDataset.nav.length > 0)) {
+        const fundResult = analyzeFund(fundDataset);
+        const fundBlocks = buildFundBlocks(fundResult, fundDataset);
+        await ctx.api.sendRichMessage(ctx.chat.id, { blocks: fundBlocks as any });
+
+        const model = getDefaultModel();
+        if (model) {
+          await ctx.reply(`${ICONS.thinking} 正在基于 7 维度框架生成基金深度分析报告…`);
+          const prompt = buildFundDeepReportPrompt(fundResult, fundDataset);
+          const res = await runAgyPrint({
+            prompt,
+            cwd: getInvestProjectPath(),
+            model,
+            proxy: loadUserConfig()?.proxy || undefined,
+          });
+          if (res.exitCode === 0 && res.output) {
+            await ctx.api.sendRichMessage(ctx.chat.id, {
+              markdown: res.output,
+            });
+          } else {
+            await ctx.reply(`${ICONS.warning} 基金深度报告生成失败（exit ${res.exitCode}）`);
+          }
+        }
+        return;
+      }
+
+      // 2. Stock / Market Quote Analysis Pathway
       const quote = await marketService.getQuote(symbol);
       if (!quote) {
         await ctx.reply(`${ICONS.warning} ⚠️ <b>Symbol not found:</b> ${symbol}\n\nPlease check the symbol and try again.`);
