@@ -643,6 +643,16 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
     pick(quote.low52, '52周最低'),
   ].filter(Boolean);
 
+  const annuals = (quote.financials ?? []).filter((f) => f.isAnnual || f.date.endsWith('-12-31')).slice(0, 5);
+  const annualSummary = annuals.length
+    ? annuals
+        .map(
+          (a) =>
+            `- ${a.date} (${a.period})：营收 ${fmtAmount(a.revenue)} | 净利 ${fmtAmount(a.netIncome)} | 毛利率 ${a.grossMargin != null ? a.grossMargin.toFixed(1) + '%' : '--'} | ROE ${a.roe != null ? a.roe.toFixed(1) + '%' : '--'}`
+        )
+        .join('\n')
+    : '无（请主动联网搜寻补齐近 5 年年报数据）';
+
   return [
     `请对股票 ${quote.name}（${quote.symbol}，市场 ${quote.market}）做一份专业的价值投资深度分析报告。`,
     '',
@@ -658,13 +668,16 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
     quoteParts.length ? quoteParts.join('，') : '',
     quote.profile ? `公司简介：${quote.profile.slice(0, 500)}` : '',
     '',
+    '## 抓取的近 5 年年度财报历史趋势（确定性数据）',
+    annualSummary,
+    '',
     '## 报告要求',
     '1. 用中文输出，Markdown 格式。',
-    '2. 结构：公司概览 → 商业模式与护城河 → 盈利质量 → 成长驱动 → 财务健康与风险 → 估值判断 → 投资结论与建议。',
-    '3. 结合量化评分给出明确结论（强烈看多/看多/中性/看空/强烈看空），并给出关键风险提示。',
-    '4. 上述字段若标注缺失，多半是数据抓取失败，不代表公司没有该数据。',
-    '5. 对缺失的关键字段（如短期借款/长期借款/资产负债率、经营现金流等），请主动调用工具或联网搜索补齐真实数值，并把补齐结果写进报告；只有实在无法获取时才标注为缺失，不要编造数据。',
-    '6. 明确区分「我拿到的数据」和「你联网补齐的数据」，并在报告里注明信息来源。',
+    '2. 结构：公司概览 → 商业模式与护城河 → 盈利质量与5年趋势 → 成长驱动 → 财务健康与风险 → 估值判断 → 投资结论与建议。',
+    '3. 结合量化评分与近 5 年年度财报数据给出明确结论（强烈看多/看多/中性/看空/强烈看空），并给出关键风险提示。',
+    '4. 上述字段若标注缺失，多半是接口限制，不代表公司没有该数据。',
+    '5. 对缺失的关键历史字段或需深度延伸的指标，请主动调用工具或联网搜索补齐 5 年历史真实数值，并把补齐结果写进报告；不要编造数据。',
+    '6. 明确区分「确定性数据」和「联网补齐的数据」，并在报告里注明信息来源。',
   ].filter(Boolean).join('\n');
 }
 

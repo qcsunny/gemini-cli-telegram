@@ -19,51 +19,59 @@ function cleanDate(d: string): string {
 
 /** A-share 业绩报表 (RPT_LICO_FN_CPD) → StockFinancial. Field names are A-share specific. */
 function toAStockFinancials(rows: RawFinancialRow[]): StockFinancial[] {
-  return rows.map((row) => ({
-    date: cleanDate(String(row['REPORTDATE'] ?? '')),
-    filingDate: undefined,
-    period: String(row['QDATE'] ?? ''),
-    revenue: num(row, 'TOTAL_OPERATE_INCOME') ?? 0,
-    grossProfit: undefined,
-    operatingIncome: undefined,
-    netIncome: num(row, 'PARENT_NETPROFIT') ?? 0,
-    epsDiluted: num(row, 'BASIC_EPS') ?? undefined,
-    revenueYoY: num(row, 'YSTZ') ?? undefined,
-    revenueQoQ: num(row, 'YSHZ') ?? undefined,
-    netIncomeYoY: num(row, 'SJLTZ') ?? undefined,
-    netIncomeQoQ: num(row, 'SJLHZ') ?? undefined,
-    grossMargin: num(row, 'XSMLL') ?? undefined,
-    netMargin: num(row, 'XSJLL') ?? (num(row, 'PARENT_NETPROFIT') && num(row, 'TOTAL_OPERATE_INCOME') ? (num(row, 'PARENT_NETPROFIT')! / num(row, 'TOTAL_OPERATE_INCOME')!) * 100 : undefined),
-    roe: num(row, 'WEIGHTAVG_ROE') ?? num(row, 'ROE_WEIGHT') ?? num(row, 'ROE') ?? undefined,
-    bps: num(row, 'BPS') ?? undefined,
-    eps: num(row, 'BASIC_EPS') ?? undefined,
-    currency: undefined,
-  }));
+  return rows.map((row) => {
+    const d = cleanDate(String(row['REPORTDATE'] ?? ''));
+    return {
+      date: d,
+      filingDate: undefined,
+      period: String(row['QDATE'] ?? ''),
+      revenue: num(row, 'TOTAL_OPERATE_INCOME') ?? 0,
+      grossProfit: undefined,
+      operatingIncome: undefined,
+      netIncome: num(row, 'PARENT_NETPROFIT') ?? 0,
+      epsDiluted: num(row, 'BASIC_EPS') ?? undefined,
+      revenueYoY: num(row, 'YSTZ') ?? undefined,
+      revenueQoQ: num(row, 'YSHZ') ?? undefined,
+      netIncomeYoY: num(row, 'SJLTZ') ?? undefined,
+      netIncomeQoQ: num(row, 'SJLHZ') ?? undefined,
+      grossMargin: num(row, 'XSMLL') ?? undefined,
+      netMargin: num(row, 'XSJLL') ?? (num(row, 'PARENT_NETPROFIT') && num(row, 'TOTAL_OPERATE_INCOME') ? (num(row, 'PARENT_NETPROFIT')! / num(row, 'TOTAL_OPERATE_INCOME')!) * 100 : undefined),
+      roe: num(row, 'WEIGHTAVG_ROE') ?? num(row, 'ROE_WEIGHT') ?? num(row, 'ROE') ?? undefined,
+      bps: num(row, 'BPS') ?? undefined,
+      eps: num(row, 'BASIC_EPS') ?? undefined,
+      currency: undefined,
+      isAnnual: d.endsWith('-12-31'),
+    };
+  });
 }
 
 /** HK-stock 主要指标 (RPT_HKF10_FN_MAININDICATOR) → StockFinancial. Field names are HK specific. */
 function toHKFinancials(rows: RawFinancialRow[]): StockFinancial[] {
-  return rows.map((row) => ({
-    date: cleanDate(String(row['STD_REPORT_DATE'] ?? row['REPORT_DATE'] ?? '')),
-    filingDate: undefined,
-    period: String(row['REPORT_TYPE'] ?? ''),
-    revenue: num(row, 'OPERATE_INCOME') ?? 0,
-    grossProfit: num(row, 'GROSS_PROFIT') ?? undefined,
-    operatingIncome: num(row, 'OPERATE_PROFIT') ?? undefined,
-    netIncome: num(row, 'HOLDER_PROFIT') ?? 0,
-    epsDiluted: num(row, 'DILUTED_EPS') ?? undefined,
-    revenueYoY: num(row, 'OPERATE_INCOME_YOY') ?? undefined,
-    revenueQoQ: num(row, 'OPERATE_INCOME_QOQ') ?? undefined,
-    netIncomeYoY: num(row, 'HOLDER_PROFIT_YOY') ?? undefined,
-    netIncomeQoQ: num(row, 'HOLDER_PROFIT_QOQ') ?? undefined,
-    grossMargin: num(row, 'GROSS_PROFIT_RATIO') ?? undefined,
-    netMargin: num(row, 'NET_PROFIT_RATIO') ?? (num(row, 'HOLDER_PROFIT') && num(row, 'OPERATE_INCOME') ? (num(row, 'HOLDER_PROFIT')! / num(row, 'OPERATE_INCOME')!) * 100 : undefined),
-    roe: num(row, 'ROE_AVG') ?? num(row, 'ROE_YEARLY') ?? undefined,
-    bps: num(row, 'BPS') ?? undefined,
-    eps: num(row, 'BASIC_EPS') ?? undefined,
-    incomeBeforeTax: num(row, 'PRETAX_PROFIT') ?? undefined,
-    currency: undefined,
-  }));
+  return rows.map((row) => {
+    const d = cleanDate(String(row['STD_REPORT_DATE'] ?? row['REPORT_DATE'] ?? ''));
+    return {
+      date: d,
+      filingDate: undefined,
+      period: String(row['REPORT_TYPE'] ?? ''),
+      revenue: num(row, 'OPERATE_INCOME') ?? 0,
+      grossProfit: num(row, 'GROSS_PROFIT') ?? undefined,
+      operatingIncome: num(row, 'OPERATE_PROFIT') ?? undefined,
+      netIncome: num(row, 'HOLDER_PROFIT') ?? 0,
+      epsDiluted: num(row, 'DILUTED_EPS') ?? undefined,
+      revenueYoY: num(row, 'OPERATE_INCOME_YOY') ?? undefined,
+      revenueQoQ: num(row, 'OPERATE_INCOME_QOQ') ?? undefined,
+      netIncomeYoY: num(row, 'HOLDER_PROFIT_YOY') ?? undefined,
+      netIncomeQoQ: num(row, 'HOLDER_PROFIT_QOQ') ?? undefined,
+      grossMargin: num(row, 'GROSS_PROFIT_RATIO') ?? undefined,
+      netMargin: num(row, 'NET_PROFIT_RATIO') ?? (num(row, 'HOLDER_PROFIT') && num(row, 'OPERATE_INCOME') ? (num(row, 'HOLDER_PROFIT')! / num(row, 'OPERATE_INCOME')!) * 100 : undefined),
+      roe: num(row, 'ROE_AVG') ?? num(row, 'ROE_YEARLY') ?? undefined,
+      bps: num(row, 'BPS') ?? undefined,
+      eps: num(row, 'BASIC_EPS') ?? undefined,
+      incomeBeforeTax: num(row, 'PRETAX_PROFIT') ?? undefined,
+      currency: undefined,
+      isAnnual: d.endsWith('-12-31'),
+    };
+  });
 }
 
 async function fetchRows(params: URLSearchParams): Promise<RawFinancialRow[]> {
@@ -98,7 +106,7 @@ export async function fetchAStockFinancials(symbol: string): Promise<StockFinanc
   const params = new URLSearchParams({
     sortColumns: 'REPORTDATE',
     sortTypes: '-1',
-    pageSize: '4',
+    pageSize: '20',
     pageNumber: '1',
     reportName: 'RPT_LICO_FN_CPD',
     columns: 'ALL',
@@ -113,7 +121,7 @@ export async function fetchAStockFinancials(symbol: string): Promise<StockFinanc
     new URLSearchParams({
       sortColumns: 'REPORT_DATE',
       sortTypes: '-1',
-      pageSize: '4',
+      pageSize: '20',
       pageNumber: '1',
       reportName: 'RPT_F10_FINANCE_GINCOME',
       columns: 'ALL',
@@ -148,7 +156,7 @@ export async function fetchHKFinancials(symbol: string): Promise<StockFinancial[
   const params = new URLSearchParams({
     sortColumns: 'STD_REPORT_DATE',
     sortTypes: '-1',
-    pageSize: '4',
+    pageSize: '20',
     pageNumber: '1',
     reportName: 'RPT_HKF10_FN_MAININDICATOR',
     columns: 'ALL',
@@ -212,7 +220,7 @@ export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceS
   const params = new URLSearchParams({
     sortColumns: 'REPORT_DATE',
     sortTypes: '-1',
-    pageSize: '4',
+    pageSize: '20',
     pageNumber: '1',
     reportName: 'RPT_F10_FINANCE_GBALANCE',
     columns: 'ALL',
@@ -229,8 +237,9 @@ export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceS
       const totalAssets = num(row, 'TOTAL_ASSETS');
       const totalLiabilities = num(row, 'TOTAL_LIABILITIES');
       if (totalAssets === null || totalLiabilities === null) return null;
+      const d = cleanDate(String(row['REPORT_DATE'] ?? ''));
       return {
-        date: cleanDate(String(row['REPORT_DATE'] ?? '')),
+        date: d,
         totalAssets,
         totalLiabilities,
         netAssets: totalAssets - totalLiabilities,
@@ -245,6 +254,7 @@ export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceS
         longTermDebt: num(row, 'LONG_LOAN') ?? undefined,
         debtRatio: totalLiabilities && totalAssets ? (totalLiabilities / totalAssets) * 100 : null,
         currency: 'CNY',
+        isAnnual: d.endsWith('-12-31'),
       };
     })
     .filter((b): b is StockBalanceSheet => b !== null);

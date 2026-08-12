@@ -117,6 +117,8 @@ export interface StockFinancial {
   operatingMargin?: number | null;
   /** Reported currency code (e.g. 'USD'). */
   currency?: string;
+  /** True when report is annual (12-31 / FY). */
+  isAnnual?: boolean;
 }
 
 /**
@@ -154,6 +156,8 @@ export interface StockBalanceSheet {
   debtRatio?: number | null;
   /** Reported currency code (e.g. 'CNY'). */
   currency?: string;
+  /** True when report is annual (12-31 / FY). */
+  isAnnual?: boolean;
 }
 
 /**
@@ -173,6 +177,8 @@ export interface StockCashFlow {
   endCash: number;
   /** Reported currency code (e.g. 'CNY'). */
   currency?: string;
+  /** True when report is annual (12-31 / FY). */
+  isAnnual?: boolean;
 }
 
 export interface CandleDataPoint {

@@ -203,7 +203,10 @@ export function buildFinancialBlocks(
 
   const blocks: Array<Record<string, any>> = [];
 
-  const summaryFold = buildIncomeTableBlocks(financials, currency, '📊 业绩汇总', [
+  const recentQuarters = financials.slice(0, 4);
+  const annuals = financials.filter((f) => f.isAnnual || f.date.endsWith('-12-31')).slice(0, 5);
+
+  const summaryFold = buildIncomeTableBlocks(recentQuarters, currency, '📊 业绩汇总（最近4个季度）', [
     ['营收', (f) => fmtAmount(f.revenue, currency)],
     ['营收同比', (f) => fmtPct(f.revenueYoY)],
     ['营收环比', (f) => fmtPct(f.revenueQoQ)],
@@ -218,7 +221,21 @@ export function buildFinancialBlocks(
   ]);
   if (summaryFold) blocks.push(summaryFold);
 
-  const incomeFold = buildIncomeTableBlocks(financials, currency, '📋 利润表', [
+  if (annuals.length > 0) {
+    const annualFold = buildIncomeTableBlocks(annuals, currency, `📅 年度业绩趋势（近${annuals.length}年年报）`, [
+      ['营业总收入', (f) => fmtAmount(f.revenue, currency)],
+      ['营收同比', (f) => fmtPct(f.revenueYoY)],
+      ['净利润', (f) => fmtAmount(f.netIncome, currency)],
+      ['净利同比', (f) => fmtPct(f.netIncomeYoY)],
+      ['毛利率', (f) => fmtPct(f.grossMargin)],
+      ['净利率', (f) => fmtPct(f.netMargin)],
+      ['EPS', (f) => (f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--')],
+      ['ROE', (f) => fmtPct(f.roe)],
+    ]);
+    if (annualFold) blocks.push(annualFold);
+  }
+
+  const incomeFold = buildIncomeTableBlocks(recentQuarters, currency, '📋 利润表（最近4个季度）', [
     ['营业总收入', (f) => fmtAmount(f.revenue, currency)],
     ['营业成本', (f) => (f.costOfRevenue !== undefined ? fmtAmount(f.costOfRevenue, currency) : '--')],
     ['毛利', (f) => (f.grossProfit !== undefined ? fmtAmount(f.grossProfit, currency) : '--')],
@@ -237,10 +254,10 @@ export function buildFinancialBlocks(
   if (incomeFold) blocks.push(incomeFold);
 
   if (balanceSheets?.length) {
-    blocks.push(buildBalanceSheetFold(balanceSheets, currency));
+    blocks.push(buildBalanceSheetFold(balanceSheets.slice(0, 4), currency));
   }
   if (cashFlows?.length) {
-    blocks.push(buildCashFlowFold(cashFlows, currency));
+    blocks.push(buildCashFlowFold(cashFlows.slice(0, 4), currency));
   }
 
   return blocks;
