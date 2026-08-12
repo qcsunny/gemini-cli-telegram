@@ -255,6 +255,7 @@ describe('registerInlineHandler', () => {
 
     mockSessionManager = {
       getSession: vi.fn().mockReturnValue(null),
+      getOrCreate: vi.fn().mockImplementation(async (chatId: number) => mockSessionManager.getSession(chatId)),
       getProjects: vi.fn().mockReturnValue([]),
       getProjectsInConfigOrder: vi.fn().mockReturnValue([]),
     };

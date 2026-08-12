@@ -1096,22 +1096,23 @@ export function registerInlineHandler(
     }
 
     const rawQuery = inlineQuery.query;
-    const activeSession = sessionManager.getSession(fromId);
+    const activeSession = sessionManager.getOrCreate
+      ? await sessionManager.getOrCreate(fromId, defaultOptions)
+      : sessionManager.getSession(fromId);
     const sessionModel = activeSession?.config?.getModel();
     const activeModel = sessionModel || defaultOptions.model || '';
     const allProjects = sessionManager.getProjectsInConfigOrder();
     const { model: modelToUse, prompt, family, families, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
 
-    // Default to active session project if no explicit /pN flag was provided;
-    // For /invest or ticker queries, fall back to "价值投资分析专家"; otherwise use first configured project.
-    let targetProjectPath = projectUsed?.path || activeSession?.currentProject?.path;
+    // Reuse private chat session CWD logic; if query is explicitly /invest or ticker, target "价值投资分析专家"
+    let targetProjectPath = projectUsed?.path;
     if (!targetProjectPath) {
       const isInvestQuery = rawQuery.trim().toLowerCase().startsWith('/invest') || rawQuery.trim().startsWith('$');
       if (isInvestQuery) {
         const investProj = allProjects.find((p) => p.name === '价值投资分析专家' || p.path?.endsWith('value-invest-analysis'));
         targetProjectPath = investProj?.path;
       }
-      targetProjectPath = targetProjectPath || allProjects[0]?.path || defaultOptions.cwd;
+      targetProjectPath = targetProjectPath || activeSession?.currentProject?.path || defaultOptions.cwd;
     }
 
     // Phase 4 Inline Mode: Stock / Crypto Ticker ($NVDA, $英伟达, $600519, $BTC)
