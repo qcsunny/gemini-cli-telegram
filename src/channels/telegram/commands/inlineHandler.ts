@@ -546,8 +546,9 @@ export async function runModelWithFallbackChain(
         logger.info(`[InlineQuery] Attempting model="${modelToUse}" (${attempt}/2) for initial="${initialModel}"`);
         if (onModelStart) onModelStart(modelToUse);
         combined = signal ? anySignal(signal, timeoutCtrl.signal) : undefined;
+        const effectivePrompt = prompt && !prompt.includes('中文') ? `${prompt}\n\n（请统一使用中文回答）` : prompt;
         const result = await runAgyPrint({
-          prompt,
+          prompt: effectivePrompt,
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
           model: modelToUse,
           proxy: defaultOptions.proxy,
