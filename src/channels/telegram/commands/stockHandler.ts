@@ -222,7 +222,7 @@ export function buildFinancialBlocks(
   if (summaryFold) blocks.push(summaryFold);
 
   if (annuals.length > 0) {
-    const annualFold = buildIncomeTableBlocks(annuals, currency, `📅 年度业绩趋势（近${annuals.length}年年报）`, [
+    const annualSummaryFold = buildIncomeTableBlocks(annuals, currency, `📅 业绩汇总（近${annuals.length}年年度）`, [
       ['营业总收入', (f) => fmtAmount(f.revenue, currency)],
       ['营收同比', (f) => fmtPct(f.revenueYoY)],
       ['净利润', (f) => fmtAmount(f.netIncome, currency)],
@@ -232,7 +232,7 @@ export function buildFinancialBlocks(
       ['EPS', (f) => (f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--')],
       ['ROE', (f) => fmtPct(f.roe)],
     ]);
-    if (annualFold) blocks.push(annualFold);
+    if (annualSummaryFold) blocks.push(annualSummaryFold);
   }
 
   const incomeFold = buildIncomeTableBlocks(recentQuarters, currency, '📋 利润表（最近4个季度）', [
@@ -253,8 +253,37 @@ export function buildFinancialBlocks(
   ]);
   if (incomeFold) blocks.push(incomeFold);
 
+  if (annuals.length > 0) {
+    const annualIncomeFold = buildIncomeTableBlocks(annuals, currency, `📋 利润表（近${annuals.length}年年度）`, [
+      ['营业总收入', (f) => fmtAmount(f.revenue, currency)],
+      ['营业成本', (f) => (f.costOfRevenue !== undefined ? fmtAmount(f.costOfRevenue, currency) : '--')],
+      ['毛利', (f) => (f.grossProfit !== undefined ? fmtAmount(f.grossProfit, currency) : '--')],
+      ['营业费用', (f) => (f.operatingExpenses !== undefined ? fmtAmount(f.operatingExpenses, currency) : '--')],
+      ['EBITDA', (f) => (f.ebitda !== undefined ? fmtAmount(f.ebitda, currency) : '--')],
+      ['营业利润', (f) => (f.operatingIncome !== undefined ? fmtAmount(f.operatingIncome, currency) : '--')],
+      ['营业利润率', (f) => fmtPct(f.operatingMargin)],
+      ['税前利润', (f) => (f.incomeBeforeTax !== undefined ? fmtAmount(f.incomeBeforeTax, currency) : '--')],
+      ['所得税', (f) => (f.incomeTaxExpense !== undefined ? fmtAmount(f.incomeTaxExpense, currency) : '--')],
+      ['净利润', (f) => fmtAmount(f.netIncome, currency)],
+      ['归母净利', (f) => (f.deductedNetProfit !== undefined ? fmtAmount(f.deductedNetProfit, currency) : '--')],
+      ['毛利率', (f) => fmtPct(f.grossMargin)],
+      ['净利率', (f) => fmtPct(f.netMargin)],
+      ['EPS(摊薄)', (f) => (f.epsDiluted !== undefined ? f.epsDiluted.toFixed(2) : '--')],
+    ]);
+    if (annualIncomeFold) blocks.push(annualIncomeFold);
+  }
+
   if (balanceSheets?.length) {
-    blocks.push(buildBalanceSheetFold(balanceSheets.slice(0, 4), currency));
+    const recentBS = balanceSheets.slice(0, 4);
+    const annualBS = balanceSheets.filter((b) => b.isAnnual || b.date.endsWith('-12-31')).slice(0, 5);
+
+    const bsFold = buildBalanceSheetFold(recentBS, currency, '🏦 资产负债表（最近4个季度）');
+    if (bsFold) blocks.push(bsFold);
+
+    if (annualBS.length > 0) {
+      const annualBsFold = buildBalanceSheetFold(annualBS, currency, `🏦 资产负债表（近${annualBS.length}年年度）`);
+      if (annualBsFold) blocks.push(annualBsFold);
+    }
   }
   if (cashFlows?.length) {
     blocks.push(buildCashFlowFold(cashFlows.slice(0, 4), currency));
@@ -269,10 +298,11 @@ function buildIncomeTableBlocks(
   summary: string,
   metrics: Array<[string, (f: StockFinancial) => string]>,
 ): Record<string, any> | null {
+  if (!financials.length) return null;
   const rows: Array<Array<Record<string, any>>> = [
     [
       header('指标'),
-      ...financials.map((f) => header(`${f.period}\n${f.date}`)),
+      ...financials.map((f) => header(`${f.period || ''}\n${f.date}`)),
     ],
   ];
   for (const [label, fn] of metrics) {
@@ -281,7 +311,7 @@ function buildIncomeTableBlocks(
 
   return {
     type: 'details',
-    summary: { type: 'bold', text: [`${summary}（最近${String(financials.length)}个季度）`] },
+    summary: { type: 'bold', text: [summary] },
     blocks: [
       {
         type: 'table',
@@ -296,7 +326,9 @@ function buildIncomeTableBlocks(
 function buildBalanceSheetFold(
   sheets: StockBalanceSheet[],
   currency?: string,
-): Record<string, any> {
+  title?: string,
+): Record<string, any> | null {
+  if (!sheets.length) return null;
   const rows: Array<Array<Record<string, any>>> = [
     [
       header('指标'),
@@ -324,7 +356,7 @@ function buildBalanceSheetFold(
 
   return {
     type: 'details',
-    summary: { type: 'bold', text: [`🏦 资产负债表（最近${String(sheets.length)}个季度）`] },
+    summary: { type: 'bold', text: [title || `🏦 资产负债表（最近${String(sheets.length)}个季度）`] },
     blocks: [
       {
         type: 'table',
