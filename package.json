@@ -19,6 +19,7 @@
     "debug:run": "LOG_LEVEL=debug node dist/cli.js",
     "test": "vitest run",
     "test:changed": "vitest run --changed",
+    "test:watch": "vitest",
     "test:ci": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "start": "node dist/cli.js"

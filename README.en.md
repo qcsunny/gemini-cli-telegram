@@ -63,39 +63,73 @@ npm run build
 # 4. Run the interactive setup wizard (Google Auth credentials + Telegram Bot Token)
 node dist/cli.js setup
 
-# 5. Register and launch the Telegram bot as a systemd service (first time)
-sudo ./setup.sh
-# Afterwards, restart/stop/start are unified under systemctl:
-#   sudo systemctl restart gemini-telegram.service
-#   sudo systemctl stop gemini-telegram.service
-#   systemctl status gemini-telegram.service
-# or: ./start.sh   (which internally runs systemctl restart)
+# 5. Register and launch the Telegram bot as a **user-space** systemd service
+#    (first time — enable lingering so the daemon survives SSH logout)
+loginctl enable-linger
+# The service unit lives at ~/.config/systemd/user/gemini-cli-telegram.service
+systemctl --user daemon-reload
+systemctl --user enable --now gemini-cli-telegram.service
+# Afterwards, restart/stop/start are unified under user-space systemctl:
+#   systemctl --user restart gemini-cli-telegram.service
+#   systemctl --user stop gemini-cli-telegram.service
+#   systemctl --user status gemini-cli-telegram.service
 ```
 
 ---
 
 ## ⚙️ Operations & Service Management
 
-Via the systemd script you can easily register the bot as a system-level service for boot-time autostart and automatic crash recovery (the daemon auto-restarts on failure):
+The bot runs as a **user-space** systemd service (`gemini-cli-telegram.service`),
+providing boot-time autostart and automatic crash recovery via `Restart=on-failure`.
+Never use `sudo`; user-space services keep log/DB permissions compatible with your
+dev account and avoid privilege-escalation risk.
+
+### User-space service unit (first deployment)
+
+```ini
+# ~/.config/systemd/user/gemini-cli-telegram.service
+[Unit]
+Description=Gemini CLI Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/gemini-cli-telegram
+ExecStart=/path/to/node dist/cli.js start --live
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
 
 ```bash
-# Register as a systemd service (for first deployment just run ./setup.sh, which already includes this step)
-sudo ./setup.sh
+systemctl --user daemon-reload
+systemctl --user enable --now gemini-cli-telegram.service
+loginctl enable-linger   # keep the bot alive after SSH logout
 ```
 
 ### Common management commands
 
 | Goal | Command |
 | :--- | :--- |
-| **Start service** | `sudo systemctl start gemini-telegram` |
-| **Stop service** | `sudo systemctl stop gemini-telegram` |
-| **Restart service** | `sudo systemctl restart gemini-telegram` |
-| **Check status** | `sudo systemctl status gemini-telegram` |
-| **Daemon log** | `tail -f ~/.gemini-cli-telegram/daemon.log` |
-| **System journal** | `sudo journalctl -u gemini-telegram -f` |
+| **Start service** | `systemctl --user start gemini-cli-telegram` |
+| **Stop service** | `systemctl --user stop gemini-cli-telegram` |
+| **Restart service** | `systemctl --user restart gemini-cli-telegram` |
+| **Check status** | `systemctl --user status gemini-cli-telegram` |
+| **Daemon log** | `tail -f daemon.log` |
+| **Error log** | `tail -f error.log` |
 
 > [!WARNING]
-> The service is configured with `Restart=always`, so a crashed process is **automatically respawned** by systemd. Therefore **do not use `kill`/`pkill` directly** — this conflicts with systemd's auto-restart and causes the service to be repeatedly respawned in a short window, scrambling logs and process state. To restart, always use `sudo systemctl restart gemini-telegram`; to fully stop, use `sudo systemctl stop gemini-telegram`. After changing source code you must rebuild (`npm run build`) before restarting, otherwise the stale `dist` keeps running.
+> The service directly runs `dist/cli.js`. After any `src/` change you **must
+> rebuild** (`npm run build`) before restarting, otherwise the stale `dist`
+> keeps running. The service uses `Restart=on-failure`, so a crashed process is
+> automatically respawned — **never manage it with `kill`/`pkill`** (that conflicts
+> with systemd auto-restart and causes 409 Conflict respawn loops). Always use
+> `systemctl --user restart/stop`. Also **never** launch the bot ad-hoc via
+> `node dist/cli.js start --live` while the service is running — running multiple
+> polling instances makes Telegram return 409 Conflict forever.
 
 ### 🔍 Multi-dimensional diagnostics & isolation
 - **Detailed diagnostics**: when the local `agy` CLI hits auth expiry, proxy termination, timeout, or network errors, the system reports the specific failure reason to the Telegram front-end (e.g. auth failed, process terminated, timeout cancelled) and logs a full diagnostic trace including `ExitCode` and a `Stderr` preview.
@@ -106,7 +140,7 @@ The current version has body chunking **disabled by default** (single messages h
 - `NO_BODY_CHUNK` (`true`): the final body is not split at 4096 and is sent as one message.
 - `NO_DRAFT_CHUNK` (`true`): the streaming draft is never truncated and always shows the full generated content (no 4096 sliding window).
 
-If extremely long messages fail to send after changing environments (e.g. Telegram introduces a per-message limit), set both constants back to `false` to restore safe 4096-char chunking and the streaming sliding window. After changing, `npm run build` and `sudo systemctl restart gemini-telegram` are required.
+If extremely long messages fail to send after changing environments (e.g. Telegram introduces a per-message limit), set both constants back to `false` to restore safe 4096-char chunking and the streaming sliding window. After changing, `npm run build` and `systemctl --user restart gemini-cli-telegram` are required.
 
 ---
 

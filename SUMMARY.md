@@ -1,28 +1,30 @@
-# Anchored Summary (generated 2026-07-26 19:14)
+# Anchored Summary (generated 2026-08-12)
 
 ## Objective
-- Fix token accounting, pricing, and add native Telegram footnote support for the bot.
+- Keep the repo documentation aligned with current architecture and deployment.
+- Reflect the latest robustness hardening (v1.17.2+).
 
 ## Important Details
 - **Native agy CLI** stores each conversation in `~/.gemini/antigravity-cli/conversations/{convId}.db` with a `steps` table; each step's `metadata` blob is protobuf-encoded usage.
 - **Protobuf field semantics** (confirmed via statusline.py and live data): field 2=input (new tokens, independent), 3=output (total output **including** thinking), 5=cached (independent), 10=thinking (subset of output, for display only, no separate charge).
 - **statusline.py billing formula**: `cost = input*rate + cached*rate*0.25 + output*rate` — no separate thinking cost.
-- **Telegram Bot API 10.2 Rich Messages** support bidirectional footnote navigation via `reference_link` (body→footnote) and `reference` (footnote→body) inline text entities.
-- **Local agy** interleaves `<thinking>` tags with content in the same stream — true typewriter streaming is not possible for native agy (proxy backends like web2api/deepseek have separate SSE fields for reasoning vs content, so they can stream).
-- **通用知识专家_RichText project** at `/home/qcsunny/Documents/通用知识专家_RichText/.agents/AGENTS.md` — model prompt for rich text formatting and citation syntax.
+- **Deployment is user-space systemd**: `systemctl --user ... gemini-cli-telegram.service`; `loginctl enable-linger` keeps the daemon alive after SSH logout. Never `sudo`; never launch `node dist/cli.js start --live` ad-hoc (409 Conflict loops, see AGENTS.md).
+- **Build-first rule**: the service runs `dist/cli.js`, so every `src/` change requires `npm run build` before `systemctl --user restart`.
 
 ## Work State
 ### Completed
-- **Accumulate all steps in `readUsageFromDatabase()`**: fixed to sum all steps' usage instead of returning only the last step.
-- **Removed separate `thinkingCost` from `calculateCost()`**: matching statusline.py — output (field 3) already includes thinking, no separate charge.
-- **Reverted incorrect input caching subtraction**: confirmed input (field 2) and cached (field 5) are independent, not overlapping.
-- **Native footnote support**: `preprocessFootnotes()` in `blocks.ts` extracts `[^id]:` definitions, converts `[^id]` body markers to `reference_link` entities (clickable citations), and appends `reference` entity blocks with back-links.
-- **Updated project prompt**: added footnote citation instructions (`[^id]` syntax) to AGENTS.md.
-- **Deleted** `Telegram_Bot_API_10.2_RichText_Doc.md` from the project directory.
-- **Releases**: v1.1.2 → v1.1.6 published on GitHub, service restarted after each.
-- **No geminiDirect anymore** — all models go through local agy now.
-- **Removed** `getCumulativeUsage()` from `messageStore.ts` and opencode.db reading logic.
-- **Fixed `[object Object]` in footnotes** (2026-07-26): `blocks.ts:177-178` changed `String(inner)` → `inner` so `reference`/`reference_link` entities nested inside superscripts aren't flattened to `[object Object]`. Type definition updated at line 45-46 to accept `RichText` instead of `string`.
+- **Robustness hardening (v1.17.2, commit `f68ee56`)**:
+  - Command injection removed: outbound curl fallback now uses `spawn` + argv array instead of shell-string `exec`.
+  - Child-process lifecycle: SIGINT→SIGKILL escalation (5s) on abort in agyCli/opencode; `destroyAll()` stops the scheduler and waits; graceful shutdown with 15s force-exit fallback and `closeDb()`.
+  - Exchange-rate `_fetching` guard now resets in a `finally` (TTL 24h refresh works again).
+  - `setup` no longer drops unrelated config fields; `saveUserConfig` writes atomically (tmp+rename) and invalidates the cache.
+  - DB: `busy_timeout=5000`, `PRAGMA user_version` schema stamping, explicit open-failure errors.
+  - Messages persisted atomically via `saveMessageTurn()` (transaction), empty assistant rows skipped; `/reset` purges orphaned `messages` rows.
+  - `uncaughtException` now triggers graceful shutdown (systemd restarts) instead of running in corrupted state.
+  - PID identity verification via `/proc/<pid>/cmdline` prevents killing recycled PIDs on `stop`/`status`.
+- **Previous highlights** (from earlier anchored summary): footnote `reference_link`/`reference` support; `readUsageFromDatabase()` sums all steps; no separate thinking cost; `[object Object]` footnote fix in `blocks.ts`.
+- **Releases**: v1.1.2 → v1.17.2 published on GitHub; service restarted after each.
+- **No geminiDirect anymore** — all models go through local agy / web2api / deepseek / opencode backends.
 
 ### Active
 - (none)
@@ -31,5 +33,5 @@
 - (none)
 
 ## Next Move
-- Commit and push all fixes. Restart service.
-- Tag a new release (v1.1.7).
+- Commit and push doc updates (README.md, README.en.md, SUMMARY.md).
+- Continue SemVer 2.0.0 (1.17.x patch line until 1.17.9, then minor).
