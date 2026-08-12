@@ -24,8 +24,8 @@ interface InlineHandlerOptions {
   allowedUsers?: number[];
 }
 
-/** Inactivity timeout — aborts when no stream activity for this long. */
-const INACTIVITY_TIMEOUT_MS = 60_000;
+/** Inactivity timeout — aborts when no stream activity for 3 minutes (allows agy context loading & deep thinking). */
+const INACTIVITY_TIMEOUT_MS = 180_000;
 /** Hard ceiling — aborts regardless of activity to prevent infinite agent loops. */
 const HARD_TIMEOUT_MS = 600_000;
 const RESULTS_TTL = 120_000;
