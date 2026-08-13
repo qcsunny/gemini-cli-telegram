@@ -18,6 +18,7 @@ import { marketService } from '../../../stock/service/quote.js';
 import { marketCache } from '../../../stock/cache.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { buildStockBlocks, ensureQuoteFinancials, ensureQuotePerformance, ensureQuoteProfile } from './stockHandler.js';
+import { fetchInvestAnalysis, buildInvestPrompt, getInvestProjectPath } from './investDataFetcher.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -38,6 +39,9 @@ interface PendingResult {
   createdAt: number;
   /** Refreshed on every stream chunk to prevent premature TTL expiry on long active streams. */
   lastActiveTime: number;
+  /** /invest <symbol>: prefetch deterministic analysis data after the user clicks. */
+  isInvest?: boolean;
+  investSymbol?: string;
 }
 
 export const pendingResults = new Map<string, PendingResult>();
@@ -1147,7 +1151,8 @@ export function registerInlineHandler(
     const sessionModel = activeSession?.config?.getModel();
     const activeModel = sessionModel || defaultOptions.model || '';
     const allProjects = sessionManager.getProjectsInConfigOrder();
-    const { model: modelToUse, prompt, family, families, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
+    const { model: modelToUse, prompt: parsedPrompt, family, families, projectUsed, task } = parseInlineModelAndPrompt(rawQuery, activeModel, allProjects);
+    let prompt = parsedPrompt;
 
     // Reuse private chat session CWD logic; if query is explicitly /invest or ticker, target "价值投资分析专家"
     let targetProjectPath = projectUsed?.path;
@@ -1158,6 +1163,19 @@ export function registerInlineHandler(
         targetProjectPath = investProj?.path;
       }
       targetProjectPath = targetProjectPath || activeSession?.currentProject?.path || defaultOptions.cwd;
+    }
+
+    // Phase 4b: /invest <symbol> — mark the query so the deterministic
+    // value-invest-analysis script runs AFTER the user clicks (chosen_inline_result),
+    // keeping the inline popup instant. The model then receives real scored data
+    // instead of having to fetch it itself.
+    let isInvest = false;
+    let investSymbol: string | undefined;
+    const investMatch = rawQuery.trim().match(/^\/invest\s+(\S+)(?:\s+([\s\S]*))?$/i);
+    if (investMatch && task !== 'compare') {
+      isInvest = true;
+      investSymbol = investMatch[1]!.replace(/^\$/, '');
+      logger.info(`[InlineInvest] Marked /invest query for ${investSymbol} (will prefetch on click)`);
     }
 
     // Phase 4 Inline Mode: Stock / Crypto Ticker ($NVDA, $英伟达, $600519, $BTC)
@@ -1356,7 +1374,7 @@ export function registerInlineHandler(
     }
 
     if (!familyMode) {
-      pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now() });
+      pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now(), isInvest, investSymbol });
     }
 
     try {
@@ -1419,7 +1437,7 @@ export function registerInlineHandler(
         const now = Date.now();
         candidates.forEach((candidateModel, idx) => {
           const candidateId = `m-${now}-${idx}`;
-          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now });
+          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now, isInvest, investSymbol });
           suggestionCards.push({
             type: 'article' as const,
             id: candidateId,
@@ -1536,6 +1554,29 @@ export function registerInlineHandler(
       return;
     }
 
+    // /invest: run the deterministic analysis script now (no inline-query 10s
+    // deadline here), inject the scored data into the prompt, then hand it to
+    // the model. Falls back to the plain prompt when the script fails.
+    let finalPrompt = pending.prompt;
+    if (pending.isInvest && pending.investSymbol) {
+      logger.info(`[InlineInvest] Prefetching analysis for "${pending.investSymbol}" on click`);
+      try {
+        const investCwd = pending.projectPath || getInvestProjectPath();
+        const fetchResult = await fetchInvestAnalysis(pending.investSymbol, investCwd);
+        if (fetchResult.ok && fetchResult.data) {
+          finalPrompt = buildInvestPrompt(
+            `请对 ${fetchResult.symbol ?? pending.investSymbol} 做深度价值投资分析。`,
+            fetchResult.data,
+          );
+          logger.info(`[InlineInvest] Enhanced prompt with analysis data for ${pending.investSymbol} (${fetchResult.data.length} bytes)`);
+        } else {
+          logger.warn(`[InlineInvest] Script failed for ${pending.investSymbol}, falling back to plain AI query: ${fetchResult.error}`);
+        }
+      } catch (e) {
+        logger.warn(`[InlineInvest] Prefetch threw for ${pending.investSymbol}: ${e}`);
+      }
+    }
+
     userControllers.get(chosen.result_id)?.abort();
     const ctrl = new AbortController();
     userControllers.set(chosen.result_id, ctrl);
@@ -1588,7 +1629,7 @@ export function registerInlineHandler(
         resultId: chosen.result_id,
         inlineMessageId: chosen.inline_message_id,
         fromId: chosen.from.id,
-        prompt: pending.prompt,
+        prompt: finalPrompt,
         model: pending.model,
         projectPath: pending.projectPath,
         task: pending.task,

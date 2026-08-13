@@ -46,6 +46,16 @@ vi.mock('../formatter/blocks.js', () => ({
   buildFooterBlocksFromHtml: vi.fn().mockReturnValue([]),
 }));
 
+// Mock invest data fetcher (spawns value-invest-analysis subprocess)
+vi.mock('./investDataFetcher.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./investDataFetcher.js')>();
+  return {
+    ...mod,
+    fetchInvestAnalysis: vi.fn().mockResolvedValue({ ok: true, symbol: '600519', data: '{"grade":"A-","totalScore":68.4,"dimensions":[]}' }),
+    getInvestProjectPath: vi.fn().mockReturnValue('/fake/invest'),
+  };
+});
+
 describe('displayModelName', () => {
   it('should strip version number from Claude Opus', () => {
     expect(displayModelName('Claude Opus 4.6 (Thinking)')).toBe('Claude Opus (Thinking)');
@@ -381,6 +391,93 @@ describe('registerInlineHandler', () => {
       ]),
       expect.any(Object),
     );
+  });
+
+  it('should prefetch value-invest analysis data after clicking /invest card and pass it to the model', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const { fetchInvestAnalysis } = await import('./investDataFetcher.js');
+    vi.mocked(fetchInvestAnalysis).mockResolvedValue({ ok: true, symbol: '600519', data: '{"grade":"A-","totalScore":68.4,"dimensions":[]}' });
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/invest 600519' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResult = callArg.find((r: any) => r.id.startsWith('ai-'));
+    expect(aiResult).toBeDefined();
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: aiResult.id,
+        from: { id: 12345 },
+        query: '/invest 600519',
+        inline_message_id: 'test_inline_msg_id_invest',
+      },
+      api: {
+        raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+      },
+    };
+    const chosenPromise = chosenInlineResultHandler!(mockChosenCtx);
+    await vi.waitFor(() => {
+      expect(fetchInvestAnalysis).toHaveBeenCalledWith('600519', expect.any(String));
+    });
+    await vi.waitFor(() => {
+      expect(runAgyPrint).toHaveBeenCalled();
+    });
+
+    const agyCall = (runAgyPrint as any).mock.calls.find((c: any[]) => (c[0].prompt || '').includes('totalScore'));
+    expect(agyCall).toBeDefined();
+    expect(agyCall[0].prompt).toContain('```json');
+    expect(agyCall[0].prompt).toContain('totalScore');
+    expect(agyCall[0].prompt).toContain('深度价值投资分析');
+
+    await chosenPromise;
+  });
+
+  it('should fall back to plain AI query when invest script fails', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const { fetchInvestAnalysis } = await import('./investDataFetcher.js');
+    vi.mocked(fetchInvestAnalysis).mockResolvedValue({ ok: false, error: 'DATA_ERROR: boom' });
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '/invest BAD' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResult = callArg.find((r: any) => r.id.startsWith('ai-'));
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: aiResult.id,
+        from: { id: 12345 },
+        query: '/invest BAD',
+        inline_message_id: 'test_inline_msg_id_invest_fail',
+      },
+      api: {
+        raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+      },
+    };
+    const chosenPromise = chosenInlineResultHandler!(mockChosenCtx);
+    await vi.waitFor(() => {
+      expect(runAgyPrint).toHaveBeenCalled();
+    });
+
+    const agyCall = (runAgyPrint as any).mock.calls.find((c: any[]) => (c[0].prompt || '').includes('/invest'));
+    expect(agyCall).toBeDefined();
+    // Fallback keeps the plain /invest query, no injected JSON.
+    expect(agyCall[0].prompt).not.toContain('```json');
+
+    await chosenPromise;
   });
 
   it('should use a stop button on the initial placeholder card', async () => {
