@@ -509,12 +509,24 @@ export async function fetchADividendYield(symbol: string, price: number): Promis
     });
     const rows = await fetchRows(params);
     if (!rows.length || !price) return null;
-    const per10 = num(rows[0], 'PRETAX_BONUS_RMB');
-    if (per10 !== null && per10 > 0) return (per10 / 10 / price) * 100;
+    // A-shares frequently pay twice a year (interim + annual). Taking only the
+    // latest ex-dividend record understates the yield (e.g. ICBC 2.22% vs real
+    // ~4%). Sum all cash dividends whose ex-dividend date falls within the last
+    // 12 months, then annualize relative to the current price.
+    const now = Date.now();
+    const oneYearAgo = now - 365 * 24 * 60 * 60 * 1000;
+    let totalPer10 = 0;
     for (const row of rows) {
+      const exDate = cleanDate(String(row['EX_DIVIDEND_DATE'] ?? ''));
+      const exMs = exDate ? Date.parse(exDate) : NaN;
+      if (!isFinite(exMs) || exMs < oneYearAgo || exMs > now) continue;
       const v = num(row, 'PRETAX_BONUS_RMB');
-      if (v !== null && v > 0) return (v / 10 / price) * 100;
+      if (v !== null && v > 0) totalPer10 += v;
     }
+    if (totalPer10 > 0) return (totalPer10 / 10 / price) * 100;
+    // Fallback: latest record only when no 12-month window matched.
+    const latest = num(rows[0], 'PRETAX_BONUS_RMB');
+    if (latest !== null && latest > 0) return (latest / 10 / price) * 100;
     return null;
   } catch {
     return null;

@@ -38,6 +38,7 @@ import {
   ensureQuoteDividendYield,
   buildFinancialBlocks,
 } from './stockHandler.js';
+import { fetchInvestAnalysis, buildInvestPrompt } from './investDataFetcher.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { getFundDataset, type FundDataset } from '../../../stock/provider/fund.js';
 import { analyzeFund, type FundAnalysisResult } from '../../../stock/analyzer/fundAnalyzer.js';
@@ -466,21 +467,22 @@ function scoreShareholderYield(quote: StockQuote): InvestDimension {
   const notes: string[] = [];
   let points = 0;
   const dy = quote.dividendYield;
+  const dyPct = dy !== null && dy !== undefined && isNum(dy) ? dy * 100 : null;
 
-  if (dy === undefined || dy === null || !isNum(dy)) {
+  if (dyPct === null) {
     notes.push('股息率数据缺失（当前数据源未提供）');
     points += 40;
-  } else if (dy >= 4) {
-    notes.push(`股息率 ${dy.toFixed(2)}%，高分红、回报突出`);
+  } else if (dyPct >= 4) {
+    notes.push(`股息率 ${dyPct.toFixed(2)}%，高分红、回报突出`);
     points += 100;
-  } else if (dy >= 2.5) {
-    notes.push(`股息率 ${dy.toFixed(2)}%，分红较稳定，回报良好`);
+  } else if (dyPct >= 2.5) {
+    notes.push(`股息率 ${dyPct.toFixed(2)}%，分红较稳定，回报良好`);
     points += 80;
-  } else if (dy >= 1) {
-    notes.push(`股息率 ${dy.toFixed(2)}%，有分红但吸引力一般`);
+  } else if (dyPct >= 1) {
+    notes.push(`股息率 ${dyPct.toFixed(2)}%，有分红但吸引力一般`);
     points += 55;
-  } else if (dy > 0) {
-    notes.push(`股息率 ${dy.toFixed(2)}%，分红较低，成长型公司常见`);
+  } else if (dyPct > 0) {
+    notes.push(`股息率 ${dyPct.toFixed(2)}%，分红较低，成长型公司常见`);
     points += 30;
   } else {
     notes.push('当前无现金分红');
@@ -830,7 +832,45 @@ export function registerInvestHandler(
         return;
       }
 
-      // 2. Stock / Market Quote Analysis Pathway
+      // 2. Prefer the deterministic value-invest-analysis script (same code
+      //    path as the inline /invest card). Inject its scored JSON into the
+      //    model prompt and publish the compact verdict card. Fall back to the
+      //    local bot scoring below when the script is unavailable.
+      const investCwd = getInvestProjectPath();
+      try {
+        const investResult = await fetchInvestAnalysis(symbol, investCwd);
+        if (investResult.ok && investResult.data) {
+          logger.info(`[Invest] script analysis OK for ${investResult.symbol ?? symbol}`);
+          await ctx.reply(
+            `${ICONS.info} <b>${investResult.symbol ?? symbol}</b> — 价值投资分析专家脚本已生成确定性报告，正在生成深度分析…`,
+            { parse_mode: 'HTML' }
+          );
+          const model = getDefaultModel();
+          if (model) {
+            const prompt = buildInvestPrompt(
+              `请对 ${investResult.symbol ?? symbol} 做深度价值投资分析。`,
+              investResult.data,
+            );
+            const res = await runAgyPrint({
+              prompt,
+              cwd: investCwd,
+              model,
+              proxy: loadUserConfig()?.proxy || undefined,
+            });
+            if (res.exitCode === 0 && res.output) {
+              await ctx.api.sendRichMessage(ctx.chat.id, { markdown: res.output });
+            } else {
+              await ctx.reply(`${ICONS.warning} 深度报告生成失败（exit ${res.exitCode}）`);
+            }
+          }
+          return;
+        }
+        logger.warn(`[Invest] script analysis failed for ${symbol}, falling back to local: ${investResult.error}`);
+      } catch (err) {
+        logger.warn(`[Invest] script analysis threw for ${symbol}, falling back to local: ${err}`);
+      }
+
+      // 3. Stock / Market Quote Analysis Pathway
       const quote = await marketService.getQuote(symbol);
       if (!quote) {
         await ctx.reply(`${ICONS.warning} ⚠️ <b>Symbol not found:</b> ${symbol}\n\nPlease check the symbol and try again.`);
