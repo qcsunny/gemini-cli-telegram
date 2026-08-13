@@ -77,12 +77,13 @@ describe('investDataFetcher', () => {
   });
 
   describe('buildInvestPrompt', () => {
-    it('injects the analysis data and keeps the user question', () => {
+    it('injects only the analysis data and keeps the user question', () => {
       const prompt = buildInvestPrompt('请对 600519 做深度价值投资分析。', '{"grade":"A-"}');
       expect(prompt).toContain('```json');
       expect(prompt).toContain('{"grade":"A-"}');
       expect(prompt).toContain('请对 600519 做深度价值投资分析。');
-      expect(prompt).toContain('六维度');
+      expect(prompt).not.toContain('报告要求');
+      expect(prompt).not.toContain('六维度');
     });
   });
 });

@@ -57,7 +57,7 @@ export function findSessionIdByConvId(convId: string): string | null {
 }
 
 export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
-  const { prompt, conversationId: existingConvId, model = '', signal, proxy } = opts;
+  const { prompt, conversationId: existingConvId, model = '', signal, proxy, allowTools } = opts;
   const convId = existingConvId || makeOpenCodeConvId();
   const opencode = getOpenCodePath();
   const cwd = opts.cwd || process.cwd();
@@ -71,6 +71,13 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   if (modelId) {
     args.push('--model', modelId);
+  }
+
+  // /invest flow: allow the model to auto-approve tools (web fetch, file read)
+  // so it can supplement missing analysis data. ONLY set from the trusted
+  // inline /invest path — it bypasses every permission prompt.
+  if (allowTools) {
+    args.push('--auto');
   }
 
   // Reuse the opencode-native session for multi-turn context: if this convId

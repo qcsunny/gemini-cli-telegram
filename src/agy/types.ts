@@ -33,6 +33,11 @@ export interface AgyRunOptions {
   proxy?: string;
   /** agy --print-timeout override (e.g. "30m"); defaults to agy's 5m */
   printTimeout?: string;
+  /** Allow the model to use tools (file read / web fetch / shell). For agy this
+   *  passes --dangerously-skip-permissions; for opencode it passes --auto.
+   *  Only enabled for narrow, trusted flows (e.g. inline /invest) where the
+   *  model may need to fetch extra data the pre-scored script could not get. */
+  allowTools?: boolean;
 }
 
 export interface AgyRunResult {

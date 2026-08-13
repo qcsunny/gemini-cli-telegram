@@ -18,7 +18,7 @@ import { marketService } from '../../../stock/service/quote.js';
 import { marketCache } from '../../../stock/cache.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { buildStockBlocks, ensureQuoteFinancials, ensureQuotePerformance, ensureQuoteProfile } from './stockHandler.js';
-import { fetchInvestAnalysis, buildInvestPrompt, getInvestProjectPath } from './investDataFetcher.js';
+import { fetchInvestAnalysis, fetchInvestAnalyses, buildInvestPrompt, buildComparePrompt, getInvestProjectPath } from './investDataFetcher.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -42,6 +42,8 @@ interface PendingResult {
   /** /invest <symbol>: prefetch deterministic analysis data after the user clicks. */
   isInvest?: boolean;
   investSymbol?: string;
+  /** /invest 对比 a,b,c: multi-symbol comparison. */
+  investSymbols?: string[];
 }
 
 export const pendingResults = new Map<string, PendingResult>();
@@ -546,6 +548,7 @@ export async function runModelWithFallbackChain(
   customCwd?: string,
   onChunk?: (chunk: string) => void,
   onModelStart?: (modelName: string) => void,
+  allowTools?: boolean,
 ): Promise<FallbackRunResult> {
   const skipModels = new Set<string>();
   const chain = buildTierAwareChain(initialModel, skipModels);
@@ -581,14 +584,14 @@ export async function runModelWithFallbackChain(
         logger.info(`[InlineQuery] Attempting model="${modelToUse}" (${attempt}/2) for initial="${initialModel}"`);
         if (onModelStart) onModelStart(modelToUse);
         combined = signal ? anySignal(signal, timeoutCtrl.signal) : undefined;
-        const effectivePrompt = prompt && !prompt.includes('中文') ? `${prompt}\n\n（请统一使用中文回答）` : prompt;
         const result = await runAgyPrint({
-          prompt: effectivePrompt,
+          prompt,
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
           model: modelToUse,
           proxy: defaultOptions.proxy,
           onChunk: wrappedChunk,
           signal: combined ? combined.signal : timeoutCtrl.signal,
+          allowTools,
         });
         clearTimers();
         // A timed-out run may carry partial stdout; treat it as a failure rather
@@ -1171,11 +1174,27 @@ export function registerInlineHandler(
     // instead of having to fetch it itself.
     let isInvest = false;
     let investSymbol: string | undefined;
-    const investMatch = rawQuery.trim().match(/^\/invest\s+(\S+)(?:\s+([\s\S]*))?$/i);
+    let investSymbols: string[] | undefined;
+    const investMatch = rawQuery.trim().match(/^\/invest\s+(对比|compare|vs)?\s*([\s\S]*)$/i);
     if (investMatch && task !== 'compare') {
-      isInvest = true;
-      investSymbol = investMatch[1]!.replace(/^\$/, '');
-      logger.info(`[InlineInvest] Marked /invest query for ${investSymbol} (will prefetch on click)`);
+      const mode = (investMatch[1] || '').toLowerCase();
+      const argStr = (investMatch[2] || '').trim();
+      if (mode === '对比' || mode === 'compare' || mode === 'vs') {
+        const symbols = argStr.split(/[,\s，、]+/).map((s) => s.replace(/^\$/, '').trim()).filter(Boolean);
+        if (symbols.length >= 2) {
+          isInvest = true;
+          investSymbols = symbols;
+          logger.info(`[InlineInvest] Marked /invest comparison for ${symbols.join(', ')} (will prefetch on click)`);
+        } else {
+          investSymbol = argStr;
+          isInvest = true;
+          logger.info(`[InlineInvest] Marked /invest query for ${investSymbol} (will prefetch on click)`);
+        }
+      } else {
+        investSymbol = investMatch[2]!.replace(/^\$/, '');
+        isInvest = true;
+        logger.info(`[InlineInvest] Marked /invest query for ${investSymbol} (will prefetch on click)`);
+      }
     }
 
     // Phase 4 Inline Mode: Stock / Crypto Ticker ($NVDA, $英伟达, $600519, $BTC)
@@ -1374,7 +1393,7 @@ export function registerInlineHandler(
     }
 
     if (!familyMode) {
-      pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now(), isInvest, investSymbol });
+      pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now(), isInvest, investSymbol, investSymbols });
     }
 
     try {
@@ -1437,7 +1456,7 @@ export function registerInlineHandler(
         const now = Date.now();
         candidates.forEach((candidateModel, idx) => {
           const candidateId = `m-${now}-${idx}`;
-          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now, isInvest, investSymbol });
+          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now, isInvest, investSymbol, investSymbols });
           suggestionCards.push({
             type: 'article' as const,
             id: candidateId,
@@ -1558,22 +1577,41 @@ export function registerInlineHandler(
     // deadline here), inject the scored data into the prompt, then hand it to
     // the model. Falls back to the plain prompt when the script fails.
     let finalPrompt = pending.prompt;
-    if (pending.isInvest && pending.investSymbol) {
-      logger.info(`[InlineInvest] Prefetching analysis for "${pending.investSymbol}" on click`);
-      try {
-        const investCwd = pending.projectPath || getInvestProjectPath();
-        const fetchResult = await fetchInvestAnalysis(pending.investSymbol, investCwd);
-        if (fetchResult.ok && fetchResult.data) {
-          finalPrompt = buildInvestPrompt(
-            `请对 ${fetchResult.symbol ?? pending.investSymbol} 做深度价值投资分析。`,
-            fetchResult.data,
-          );
-          logger.info(`[InlineInvest] Enhanced prompt with analysis data for ${pending.investSymbol} (${fetchResult.data.length} bytes)`);
-        } else {
-          logger.warn(`[InlineInvest] Script failed for ${pending.investSymbol}, falling back to plain AI query: ${fetchResult.error}`);
+    if (pending.isInvest) {
+      const investCwd = pending.projectPath || getInvestProjectPath();
+      if (pending.investSymbols && pending.investSymbols.length >= 2) {
+        logger.info(`[InlineInvest] Prefetching comparison for "${pending.investSymbols.join(', ')}" on click`);
+        try {
+          const fetchResults = await fetchInvestAnalyses(pending.investSymbols, investCwd);
+          const okCount = fetchResults.filter((r) => r.ok).length;
+          if (okCount > 0) {
+            finalPrompt = buildComparePrompt(
+              fetchResults,
+              `请对以下 ${fetchResults.filter((r) => r.ok).map((r) => r.symbol ?? '?').join('、')} 做同行业深度对比分析，输出对比报告。`,
+            );
+            logger.info(`[InlineInvest] Enhanced prompt with comparison data for ${pending.investSymbols.join(', ')} (${okCount}/${fetchResults.length} ok)`);
+          } else {
+            logger.warn(`[InlineInvest] All comparison scripts failed for ${pending.investSymbols.join(', ')}, falling back to plain AI query`);
+          }
+        } catch (e) {
+          logger.warn(`[InlineInvest] Comparison prefetch threw for ${pending.investSymbols.join(', ')}: ${e}`);
         }
-      } catch (e) {
-        logger.warn(`[InlineInvest] Prefetch threw for ${pending.investSymbol}: ${e}`);
+      } else if (pending.investSymbol) {
+        logger.info(`[InlineInvest] Prefetching analysis for "${pending.investSymbol}" on click`);
+        try {
+          const fetchResult = await fetchInvestAnalysis(pending.investSymbol, investCwd);
+          if (fetchResult.ok && fetchResult.data) {
+            finalPrompt = buildInvestPrompt(
+              `请对 ${fetchResult.symbol ?? pending.investSymbol} 做深度价值投资分析。`,
+              fetchResult.data,
+            );
+            logger.info(`[InlineInvest] Enhanced prompt with analysis data for ${pending.investSymbol} (${fetchResult.data.length} bytes)`);
+          } else {
+            logger.warn(`[InlineInvest] Script failed for ${pending.investSymbol}, falling back to plain AI query: ${fetchResult.error}`);
+          }
+        } catch (e) {
+          logger.warn(`[InlineInvest] Prefetch threw for ${pending.investSymbol}: ${e}`);
+        }
       }
     }
 
@@ -1637,6 +1675,7 @@ export function registerInlineHandler(
         streamQueue,
         onModelStart,
         onChunk,
+        allowTools: !!pending.isInvest,
       });
     } catch (e) {
       logger.warn(`[InlineResult] Failed to edit message: ${e}`);
@@ -1659,6 +1698,8 @@ interface InlineGenerationContext {
   streamQueue: InlineStreamQueue;
   onModelStart: (modelName: string) => void;
   onChunk: (chunk: string) => void;
+  /** Allow the model to auto-approve tools (web fetch / file read). Only set for /invest. */
+  allowTools?: boolean;
 }
 
 async function runInlineGeneration(
@@ -1669,7 +1710,7 @@ async function runInlineGeneration(
 ): Promise<void> {
   const {
     resultId, inlineMessageId, fromId, prompt, model, projectPath,
-    task, ctrl, streamQueue, onModelStart, onChunk,
+    task, ctrl, streamQueue, onModelStart, onChunk, allowTools,
   } = gctx;
 
   // Keep regenerate context alive so the 🔄 button can re-run this prompt.
@@ -1691,6 +1732,7 @@ async function runInlineGeneration(
     projectPath,
     onChunk,
     onModelStart,
+    allowTools,
   );
 
   if (task === 'image') {

@@ -393,6 +393,43 @@ describe('registerInlineHandler', () => {
     );
   });
 
+  it('should NOT enable tool permissions for a plain AI query', async () => {
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '什么是量子计算？' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResult = callArg.find((r: any) => r.id.startsWith('ai-'));
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: aiResult.id,
+        from: { id: 12345 },
+        query: '什么是量子计算？',
+        inline_message_id: 'test_inline_msg_id_plain',
+      },
+      api: {
+        raw: { editMessageText: vi.fn().mockResolvedValue(true) },
+      },
+    };
+    const chosenPromise = chosenInlineResultHandler!(mockChosenCtx);
+    await vi.waitFor(() => {
+      expect(runAgyPrint).toHaveBeenCalled();
+    });
+
+    const agyCall = (runAgyPrint as any).mock.calls.find((c: any[]) => (c[0].prompt || '').includes('量子计算'));
+    expect(agyCall).toBeDefined();
+    expect(agyCall[0].allowTools).toBeFalsy();
+
+    await chosenPromise;
+  });
+
   it('should prefetch value-invest analysis data after clicking /invest card and pass it to the model', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
@@ -435,6 +472,8 @@ describe('registerInlineHandler', () => {
     expect(agyCall[0].prompt).toContain('```json');
     expect(agyCall[0].prompt).toContain('totalScore');
     expect(agyCall[0].prompt).toContain('深度价值投资分析');
+    // /invest flow must enable model tools (auto-approve) so it can supplement missing data.
+    expect(agyCall[0].allowTools).toBe(true);
 
     await chosenPromise;
   });

@@ -162,7 +162,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     return runOpenCode(opts);
   }
 
-  const { prompt, cwd, conversationId, onChunk, signal, extraDirs, model, proxy, printTimeout } = opts;
+  const { prompt, cwd, conversationId, onChunk, signal, extraDirs, model, proxy, printTimeout, allowTools } = opts;
   const agy = getAgyPath();
 
   // Build arg list
@@ -170,6 +170,13 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   if (printTimeout) {
     args.push('--print-timeout', printTimeout);
+  }
+
+  // /invest flow: allow the model to use tools so it can supplement missing
+  // data via web fetch / file read. This bypasses all permission prompts, so
+  // it is ONLY enabled from the trusted inline /invest path.
+  if (allowTools) {
+    args.push('--dangerously-skip-permissions');
   }
 
   if (conversationId) {
