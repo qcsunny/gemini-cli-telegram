@@ -18,7 +18,6 @@ import { marketService } from '../../../stock/service/quote.js';
 import { marketCache } from '../../../stock/cache.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { buildStockBlocks, ensureQuoteFinancials, ensureQuotePerformance, ensureQuoteProfile } from './stockHandler.js';
-import { analyzeInvest, buildInvestBlocks } from './investHandler.js';
 import { ICONS } from '../ui.js';
 
 interface InlineHandlerOptions {
@@ -44,7 +43,6 @@ interface PendingResult {
 export const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
 export const pendingStockRequests = new Map<string, { queryStr: string; webAppUrl: string }>();
-export const pendingInvestRequests = new Map<string, { symbol: string }>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
 
 interface RegenerateContext {
@@ -230,6 +228,23 @@ export class InlineStreamQueue {
   }
 
   /**
+   * Attach an inline keyboard to the upcoming edit(s), e.g. the Stop button.
+   * Cleared after the next successful edit unless re-set.
+   */
+  public setReplyMarkup(markup: unknown): void {
+    this.pendingReplyMarkup = markup;
+  }
+
+  /**
+   * Attach native 10.2 blocks to the NEXT edit (e.g. the placeholder re-edit
+   * so it renders as a true RichMessage). Cleared after that edit succeeds,
+   * so subsequent streaming edits naturally fall back to markdown.
+   */
+  public setBlocks(blocks: RichBlock[] | null): void {
+    this.pendingBlocks = blocks;
+  }
+
+  /**
    * Push final completion markdown and flush until success with 429 backoff retry.
    * @param replyMarkup optional inline keyboard attached to the final edit (e.g. regenerate / pagination buttons).
    * @param blocks optional native 10.2 blocks for rich message rendering.
@@ -377,6 +392,20 @@ function getFallbackModelSuggestions(): string[] {
     seen.add(m);
     return true;
   }).slice(0, MAX_MODEL_SUGGESTIONS);
+}
+
+/**
+ * Build an `InputRichMessage` for inline placeholder cards directly from native
+ * `blocks` (RichBlock[]), instead of relying on the server-side markdown→blocks
+ * parsing of `rich_message.markdown`. Some Telegram clients render
+ * `rich_message.markdown` in `input_message_content` as plain/HTML text, so
+ * sending pre-built blocks guarantees the placeholder renders as a true
+ * RichMessage on first send.
+ * Falls back to markdown only when the parser yields no blocks.
+ */
+function buildInputRichMessage(markdown: string): { blocks: RichBlock[] } | { markdown: string } {
+  const blocks = markdownToRichBlocks(markdown);
+  return blocks.length > 0 ? { blocks } : { markdown };
 }
 
 const CHANNEL_PREFIX_RE = /^(Web2API|DeepSeek|OpenCode)\s*:\s*/i;
@@ -1131,33 +1160,6 @@ export function registerInlineHandler(
       targetProjectPath = targetProjectPath || activeSession?.currentProject?.path || defaultOptions.cwd;
     }
 
-    // Phase 4.5 Inline Mode: /invest <symbol> value-investing analysis card.
-    // Mirrors private-chat /invest: instant placeholder card → async quote +
-    // analyzeInvest scoring → in-place rich-message update on chosen result.
-    const investMatch = rawQuery.trim().match(/^\/invest\s+([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/i);
-    logger.info(`[InlineInvestCheck] rawQuery="${rawQuery}" match=${!!investMatch}`);
-    if (investMatch) {
-      const symbol = investMatch[1];
-      const resultId = `investreq-${Date.now()}-${fromId}`;
-      pendingInvestRequests.set(resultId, { symbol });
-      const card = {
-        type: 'article' as const,
-        id: resultId,
-        title: `⚖️ 价值投资分析: ${symbol}`,
-        description: `点击对 ${symbol} 进行六维度量化评分与深度价值投资分析`,
-        thumbnail_url: THUMBNAILS.sparkles,
-        input_message_content: {
-          rich_message: {
-            markdown: `⚖️ **正在分析 ${symbol}（value invest）...**\n\n*🚀 正在抓取行情与财务数据并计算六维度量化评分，请稍候...*`,
-          },
-        } as any,
-      };
-      await ctx.answerInlineQuery([card as any], { cache_time: 0, is_personal: true }).catch((e) => {
-        logger.error(`[InlineInvest] answerInlineQuery error: ${e}`);
-      });
-      return;
-    }
-
     // Phase 4 Inline Mode: Stock / Crypto Ticker ($NVDA, $英伟达, $600519, $BTC)
     // Instant 0ms placeholder popup card -> asynchronously loads quote & updates in-place via chosen_inline_result!
     const tickerMatch = rawQuery.trim().match(/^\$([\u4e00-\u9fa5A-Za-z0-9-]{1,20})$/);
@@ -1342,9 +1344,7 @@ export function registerInlineHandler(
         description: `Compare the same question with 2-${MAX_COMPARE_MODELS} models in parallel`,
         thumbnail_url: THUMBNAILS.sparkles,
         input_message_content: {
-          rich_message: {
-            markdown: `**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n_After clicking, select up to ${MAX_COMPARE_MODELS} models for parallel comparison._`,
-          },
+          rich_message: buildInputRichMessage(`**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n_After clicking, select up to ${MAX_COMPARE_MODELS} models for parallel comparison._`),
         } as any,
         reply_markup: {
           inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${resultId}` }]],
@@ -1380,9 +1380,7 @@ export function registerInlineHandler(
             description: `Answer with ${displayModelName(candidateModel)}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
-              rich_message: {
-                markdown: `${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
-              },
+              rich_message: buildInputRichMessage(`${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`),
             } as any,
             // An inline keyboard is REQUIRED for Telegram to return
             // inline_message_id on chosen_inline_result, which is the handle used
@@ -1411,7 +1409,8 @@ export function registerInlineHandler(
         initMarkdown = `**🎨 Image generation mode**\n\n**💬 Prompt:**\n> ${displayPrompt}\n\n*🚀 Generating images; will update in place when complete.*`;
       } else {
         const modelLine = `**🧠 Target model:** \`${displayModelName(modelToUse)}\`\n`;
-        initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI inference engine started**\n\n${modelLine}**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`;
+        const statusTable = `\n\n| 模型 | 状态 |\n| --- | --- |\n| ${displayModelName(modelToUse)} | ⏳ 推理中 |\n\n> [details] 查看详情\n> 回复完成后此处将自动更新为完整答案。`;
+        initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI inference engine started**\n\n${modelLine}**💬 Question:**\n> ${displayPrompt}\n\n${statusTable}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`;
       }
 
       const suggestionCards: any[] = [];
@@ -1428,9 +1427,7 @@ export function registerInlineHandler(
             description: `Switch to model ${displayModelName(candidateModel)}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
-              rich_message: {
-                markdown: `**🧠 Model switch:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`,
-              },
+              rich_message: buildInputRichMessage(`**🧠 Model switch:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`),
             } as any,
             reply_markup: {
               inline_keyboard: [[
@@ -1449,9 +1446,7 @@ export function registerInlineHandler(
           description: `${task === 'image' ? 'Generate image' : `Click to send, ${prompt.slice(0, 40)}...`} — AI ${task === 'image' ? 'image' : 'answer'} will auto-update`,
           thumbnail_url: task === 'image' ? THUMBNAILS.sparkles : THUMBNAILS.thinking,
           input_message_content: {
-            rich_message: {
-              markdown: initMarkdown,
-            },
+            rich_message: buildInputRichMessage(initMarkdown),
           } as any,
           // An inline keyboard is REQUIRED for Telegram to return
           // inline_message_id on chosen_inline_result, which is the handle used
@@ -1469,9 +1464,7 @@ export function registerInlineHandler(
           description: `Model: ${displayModelName(modelToUse)} | "${prompt.slice(0, 40)}..."`,
           thumbnail_url: THUMBNAILS.chat,
           input_message_content: {
-            rich_message: {
-              markdown: `**💬 AI question card**\n\n**Model:** \`${displayModelName(modelToUse)}\`\n**Question:** ${displayPrompt}\n\n*${ICONS.sparkles} Question card sent.*`,
-            },
+            rich_message: buildInputRichMessage(`**💬 AI question card**\n\n**Model:** \`${displayModelName(modelToUse)}\`\n**Question:** ${displayPrompt}\n\n*${ICONS.sparkles} Question card sent.*`),
           } as any,
         },
         ...suggestionCards,
@@ -1525,38 +1518,6 @@ export function registerInlineHandler(
       return;
     }
 
-    const investReq = pendingInvestRequests.get(chosen.result_id);
-    if (investReq) {
-      pendingInvestRequests.delete(chosen.result_id);
-      logger.info(`[ChosenInlineInvest] Analyzing "${investReq.symbol}"`);
-      try {
-        const quote = await marketService.getQuote(investReq.symbol);
-        if (!quote) {
-          await ctx.api.raw.editMessageText({
-            inline_message_id: chosen.inline_message_id,
-            rich_message: { markdown: `⚠️ **Symbol not found:** ${investReq.symbol}\n\n请检查代码后重试。` },
-          } as any).catch(() => {});
-          return;
-        }
-        await ensureQuoteFinancials(quote);
-        await ensureQuotePerformance(quote);
-        await ensureQuoteProfile(quote);
-        const result = analyzeInvest(quote);
-        const blocks = buildInvestBlocks(result);
-        await ctx.api.raw.editMessageText({
-          inline_message_id: chosen.inline_message_id,
-          rich_message: { blocks },
-        } as any).catch((e: Error) => logger.warn(`[ChosenInlineInvest] Edit failed: ${e}`));
-      } catch (e) {
-        logger.warn(`[ChosenInlineInvest] Analysis failed for ${investReq.symbol}: ${e}`);
-        await ctx.api.raw.editMessageText({
-          inline_message_id: chosen.inline_message_id,
-          rich_message: { markdown: `${ICONS.error} **分析 ${investReq.symbol} 失败**：${(e as Error)?.message || e}` },
-        } as any).catch(() => {});
-      }
-      return;
-    }
-
     const cmp = compareContexts.get(chosen.result_id);
     if (cmp) {
       cmp.inlineMessageId = chosen.inline_message_id;
@@ -1582,6 +1543,25 @@ export function registerInlineHandler(
     logger.info(`[ChosenInline] userId=${chosen.from.id} resultId=${chosen.result_id} model=${pending.model} task=${pending.task || 'chat'} — starting model`);
 
     const streamQueue = new InlineStreamQueue(ctx.api, chosen.inline_message_id);
+
+    // Immediately re-edit the freshly-sent inline card as a true RichMessage.
+    // Telegram's `input_message_content.rich_message` in an inline result is
+    // still rendered as plain/HTML text by several clients on first send, but
+    // `editMessageText` + `rich_message` renders correctly everywhere, so push
+    // the placeholder through the SAME streamQueue path used by streaming.
+    // Blocks are built directly so the placeholder is a native RichMessage.
+    const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
+    const statusTable = `\n\n| 模型 | 状态 |\n| --- | --- |\n| ${displayModelName(pending.model)} | ⏳ 推理中 |\n\n> [details] 查看详情\n> 回复完成后此处将自动更新为完整答案。`;
+    const placeholderMarkdown = pending.task
+      ? `${pending.task.toUpperCase()} ✨ **AI inference engine started**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${statusTable}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`
+      : `✨ **AI inference engine started**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${statusTable}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`;
+    streamQueue.setReplyMarkup({
+      inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${chosen.result_id}` }]],
+    });
+    const placeholderRich = buildInputRichMessage(placeholderMarkdown);
+    streamQueue.setBlocks('blocks' in placeholderRich ? placeholderRich.blocks : null);
+    streamQueue.enqueueStream(placeholderMarkdown);
+    logger.info('[ChosenInline] Enqueued rich placeholder (blocks) through streamQueue path');
 
     let accumulatedText = '';
     let activeModelName = pending.model;
