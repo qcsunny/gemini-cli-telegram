@@ -343,7 +343,7 @@ describe('registerInlineHandler', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: expect.stringMatching(/^ai-/),
-          title: expect.stringContaining('Click to send and start thinking'),
+          title: expect.stringContaining('Ask'),
           input_message_content: expect.objectContaining({
             rich_message: expect.objectContaining({
               blocks: expect.any(Array),
@@ -355,13 +355,12 @@ describe('registerInlineHandler', () => {
             inline_keyboard: expect.any(Array),
           }),
         }),
-        expect.objectContaining({
-          id: expect.stringMatching(/^prompt-/),
-          title: expect.stringContaining('question card'),
-        }),
       ]),
       expect.objectContaining({ cache_time: 0 }),
     );
+    // Question card was removed — results must NOT contain a prompt-/question card.
+    const results = mockCtx.answerInlineQuery.mock.calls[0][0];
+    expect(results.some((r: any) => r.id.startsWith('prompt-') || r.title.includes('question card'))).toBe(false);
   });
 
   it('should route /invest <symbol> as a normal AI query (project-tailored, not a card)', async () => {
@@ -379,7 +378,7 @@ describe('registerInlineHandler', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: expect.stringMatching(/^ai-/),
-          title: expect.stringContaining('Click to send'),
+          title: expect.stringContaining('Ask'),
         }),
       ]),
       expect.objectContaining({ cache_time: 0, is_personal: true }),
@@ -605,14 +604,23 @@ describe('registerInlineHandler', () => {
       expect(stopCtx.answerCallbackQuery).toHaveBeenCalledWith(
         expect.objectContaining({ text: expect.stringContaining('Stop requested') }),
       );
-      // The stopped generation edits its own message (via the chosen ctx).
-      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
-        expect.objectContaining({
-          inline_message_id: 'test_inline_msg_id_123',
-          rich_message: expect.objectContaining({
-            markdown: expect.stringContaining('生成已被手动停止'),
-          }),
-        }),
+      // The stopped generation edits its own message (via the chosen ctx):
+      // partial output is preserved and folded, and the Stop button becomes
+      // the Regenerate button.
+      const stopEdits = (mockChosenCtx.api.raw.editMessageText.mock.calls as any[])
+        .map((c) => c[0])
+        .filter((p: any) => p?.rich_message?.markdown?.includes('生成已停止'));
+      expect(stopEdits.length).toBeGreaterThan(0);
+      const stopPayload = stopEdits[stopEdits.length - 1];
+      expect(stopPayload.inline_message_id).toBe('test_inline_msg_id_123');
+      expect(stopPayload.rich_message.markdown).toContain('流式内容');
+      expect(stopPayload.rich_message.markdown).toContain('<details>');
+      expect(stopPayload.reply_markup.inline_keyboard).toEqual(
+        expect.arrayContaining([
+          expect.arrayContaining([
+            expect.objectContaining({ text: expect.stringContaining('Regenerate'), callback_data: expect.stringContaining(`inline_regenerate:${aiResultId}`) }),
+          ]),
+        ]),
       );
     } finally {
       (runAgyPrint as any).mockImplementation(originalImpl);

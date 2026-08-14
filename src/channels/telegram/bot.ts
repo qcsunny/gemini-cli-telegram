@@ -16,7 +16,7 @@
  *   bot/channelReply.ts  — buildChannelReply + rich message pipeline
  */
 
-import { Bot, Context } from 'grammy';
+import { Bot, Context, InputFile } from 'grammy';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { run, sequentialize } from '@grammyjs/runner';
 import * as fs from 'fs/promises';
@@ -35,10 +35,9 @@ import type {
   SessionOptions,
   DaemonSession,
   MultimodalInput,
-  StructuredMessage,
 } from '../../core/types.js';
 import { registerCommands } from './commands.js';
-import { telegramFormatter, markdownToHtml } from './formatter.js';
+import { telegramFormatter } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
@@ -71,15 +70,6 @@ const RUNNER_ALLOWED_UPDATES = {
     'chosen_inline_result',
   ] as const,
 };
-
-// ── Helper: getHtmlPayload (used by TelegramBot.setupScheduler) ──
-
-function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = false): string {
-  if (typeof originalText === 'string' && originalText.startsWith('___RAW_HTML___')) {
-    return originalText.substring('___RAW_HTML___'.length);
-  }
-  return markdownToHtml(originalText, isStreaming);
-}
 
 // ── Media caption task instruction injection (#3) ──
 
@@ -595,52 +585,21 @@ export class TelegramBot {
       logger.info(`Executing scheduled task ${task.id} for chat ${chatId}${threadId ? ` topic ${threadId}` : ''}`);
 
       try {
-        const safeEdit = async (messageId: number, text: string, html = true) => {
-          try {
-            const final = text.startsWith('___RAW_HTML___') ? text.substring('___RAW_HTML___'.length) : text;
-            await this.bot.api.editMessageText(chatId, messageId, final, html ? { parse_mode: 'HTML' } : {});
-          } catch (e: any) {
-            if (!e?.description?.includes('message is not modified')) {
-              logger.warn(`Scheduler failed to edit message ${messageId}: ${e}`);
-            }
-          }
-        };
-
-        // Build a custom ChannelReply for scheduled messages
-        const scheduledReply: ChannelReply = {
-          send: async (text: string): Promise<number> => {
-            const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML', message_thread_id: threadId });
-            return msg.message_id;
-          },
-          edit: async (messageId: number, newText: string): Promise<void> => {
-            await safeEdit(messageId, newText, true);
-          },
-          sendPlain: async (text: string): Promise<number> => {
-            const msg = await this.bot.api.sendMessage(chatId, text, { parse_mode: 'HTML', message_thread_id: threadId });
-            return msg.message_id;
-          },
-          editPlain: async (messageId: number, newText: string): Promise<void> => {
-            await safeEdit(messageId, newText, false);
-          },
-          sendDocument: async (filePath: string, caption?: string): Promise<void> => {
-            await this.bot.api.sendMessage(chatId, caption || 'Document: ' + filePath, { message_thread_id: threadId });
-          },
-          delete: async (messageId: number): Promise<void> => {
-            await this.bot.api.deleteMessage(chatId, messageId);
-          },
-          sendRich: async (text: string | StructuredMessage): Promise<number> => {
-            return await scheduledReply.send(typeof text === 'string' ? text : getHtmlPayload(text));
-          },
-          sendRichDraft: async (text: string | StructuredMessage): Promise<number> => {
-            return await scheduledReply.send(typeof text === 'string' ? text : getHtmlPayload(text));
-          },
-          editRich: async (messageId: number, newText: string | StructuredMessage): Promise<void> => {
-            await scheduledReply.edit(messageId, typeof newText === 'string' ? newText : getHtmlPayload(newText));
-          },
-          editRichDraft: async (draftId: number, newText: string | StructuredMessage): Promise<void> => {
-            await scheduledReply.edit(draftId, typeof newText === 'string' ? newText : getHtmlPayload(newText));
-          },
-        };
+        // Route scheduled delivery through the same rich-block pipeline as the
+        // private-chat message loop (sendRichMessage native blocks). A synthetic
+        // ctx carries the api client + topic thread so buildChannelReply works
+        // without a live update.
+        const threadCtx = {
+          api: this.bot.api,
+          chat: { id: chatId },
+          message: threadId ? { message_thread_id: threadId } : undefined,
+          update: { message: threadId ? { message_thread_id: threadId } : undefined },
+          reply: (text: string, other?: Record<string, unknown>) =>
+            this.bot.api.sendMessage(chatId, text, { message_thread_id: threadId, ...(other || {}) }),
+          replyWithDocument: (document: string | InputFile, other?: Record<string, unknown>) =>
+            this.bot.api.sendDocument(chatId, document, { message_thread_id: threadId, ...(other || {}) }),
+        } as unknown as Context;
+        const scheduledReply = buildChannelReply(threadCtx, chatId, 'RichText');
 
         const session = await this.sessionManager.getOrCreate(chatId, this.defaultOptions, threadId);
         if (session.busy) {
