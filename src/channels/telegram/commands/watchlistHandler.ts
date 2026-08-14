@@ -133,8 +133,11 @@ export function registerWatchlistCommands(bot: Bot, scheduler?: ChatScheduler): 
   });
 
   // 2. Callback queries for inline keyboard
-  bot.callbackQuery(/^wl_/, async (ctx) => {
-    const data = ctx.callbackQuery.data;
+  bot.on('callback_query:data', async (ctx, next) => {
+    const data = ctx.callbackQuery?.data;
+    if (!data || !data.startsWith('wl_')) {
+      return next();
+    }
     const userId = ctx.from?.id;
     if (!userId) return;
 

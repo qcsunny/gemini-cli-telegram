@@ -59,11 +59,11 @@ describe('watchlistHandler', () => {
   it('should register watchlist commands on the bot', () => {
     const bot = {
       command: vi.fn(),
-      callbackQuery: vi.fn(),
+      on: vi.fn(),
     } as any;
 
     registerWatchlistCommands(bot);
     expect(bot.command).toHaveBeenCalledWith(['watchlist', 'wl'], expect.any(Function));
-    expect(bot.callbackQuery).toHaveBeenCalledWith(/^wl_/, expect.any(Function));
+    expect(bot.on).toHaveBeenCalledWith('callback_query:data', expect.any(Function));
   });
 });

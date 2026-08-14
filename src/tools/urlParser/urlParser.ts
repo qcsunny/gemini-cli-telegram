@@ -348,7 +348,7 @@ export async function parseZhihu(urlStr: string): Promise<ParsedLinkContent> {
 
 export async function parseTwitter(urlStr: string): Promise<ParsedLinkContent> {
   const url = new URL(urlStr);
-  const match = /(?:twitter\.com|x\.com)\/([^/]+)\/status\/(\d+)/i.exec(url.pathname);
+  const match = /\/([^/]+)\/status\/(\d+)/i.exec(url.pathname);
   if (!match) {
     return parseGeneralWeb(urlStr);
   }
