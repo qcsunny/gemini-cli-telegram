@@ -188,44 +188,4 @@ export function registerSessionHandlers(
       );
     }
   });
-
-  // ── Undo ──
-  bot.command('undo', async (ctx: Context) => {
-    const chatId = ctx.chat?.id;
-    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
-    if (!chatId) return;
-
-    const session = sessionManager.getSession(chatId, threadId);
-    if (!session) {
-      await ctx.reply(`${ICONS.warning} <b>No active session to undo.</b>`, { parse_mode: 'HTML' });
-      return;
-    }
-
-    if (session.busy) {
-      await ctx.reply(`${ICONS.warning} <b>Session is busy.</b>\nPlease cancel the current operation first.`, { parse_mode: 'HTML' });
-      return;
-    }
-
-    try {
-      if (!session.conversationId) {
-        await ctx.reply(`${ICONS.warning} <b>No conversation history found to undo.</b>`, { parse_mode: 'HTML' });
-        return;
-      }
-
-      const { undoLastTurn } = await import('../../../agy/historyManager.js');
-      const success = undoLastTurn(session.conversationId);
-
-      if (success) {
-        await ctx.reply(`${ICONS.success} <b>Undo Successful</b>\n\nI've rolled back the last user message and the subsequent assistant response.`, {
-          parse_mode: 'HTML',
-          reply_markup: buildMainKeyboard(),
-        });
-      } else {
-        await ctx.reply(`${ICONS.warning} <b>No undoable turns or failed to modify history in database.</b>`, { parse_mode: 'HTML' });
-      }
-    } catch (e) {
-      logger.error(`Error performing /undo for chat ${chatId}: ${e}`);
-      await ctx.reply(`${ICONS.error} <b>Undo failed:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
-    }
-  });
 }

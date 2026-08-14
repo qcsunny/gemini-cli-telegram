@@ -53,10 +53,13 @@ A local gateway that bridges the **Google Antigravity / Gemini CLI** to **Telegr
 | `/start` | Show the main keyboard and onboarding menu |
 | `/new` | Reset the conversation and start a fresh atomic session |
 | `/projects` | Browse and switch the active working directory / project |
-| `/model <name>` | Switch model (Gemini 3.x / Gemma 4 / Web2API reverse models) |
+| `/model <name>` | Switch model (Gemini 3.x / Gemma 4 / Web2API / DeepSeek / OpenCode) |
+| `/settings` | Configure chat settings and output preferences |
+| `/invest <symbol>` | Value investing 6-dimension report & multi-symbol comparison |
+| `/stock <symbol>` | Real-time stock & crypto market quotes |
+| `/sum [count]` | Summarize recent chat messages |
 | `/schedule` | View and manage scheduled / recurring tasks |
 | `/autopilot <goal>` | Launch an autonomous autopilot task |
-| `/undo` | Undo the last user + assistant exchange |
 | `/save` | Save the last formatted reply to the knowledge base |
 | `/delete_session <index>` | Permanently delete a stored session |
 | `/status` | Show live session statistics |

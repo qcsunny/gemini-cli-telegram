@@ -683,7 +683,6 @@ export class TelegramBot {
       { command: 'settings', description: 'Configure chat settings & parse modes' },
       { command: 'save', description: 'Save formatted response to answer save dir' },
       { command: 'resume', description: 'List or resume a previous session' },
-      { command: 'undo', description: 'Undo last conversation turn' },
       { command: 'cancel', description: 'Cancel current operation' },
       { command: 'projects', description: 'Browse and select projects' },
       { command: 'schedule', description: 'Schedule a message' },

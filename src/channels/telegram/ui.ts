@@ -285,7 +285,6 @@ export function formatHelp(): string {
     '<b>Core Commands</b>',
     `  /new — Start a fresh session ${ICONS.new}`,
     `  /resume — Restore previous conversation ${ICONS.resume}`,
-    `  /undo — Undo last conversation turn ${ICONS.arrow}`,
     `  /cancel — Stop AI generation ${ICONS.cancel}`,
     `  /save — Export response as Obsidian-compatible Markdown ${ICONS.save}`,
     `  /projects — Switch & manage workspaces ${ICONS.project}`,

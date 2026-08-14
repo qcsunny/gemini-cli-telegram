@@ -154,9 +154,13 @@ Send these common commands to the Telegram Bot to take precise control of the AI
 | `/new` | Immediately reset the current chat and open a brand-new atomic session context. |
 | `/projects` | Browse and directly switch the active working directory and project context. |
 | `/model <name>` | One-tap switch of the underlying inference model. |
+| `/settings` | Configure chat settings and output preferences. |
+| `/invest <symbol>` | Value investing 6-dimension report & multi-symbol comparison. |
+| `/stock <symbol>` | Real-time stock & crypto market quotes. |
+| `/sum [count]` | Summarize recent chat messages. |
 | `/schedule` | View and manage current scheduled/periodic tasks. |
 | `/autopilot <goal>` | Launch an AI autopilot task. |
-| `/undo` | Undo the last user/assistant conversation turn. |
+| `/save` | Save the last formatted reply to the knowledge base. |
 | `/delete_session` | Safely and physically delete a specified historical session. |
 | `/status` | Live output of current session statistics and resource consumption. |
 | `/help` | Show detailed command guidance. |
