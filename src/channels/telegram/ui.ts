@@ -104,6 +104,7 @@ export function buildModelKeyboard(
     .text(currentTier === 1 ? '▶ ⚡ Advanced' : '⚡ Advanced', '/model_tier 1')
     .text(currentTier === 2 ? '▶ 💡 General' : '💡 General', '/model_tier 2')
     .text(currentTier === 3 ? '▶ 🍃 Light' : '🍃 Light', '/model_tier 3')
+    .text(currentTier === 4 ? '▶ 🔁 Remote' : '🔁 Remote', '/model_tier 4')
     .row();
 
   const chunkSize = 1;

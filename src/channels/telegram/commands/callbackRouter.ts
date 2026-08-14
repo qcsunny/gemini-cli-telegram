@@ -135,7 +135,7 @@ export function registerCallbackRouter(
 
     if (data.startsWith('/model_tier ')) {
       const tier = parseInt(data.replace('/model_tier ', ''), 10);
-      const tierNames = ['🚀 Flagship Reasoning', '⚡ Advanced Reasoning', '💡 General Capability', '🍃 Light & Free'];
+      const tierNames = ['🚀 Flagship Reasoning', '⚡ Advanced Reasoning', '💡 General Capability', '🍃 Light & Free', '🔁 Remote Backends'];
       const tierName = tierNames[tier] || 'Model category';
       ctx.answerCallbackQuery(`✨ Switched category: ${tierName}`).catch(e => logger.error(`Failed callback: ${e}`));
 
@@ -157,8 +157,8 @@ export function registerCallbackRouter(
       }
 
       if (pageModels.length === 0) {
-        // Fallback: chunk models into 4 distinct non-overlapping slices
-        const totalTiers = 4;
+        // Fallback: chunk models into distinct non-overlapping slices
+        const totalTiers = Math.max(1, tiers.length);
         const chunkSize = Math.ceil(models.length / totalTiers);
         const start = tier * chunkSize;
         pageModels = models.slice(start, start + chunkSize);
