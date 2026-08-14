@@ -181,19 +181,23 @@ export function registerWatchlistCommands(bot: Bot, scheduler?: ChatScheduler): 
 
 async function handleReportGeneration(ctx: Context, userId: number): Promise<void> {
   const reply = buildChannelReply(ctx, ctx.chat?.id ?? userId, 'RichText');
-  const msgId = await reply.sendRich(`${ICONS.clock} 正在聚合自选股与大盘行情，AI 买方分析师正在全力生成复盘简报...`);
+  const msgId = await reply.send(`${ICONS.clock} 正在聚合自选股与大盘行情，AI 买方分析师正在全力生成复盘简报...`);
 
   try {
     const briefing = await generateDailyBriefing(userId, {
       onChunk: (chunk) => {
-        reply.editRichDraft(msgId, chunk).catch(() => {});
+        if (reply.editRichDraft) {
+          reply.editRichDraft(msgId, chunk).catch(() => {});
+        } else {
+          reply.edit(msgId, chunk).catch(() => {});
+        }
       },
     });
 
-    await reply.editRich(msgId, briefing.markdown);
+    await reply.edit(msgId, briefing.markdown);
   } catch (err) {
     logger.error(`[WatchlistHandler] Failed to generate daily briefing for user ${userId}: ${err}`);
-    await reply.editRich(msgId, `❌ 生成复盘简报失败：${err}`);
+    await reply.edit(msgId, `❌ 生成复盘简报失败：${err}`);
   }
 }
 

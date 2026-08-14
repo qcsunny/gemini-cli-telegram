@@ -123,7 +123,7 @@ export async function handleLinkSummarizeWorkflow(
   model?: string
 ): Promise<void> {
   const reply = buildChannelReply(ctx, ctx.chat?.id || ctx.from?.id || 0, 'RichText');
-  const msgId = await reply.sendRich(`${ICONS.clock} 正在抓取并解析链接内容：\`${urlStr.slice(0, 50)}...\``);
+  const msgId = await reply.send(`${ICONS.clock} 正在抓取并解析链接内容：\`${urlStr.slice(0, 50)}...\``);
 
   try {
     const parsed = await parseUrlContent(urlStr);
@@ -134,7 +134,7 @@ export async function handleLinkSummarizeWorkflow(
       parsed.type === 'zhihu' ? '💡 知乎专栏' :
       parsed.type === 'twitter' ? '🐦 X/Twitter' : '🌐 网页文章';
 
-    await reply.editRich(
+    await reply.edit(
       msgId,
       `${ICONS.clock} 已成功解析 **${typeLabel}**：《${parsed.title}》\n正在全力进行 AI 深度精读提炼...`
     );
@@ -142,14 +142,18 @@ export async function handleLinkSummarizeWorkflow(
     const summaryResult = await generateLinkSummary(parsed, {
       model,
       onChunk: (chunk) => {
-        reply.editRichDraft(msgId, chunk).catch(() => {});
+        if (reply.editRichDraft) {
+          reply.editRichDraft(msgId, chunk).catch(() => {});
+        } else {
+          reply.edit(msgId, chunk).catch(() => {});
+        }
       },
     });
 
-    await reply.editRich(msgId, summaryResult.markdown);
+    await reply.edit(msgId, summaryResult.markdown);
   } catch (err) {
     logger.error(`[LinkSummarizer] Failed to summarize ${urlStr}: ${err}`);
-    await reply.editRich(msgId, `❌ 链接解析或精读失败：${err instanceof Error ? err.message : String(err)}`);
+    await reply.edit(msgId, `❌ 链接解析或精读失败：${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
