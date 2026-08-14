@@ -43,6 +43,7 @@ import {
   fetchInvestAnalyses,
   buildInvestPrompt,
   buildComparePrompt,
+  getInvestProjectPath,
 } from './investDataFetcher.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { getFundDataset, type FundDataset } from '../../../stock/provider/fund.js';
@@ -778,21 +779,6 @@ function buildFundDeepReportPrompt(result: FundAnalysisResult, ds: FundDataset):
   ].join('\n');
 }
 
-function getInvestProjectPath(): string {
-  try {
-    const userConfig = loadUserConfig();
-    const investProj = userConfig?.projects?.find(
-      (p) => p.name === '价值投资分析专家' || p.path?.endsWith('value-invest-analysis')
-    );
-    if (investProj?.path) {
-      return investProj.path;
-    }
-  } catch (e) {
-    logger.warn(`Failed to resolve invest project path: ${e}`);
-  }
-  return process.cwd();
-}
-
 function toStoreBackend(channel: string | null): 'web2api' | 'deepseek' | 'gemini-direct' | 'opencode' {
   if (channel === 'web2api') return 'web2api';
   if (channel === 'deepseek') return 'deepseek';
@@ -855,7 +841,7 @@ export function registerInvestHandler(
     const symbols = cleanArgs
       .split(/[,\s，、]+|(?:\s+(?:vs|VS|对比|对)\s+)/)
       .map((s) => s.replace(/^\$/, '').trim())
-      .filter(Boolean);
+      .filter((s) => s && !/^(vs|VS|对比|对)$/i.test(s));
 
     if (symbols.length >= 2) {
       const investCwd = getInvestProjectPath();
