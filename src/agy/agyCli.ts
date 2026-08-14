@@ -19,7 +19,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
-import { getStockMarketApiKey } from '../config/userConfig.js';
+import { getStockMarketApiKey, loadUserConfig } from '../config/userConfig.js';
 
 import { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel } from './modelDetection.js';
 import { runWeb2Api } from './backends/web2api.js';
@@ -142,27 +142,29 @@ async function snapshotConversations(): Promise<Set<string>> {
  *   4. Everything else → native `agy` binary (C++ child process)
  */
 export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
+  const effectiveProxy = opts.proxy || loadUserConfig()?.proxy || process.env['HTTP_PROXY'] || process.env['http_proxy'];
+  const optsWithProxy = { ...opts, proxy: effectiveProxy };
+
   // Route web2api models directly to the local HTTP service
   if (opts.model && isWeb2ApiModel(opts.model)) {
     logger.info(`[agyCli] Routing to web2api: model=${opts.model}`);
-    return runWeb2Api(opts);
+    return runWeb2Api(optsWithProxy);
   }
 
   // Route DeepSeek models directly to the local deepseek-api proxy
   if (opts.model && isDeepSeekModel(opts.model)) {
     logger.info(`[agyCli] Routing to DeepSeek proxy: model=${opts.model}`);
-    return runDeepSeek(opts);
+    return runDeepSeek(optsWithProxy);
   }
-
-
 
   // Route OpenCode models to the local opencode binary
   if (opts.model && isOpenCodeModel(opts.model)) {
     logger.info(`[agyCli] Routing to OpenCode: model=${opts.model}`);
-    return runOpenCode(opts);
+    return runOpenCode(optsWithProxy);
   }
 
-  const { prompt, cwd, conversationId, onChunk, signal, extraDirs, model, proxy, printTimeout, allowTools } = opts;
+  const { prompt, cwd, conversationId, onChunk, signal, extraDirs, model, printTimeout, allowTools } = optsWithProxy;
+  const proxy = effectiveProxy;
   const agy = getAgyPath();
 
   // Build arg list
