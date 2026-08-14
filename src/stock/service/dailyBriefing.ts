@@ -13,6 +13,7 @@ import { getUserWatchlist } from './watchlist.js';
 import { marketService } from './quote.js';
 import type { StockQuote } from '../types.js';
 import { logger } from '../../utils/logger.js';
+import { getDefaultModel } from '../../config/userConfig.js';
 import { runModelWithFallbackChain } from '../../channels/telegram/commands/inlineHandler.js';
 
 export type MarketSegment = 'all' | 'cn' | 'hk' | 'us' | 'crypto';
@@ -242,7 +243,7 @@ ${segmentPromptFocus}
 
 注意：输出内容专业客观，排版美观精炼。`;
 
-  const initialModel = options?.model || 'Gemini 3.7 Flash (High)';
+  const initialModel = options?.model || getDefaultModel() || 'Gemini 3.7 Flash (High)';
   logger.info(`[DailyBriefing] Generating ${segment} briefing for user ${userId} (${symbols.length} symbols) using model ${initialModel}`);
 
   const runResult = await runModelWithFallbackChain(
