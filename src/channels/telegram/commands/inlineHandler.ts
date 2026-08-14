@@ -789,10 +789,13 @@ export function registerInlineHandler(
   defaultOptions: SessionOptions = {},
   options: InlineHandlerOptions = {},
 ): void {
-  bot.on('callback_query:data', async (ctx: Context) => {
+  bot.on('callback_query:data', async (ctx: Context, next) => {
     const data = ctx.callbackQuery?.data;
     const inlineMessageId = ctx.callbackQuery?.inline_message_id;
-    if (!data || !inlineMessageId) return;
+    if (!data || !inlineMessageId || !data.startsWith('inline_')) {
+      await next();
+      return;
+    }
 
     if (data === 'inline_thinking') {
       await ctx.answerCallbackQuery({
