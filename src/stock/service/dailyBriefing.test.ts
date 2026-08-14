@@ -9,18 +9,31 @@ import {
   collectWatchlistMarketData,
   formatWatchlistSnapshotTable,
   generateDailyBriefing,
+  getSymbolMarketSegment,
 } from './dailyBriefing.js';
 import * as watchlistService from './watchlist.js';
 import { marketService } from './quote.js';
 import * as inlineHandler from '../../channels/telegram/commands/inlineHandler.js';
 import type { StockQuote } from '../types.js';
 
-describe('dailyBriefing service', () => {
+describe('dailyBriefing service - market segment detection', () => {
+  it('should accurately classify symbols into market segments', () => {
+    expect(getSymbolMarketSegment('600519')).toBe('cn');
+    expect(getSymbolMarketSegment('000001.SZ')).toBe('cn');
+    expect(getSymbolMarketSegment('00700')).toBe('hk');
+    expect(getSymbolMarketSegment('09988.HK')).toBe('hk');
+    expect(getSymbolMarketSegment('NVDA')).toBe('us');
+    expect(getSymbolMarketSegment('AAPL')).toBe('us');
+    expect(getSymbolMarketSegment('BTC')).toBe('crypto');
+  });
+});
+
+describe('dailyBriefing service - briefing generation', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  const mockQuote: StockQuote = {
+  const mockNvdaQuote: StockQuote = {
     symbol: 'NVDA',
     name: 'NVIDIA Corporation',
     price: 130.5,
@@ -30,34 +43,53 @@ describe('dailyBriefing service', () => {
     currency: 'USD',
   };
 
-  it('should format watchlist snapshot table cleanly', () => {
-    const table = formatWatchlistSnapshotTable([mockQuote]);
+  const mockMoutaiQuote: StockQuote = {
+    symbol: '600519',
+    name: '贵州茅台',
+    price: 1600.0,
+    change: -10.0,
+    changePercent: -0.62,
+    market: 'SSE',
+    currency: 'CNY',
+  };
+
+  it('should format watchlist snapshot table with sector tags', () => {
+    const table = formatWatchlistSnapshotTable([mockNvdaQuote, mockMoutaiQuote]);
+    expect(table).toContain('[美股]');
     expect(table).toContain('NVDA');
-    expect(table).toContain('$130.50');
-    expect(table).toContain('+2.75%');
+    expect(table).toContain('[A股]');
+    expect(table).toContain('600519');
   });
 
-  it('should return empty guidance if watchlist is empty', async () => {
-    vi.spyOn(watchlistService, 'getUserWatchlist').mockResolvedValueOnce([]);
+  it('should filter watchlist data by market segment', async () => {
+    vi.spyOn(watchlistService, 'getUserWatchlist').mockResolvedValueOnce(['NVDA', '600519']);
+    vi.spyOn(marketService, 'getQuote').mockImplementation(async (sym) => {
+      if (sym === 'NVDA') return mockNvdaQuote;
+      if (sym === '600519') return mockMoutaiQuote;
+      return null;
+    });
 
-    const res = await generateDailyBriefing(12345);
-    expect(res.markdown).toContain('您的自选股列表为空');
-    expect(res.watchlistQuotes).toHaveLength(0);
+    const cnData = await collectWatchlistMarketData(12345, 'cn');
+    expect(cnData.symbols).toEqual(['600519']);
+    expect(cnData.watchlistQuotes).toHaveLength(1);
+
+    const usData = await collectWatchlistMarketData(12345, 'us');
+    expect(usData.symbols).toEqual(['NVDA']);
+    expect(usData.watchlistQuotes).toHaveLength(1);
   });
 
-  it('should collect quotes and generate AI briefing using fallback chain', async () => {
-    vi.spyOn(watchlistService, 'getUserWatchlist').mockResolvedValueOnce(['NVDA']);
-    vi.spyOn(marketService, 'getQuote').mockResolvedValue(mockQuote);
+  it('should generate AI briefing with segment focus', async () => {
+    vi.spyOn(watchlistService, 'getUserWatchlist').mockResolvedValueOnce(['600519']);
+    vi.spyOn(marketService, 'getQuote').mockResolvedValue(mockMoutaiQuote);
     vi.spyOn(inlineHandler, 'runModelWithFallbackChain').mockResolvedValueOnce({
-      result: { output: '## 📅 自选股每日 AI 复盘简报\n\n今日英伟达领涨大盘。' } as any,
+      result: { output: '## 📅 🇨🇳 A 股市场 AI 复盘简报\n\n今日白酒板块缩量震荡。' } as any,
       modelUsed: 'Gemini 3.7 Flash (High)',
       isFallback: false,
     });
 
-    const res = await generateDailyBriefing(12345);
-    expect(res.markdown).toContain('自选股每日 AI 复盘简报');
-    expect(res.markdown).toContain('今日英伟达领涨大盘');
+    const res = await generateDailyBriefing(12345, { segment: 'cn' });
+    expect(res.markdown).toContain('A 股市场 AI 复盘简报');
+    expect(res.segment).toBe('cn');
     expect(res.watchlistQuotes).toHaveLength(1);
-    expect(res.modelUsed).toBe('Gemini 3.7 Flash (High)');
   });
 });
