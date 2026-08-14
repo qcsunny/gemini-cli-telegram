@@ -167,6 +167,20 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   const proxy = effectiveProxy;
   const agy = getAgyPath();
 
+  // Only pass a conversation id when it is a real agy conversation DB. Synthetic
+  // ids from other backends (e.g. "opencode-...") do not exist under agy's
+  // conversations dir: forwarding one makes agy silently start a fresh
+  // conversation while the bot keeps the stale id, so transcript recovery
+  // (thinking block) later looks in the wrong brain/ path. Treat them as no
+  // conversation so agy creates a new one and the close handler detects it.
+  const validConversationId =
+    conversationId && fssync.existsSync(path.join(getConversationsDir(), `${conversationId}.db`))
+      ? conversationId
+      : undefined;
+  if (conversationId && !validConversationId) {
+    logger.warn(`[agyCli] conversationId "${conversationId}" has no agy DB — starting a fresh conversation`);
+  }
+
   // Build arg list
   const args: string[] = ['--print', prompt];
 
@@ -181,8 +195,8 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     args.push('--dangerously-skip-permissions');
   }
 
-  if (conversationId) {
-    args.push('--conversation', conversationId);
+  if (validConversationId) {
+    args.push('--conversation', validConversationId);
   }
 
   if (model) {
@@ -194,10 +208,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   }
 
   // Snapshot conversations before the call so we can detect the new one
-  const before = conversationId ? new Set<string>() : await snapshotConversations();
+  const before = validConversationId ? new Set<string>() : await snapshotConversations();
 
   // Record the max step idx before this run so per-reply usage only counts new steps
-  const fromIdx = conversationId ? getMaxStepIdx(path.join(getConversationsDir(), `${conversationId}.db`)) : -1;
+  const fromIdx = validConversationId ? getMaxStepIdx(path.join(getConversationsDir(), `${validConversationId}.db`)) : -1;
 
   // Resolve and inject the correct Antigravity Project ID for the workspace
   const agProjectId = await findAntigravityProjectId(cwd);
@@ -338,15 +352,15 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
       // If abort already settled the promise, skip expensive DB side-effects
       if (settled) {
-        resolve({ conversationId: conversationId ?? '', output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage: undefined });
+        resolve({ conversationId: validConversationId ?? '', output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage: undefined });
         return;
       }
       settled = true;
 
-      let resolvedConvId = conversationId ?? '';
+      let resolvedConvId = validConversationId ?? '';
 
       // If this was a new conversation, detect the new .db file
-      if (!conversationId) {
+      if (!validConversationId) {
         try {
           const after = await snapshotConversations();
           const newIds = [...after].filter(id => !before.has(id));
