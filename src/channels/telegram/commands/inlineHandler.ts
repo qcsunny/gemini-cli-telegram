@@ -369,12 +369,15 @@ export class InlineStreamQueue {
   }
 }
 
-export type InlineTask = 'translate' | 'summarize' | 'image' | 'compare';
+export type InlineTask = 'translate' | 'summarize' | 'image' | 'compare' | 'read';
 const TASK_PREFIX_MAP: Record<string, InlineTask> = {
   '/translate': 'translate',
   '/summarize': 'summarize',
+  '/sum': 'summarize',
   '/img': 'image',
   '/v': 'compare',
+  '/read': 'read',
+  '/summary': 'read',
 };
 
 export const IMAGE_TASK_INSTRUCTION =
@@ -449,6 +452,7 @@ export function fuzzyMatchModels(query: string, models: string[], limit: number 
 const TASK_INSTRUCTION: Record<InlineTask, string> = {
   translate: 'Translate the following content between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting:\n\n',
   summarize: 'Summarize the following content concisely and list the key points. Reply in the same language as the user\'s message:\n\n',
+  read: 'Please read, analyze and extract key takeaways from the following content concisely:\n\n',
   image: IMAGE_TASK_INSTRUCTION,
   compare: '',
 };
@@ -1402,6 +1406,7 @@ export function registerInlineHandler(
         ? '🖼️ **Image generation mode**'
         : task === 'translate' ? '🌐 **Translate mode**'
         : task === 'summarize' ? '📋 **Summarize mode**'
+        : task === 'read' ? '📖 **Smart link reading mode**'
         : task === 'compare' ? '⚖️ **Multi-model comparison mode**'
         : undefined;
 
@@ -1439,6 +1444,7 @@ export function registerInlineHandler(
         ? `🖼️ Click to generate image [${displayModelName(modelToUse)}]`
         : task === 'translate' ? `🌐 Click to translate [${displayModelName(modelToUse)}]`
         : task === 'summarize' ? `📋 Click to summarize [${displayModelName(modelToUse)}]`
+        : task === 'read' ? `📖 Click to read & analyze link [${displayModelName(modelToUse)}]`
         : task === 'compare' ? '⚖️ Click to select models to compare'
         : `🤔 Click to send and start thinking [${displayModelName(modelToUse)}]`;
       let initMarkdown: string;
@@ -1611,6 +1617,22 @@ export function registerInlineHandler(
           }
         } catch (e) {
           logger.warn(`[InlineInvest] Prefetch threw for ${pending.investSymbol}: ${e}`);
+        }
+      }
+    }
+
+    // /read: parse URL content and inject into prompt
+    if (pending.task === 'read') {
+      const { extractFirstUrl, parseUrlContent } = await import('../../../tools/urlParser/urlParser.js');
+      const url = extractFirstUrl(pending.prompt);
+      if (url) {
+        logger.info(`[InlineRead] Parsing URL "${url}" on click`);
+        try {
+          const parsed = await parseUrlContent(url);
+          finalPrompt = `你是一位顶尖的技术研究员与专业文献分析师。请对以下抓取到的内容进行深度、结构化、清晰且精炼的精读与总结：\n\n【原文内容】\n${parsed.content}`;
+          logger.info(`[InlineRead] Enhanced prompt with parsed URL content (${parsed.content.length} chars)`);
+        } catch (e) {
+          logger.warn(`[InlineRead] URL parse threw for ${url}: ${e}`);
         }
       }
     }
