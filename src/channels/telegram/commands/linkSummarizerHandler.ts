@@ -91,13 +91,14 @@ ${parsed.content}
   const initialModel = options?.model || 'Gemini 3.7 Flash (High)';
   logger.info(`[LinkSummarizer] Summarizing URL="${parsed.url}" type="${parsed.type}" using model ${initialModel}`);
 
-  const runResult = await runModelWithFallbackChain({
+  const runResult = await runModelWithFallbackChain(
     prompt,
     initialModel,
-    signal: options?.signal,
-    onChunk: options?.onChunk,
-    customTimeoutMs: 60_000,
-  });
+    {},
+    options?.signal,
+    undefined,
+    options?.onChunk
+  );
 
   const output = runResult.result?.output?.trim();
   if (!output) {
@@ -122,7 +123,7 @@ export async function handleLinkSummarizeWorkflow(
   model?: string
 ): Promise<void> {
   const reply = buildChannelReply(ctx, ctx.chat?.id || ctx.from?.id || 0, 'RichText');
-  await reply.sendRichMessage(`${ICONS.working} 正在抓取并解析链接内容：\`${urlStr.slice(0, 50)}...\``);
+  const msgId = await reply.sendRich(`${ICONS.clock} 正在抓取并解析链接内容：\`${urlStr.slice(0, 50)}...\``);
 
   try {
     const parsed = await parseUrlContent(urlStr);
@@ -133,21 +134,22 @@ export async function handleLinkSummarizeWorkflow(
       parsed.type === 'zhihu' ? '💡 知乎专栏' :
       parsed.type === 'twitter' ? '🐦 X/Twitter' : '🌐 网页文章';
 
-    await reply.editRichMessage(
-      `${ICONS.working} 已成功解析 **${typeLabel}**：《${parsed.title}》\n正在全力进行 AI 深度精读提炼...`
+    await reply.editRich(
+      msgId,
+      `${ICONS.clock} 已成功解析 **${typeLabel}**：《${parsed.title}》\n正在全力进行 AI 深度精读提炼...`
     );
 
     const summaryResult = await generateLinkSummary(parsed, {
       model,
       onChunk: (chunk) => {
-        reply.streamRichMessage(chunk).catch(() => {});
+        reply.editRichDraft(msgId, chunk).catch(() => {});
       },
     });
 
-    await reply.editRichMessage(summaryResult.markdown);
+    await reply.editRich(msgId, summaryResult.markdown);
   } catch (err) {
     logger.error(`[LinkSummarizer] Failed to summarize ${urlStr}: ${err}`);
-    await reply.editRichMessage(`❌ 链接解析或精读失败：${err instanceof Error ? err.message : String(err)}`);
+    await reply.editRich(msgId, `❌ 链接解析或精读失败：${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

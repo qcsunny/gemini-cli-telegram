@@ -11,7 +11,7 @@
 
 import type { Bot, Context } from 'grammy';
 import { InlineKeyboard } from 'grammy';
-import { addToWatchlist, removeFromWatchlist, getUserWatchlist } from '../../../stock/service/watchlist.js';
+import { addToWatchlist, removeFromWatchlist } from '../../../stock/service/watchlist.js';
 import { generateDailyBriefing, collectWatchlistMarketData, formatWatchlistSnapshotTable } from '../../../stock/service/dailyBriefing.js';
 import { buildChannelReply } from '../bot/channelReply.js';
 import { ICONS } from '../ui.js';
@@ -181,19 +181,19 @@ export function registerWatchlistCommands(bot: Bot, scheduler?: ChatScheduler): 
 
 async function handleReportGeneration(ctx: Context, userId: number): Promise<void> {
   const reply = buildChannelReply(ctx, ctx.chat?.id ?? userId, 'RichText');
-  await reply.sendRichMessage(`${ICONS.working} 正在聚合自选股与大盘行情，AI 买方分析师正在全力生成复盘简报...`);
+  const msgId = await reply.sendRich(`${ICONS.clock} 正在聚合自选股与大盘行情，AI 买方分析师正在全力生成复盘简报...`);
 
   try {
     const briefing = await generateDailyBriefing(userId, {
       onChunk: (chunk) => {
-        reply.streamRichMessage(chunk).catch(() => {});
+        reply.editRichDraft(msgId, chunk).catch(() => {});
       },
     });
 
-    await reply.editRichMessage(briefing.markdown);
+    await reply.editRich(msgId, briefing.markdown);
   } catch (err) {
     logger.error(`[WatchlistHandler] Failed to generate daily briefing for user ${userId}: ${err}`);
-    await reply.editRichMessage(`❌ 生成复盘简报失败：${err}`);
+    await reply.editRich(msgId, `❌ 生成复盘简报失败：${err}`);
   }
 }
 
@@ -225,29 +225,21 @@ async function handleSubscription(
     return;
   }
 
-  // Calculate next run timestamp today or tomorrow
-  const now = new Date();
-  const next = new Date();
-  next.setHours(hour, minute, 0, 0);
-  if (next.getTime() <= now.getTime()) {
-    next.setDate(next.getDate() + 1);
-  }
+  const formattedTime = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
 
-  const taskId = scheduler.addTask({
+  const task = await scheduler.addTask(
     chatId,
-    threadId,
-    message: `/watchlist report`,
-    type: 'recurring',
-    schedule: `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`,
-    intervalMinutes: 24 * 60, // Every 24 hours
-    nextRun: next.getTime(),
-  });
+    `/watchlist report`,
+    'recurring',
+    formattedTime,
+    24 * 60, // Every 24 hours
+    threadId
+  );
 
   const confirmMsg =
     `🎉 **每日自选股 AI 复盘推送订阅成功！**\n\n` +
-    `• **推送时间**：每天 ${timeStr} (上海时间)\n` +
-    `• **首次触发**：${next.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}\n` +
-    `• **任务 ID**：\`${taskId.slice(0, 8)}\`\n\n` +
+    `• **推送时间**：每天 ${formattedTime} (上海时间)\n` +
+    `• **任务 ID**：\`${task.id.slice(0, 8)}\`\n\n` +
     `系统将在每个交易日准时为您送达自选股深度复盘简报！`;
 
   if (ctx.callbackQuery) {
