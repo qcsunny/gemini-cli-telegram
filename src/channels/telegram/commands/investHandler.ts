@@ -53,7 +53,7 @@ import { getChannelModel } from '../../../core/modelRegistry.js';
 
 // ── Dimension types ──
 
-export interface InvestDimension {
+interface InvestDimension {
   id: string;
   name: string;
   score: number; // 0-100
@@ -61,7 +61,7 @@ export interface InvestDimension {
   notes: string[];
 }
 
-export interface InvestResult {
+interface InvestResult {
   symbol: string;
   name: string;
   market: string;
@@ -512,7 +512,7 @@ function grade(total: number): { grade: string; rating: string } {
   return { grade: 'D', rating: '强烈看空' };
 }
 
-export function analyzeInvest(quote: StockQuote): InvestResult {
+function analyzeInvest(quote: StockQuote): InvestResult {
   const fs = quote.financials ?? [];
   const bs = quote.balanceSheets ?? [];
   const cf = quote.cashFlows ?? [];
@@ -559,7 +559,7 @@ export function analyzeInvest(quote: StockQuote): InvestResult {
 
 // ── Rich-message rendering ──
 
-export function buildInvestBlocks(result: InvestResult): Array<Record<string, any>> {
+function buildInvestBlocks(result: InvestResult): Array<Record<string, any>> {
   const blocks: Array<Record<string, any>> = [
     {
       type: 'paragraph',

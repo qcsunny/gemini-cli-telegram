@@ -320,5 +320,37 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
     return true;
   }
 
+  // 7. REST API: DELETE /api/watchlist
+  if (url.startsWith('/api/watchlist') && method === 'DELETE') {
+    let bodyStr = '';
+    let bodyBytes = 0;
+    const MAX_BODY_BYTES = 16 * 1024;
+    let tooLarge = false;
+    for await (const chunk of req) {
+      bodyBytes += (chunk as Buffer).length;
+      if (bodyBytes > MAX_BODY_BYTES) {
+        tooLarge = true;
+        break;
+      }
+      bodyStr += chunk;
+    }
+    if (tooLarge) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Request body too large' }));
+      return true;
+    }
+    try {
+      const { userId, symbol } = JSON.parse(bodyStr);
+      const { removeFromWatchlist } = await import('../service/watchlist.js');
+      const ok = await removeFromWatchlist(Number(userId), String(symbol));
+      res.writeHead(ok ? 200 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: ok }));
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+    }
+    return true;
+  }
+
   return false; // Not handled by stock routes
 }

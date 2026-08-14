@@ -48,7 +48,7 @@ interface PendingResult {
 
 export const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
-export const pendingStockRequests = new Map<string, { queryStr: string; webAppUrl: string }>();
+const pendingStockRequests = new Map<string, { queryStr: string; webAppUrl: string }>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
 
 interface RegenerateContext {
