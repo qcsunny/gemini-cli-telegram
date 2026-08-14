@@ -236,26 +236,50 @@ async function handleReportGeneration(
   userId: number,
   segment: MarketSegment = 'all'
 ): Promise<void> {
-  const reply = buildChannelReply(ctx, ctx.chat?.id ?? userId, 'RichText');
+  const chatId = ctx.chat?.id ?? userId;
   const segmentLabel = segment === 'cn' ? '🇨🇳 A股' : segment === 'hk' ? '🇭🇰 港股' : segment === 'us' ? '🇺🇸 美股' : '🌐 全市场';
-  const msgId = await reply.send(`${ICONS.clock} 正在聚合【${segmentLabel}】自选股与大盘行情，AI 买方分析师正在全力出具复盘报告...`);
+  
+  let msgId: number | undefined;
+  try {
+    const sent = await ctx.reply(`${ICONS.clock} 正在聚合【${segmentLabel}】自选股与大盘行情，AI 买方分析师正在全力出具复盘报告...`, {
+      parse_mode: 'Markdown',
+    });
+    msgId = sent.message_id;
+  } catch {
+    try {
+      const sent = await ctx.api.sendMessage(chatId, `${ICONS.clock} 正在聚合【${segmentLabel}】自选股与大盘行情，AI 买方分析师正在全力出具复盘报告...`);
+      msgId = sent.message_id;
+    } catch (e) {
+      logger.error(`[WatchlistHandler] Failed to send initial status message: ${e}`);
+    }
+  }
 
   try {
     const briefing = await generateDailyBriefing(userId, {
       segment,
       onChunk: (chunk) => {
-        if (reply.editRichDraft) {
-          reply.editRichDraft(msgId, chunk).catch(() => {});
-        } else {
-          reply.edit(msgId, chunk).catch(() => {});
+        if (msgId) {
+          ctx.api.editMessageText(chatId, msgId, chunk, { parse_mode: 'Markdown' }).catch(() => {});
         }
       },
     });
 
-    await reply.edit(msgId, briefing.markdown);
+    if (msgId) {
+      await ctx.api.editMessageText(chatId, msgId, briefing.markdown, { parse_mode: 'Markdown' }).catch(async () => {
+        await ctx.api.editMessageText(chatId, msgId!, briefing.markdown).catch(() => {});
+      });
+    } else {
+      await ctx.reply(briefing.markdown, { parse_mode: 'Markdown' }).catch(async () => {
+        await ctx.reply(briefing.markdown).catch(() => {});
+      });
+    }
   } catch (err) {
     logger.error(`[WatchlistHandler] Failed to generate daily briefing for user ${userId}: ${err}`);
-    await reply.edit(msgId, `❌ 生成复盘简报失败：${err}`);
+    if (msgId) {
+      await ctx.api.editMessageText(chatId, msgId, `❌ 生成复盘简报失败：${err}`).catch(() => {});
+    } else {
+      await ctx.reply(`❌ 生成复盘简报失败：${err}`).catch(() => {});
+    }
   }
 }
 
