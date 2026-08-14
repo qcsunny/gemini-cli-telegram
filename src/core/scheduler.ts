@@ -253,11 +253,19 @@ export class ChatScheduler {
   }
 
   async removeTask(id: string): Promise<boolean> {
-    const existed = this.tasks.delete(id);
-    if (existed) {
+    if (this.tasks.has(id)) {
+      this.tasks.delete(id);
       await this.saveTasks();
+      return true;
     }
-    return existed;
+    for (const [taskId] of this.tasks.entries()) {
+      if (taskId.startsWith(id)) {
+        this.tasks.delete(taskId);
+        await this.saveTasks();
+        return true;
+      }
+    }
+    return false;
   }
 
   async toggleTask(id: string): Promise<boolean> {

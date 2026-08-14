@@ -74,7 +74,8 @@ export async function renderWatchlistCard(
       `• 添加个股：\`/watchlist add NVDA, AAPL, 600519\`\n` +
       `• 删除个股：\`/watchlist del NVDA\`\n` +
       `• 分板块复盘：\`/watchlist report [cn | hk | us | all]\`\n` +
-      `• 分板块订阅：\`/watchlist subscribe 15:30 cn\` 或 \`/watchlist subscribe 08:00 us\``;
+      `• 分板块订阅：\`/watchlist subscribe 15:30 cn\` 或 \`/watchlist subscribe 08:00 us\`\n` +
+      `• 取消订阅：\`/watchlist unsub [cn | hk | us | all]\``;
     return { text: emptyText, keyboard: new InlineKeyboard() };
   }
 
@@ -150,6 +151,13 @@ export function registerWatchlistCommands(bot: Bot, scheduler?: ChatScheduler): 
       return;
     }
 
+    // /watchlist unsubscribe [segment/all/id]
+    if (subCmd === 'unsubscribe' || subCmd === 'unsub' || subCmd === 'cancel') {
+      const target = parts[1]?.toLowerCase() || 'all';
+      await handleUnsubscription(ctx, userId, target, scheduler);
+      return;
+    }
+
     // /watchlist subscriptions / list
     if (subCmd === 'subscriptions' || subCmd === 'subs' || subCmd === 'tasks') {
       await handleListSubscriptions(ctx, userId, scheduler);
@@ -196,6 +204,12 @@ export function registerWatchlistCommands(bot: Bot, scheduler?: ChatScheduler): 
       const timeStr = `${parts[0]}:${parts[1]}`;
       const segment = (parts[2] || 'all') as MarketSegment;
       await handleSubscription(ctx, userId, timeStr, segment, scheduler);
+      return;
+    }
+
+    if (data.startsWith('wl_unsub:')) {
+      const target = data.replace('wl_unsub:', '').trim();
+      await handleUnsubscription(ctx, userId, target, scheduler);
       return;
     }
 
@@ -302,6 +316,88 @@ async function handleSubscription(
   }
 }
 
+async function handleUnsubscription(
+  ctx: Context,
+  userId: number,
+  target: string,
+  scheduler?: ChatScheduler
+): Promise<void> {
+  const chatId = ctx.chat?.id ?? userId;
+  if (!scheduler) {
+    await ctx.reply('⚠️ 定时调度服务未初始化。');
+    return;
+  }
+
+  const allTasks = scheduler.getTasksForChat(chatId).filter(t => t.message.startsWith('/watchlist'));
+
+  if (allTasks.length === 0) {
+    const msg = 'ℹ️ 您当前没有活跃的自选股定时复盘订阅。';
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery(msg).catch(() => {});
+    } else {
+      await ctx.reply(msg);
+    }
+    return;
+  }
+
+  // 1. Cancel ALL
+  if (target === 'all') {
+    for (const t of allTasks) {
+      await scheduler.removeTask(t.id);
+    }
+    const msg = `🗑 已成功取消全部 **${allTasks.length}** 个自选股定时复盘订阅。`;
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery('已取消全部订阅').catch(() => {});
+      await ctx.editMessageText(msg, { parse_mode: 'Markdown' }).catch(() => {});
+    } else {
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+    }
+    return;
+  }
+
+  // 2. Cancel by segment (cn, hk, us)
+  if (['cn', 'hk', 'us', 'crypto'].includes(target)) {
+    const matched = allTasks.filter(t => t.message.endsWith(` ${target}`));
+    if (matched.length === 0) {
+      const msg = `ℹ️ 未找到板块为 \`${target}\` 的定时订阅任务。`;
+      if (ctx.callbackQuery) {
+        await ctx.answerCallbackQuery(msg).catch(() => {});
+      } else {
+        await ctx.reply(msg, { parse_mode: 'Markdown' });
+      }
+      return;
+    }
+
+    for (const t of matched) {
+      await scheduler.removeTask(t.id);
+    }
+    const msg = `🗑 已成功取消 **${matched.length}** 个【${target.toUpperCase()}】板块的定时复盘订阅。`;
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery('已取消订阅').catch(() => {});
+      await ctx.editMessageText(msg, { parse_mode: 'Markdown' }).catch(() => {});
+    } else {
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+    }
+    return;
+  }
+
+  // 3. Cancel by task ID
+  const matchedTask = allTasks.find(t => t.id.startsWith(target));
+  if (matchedTask) {
+    await scheduler.removeTask(matchedTask.id);
+    const msg = `🗑 已成功取消定时复盘任务 (ID: \`${matchedTask.id.slice(0, 8)}\` · \`${matchedTask.schedule}\`)。`;
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery('已取消订阅').catch(() => {});
+      await ctx.editMessageText(msg, { parse_mode: 'Markdown' }).catch(() => {});
+    } else {
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+    }
+    return;
+  }
+
+  await ctx.reply(`⚠️ 未找到匹配的任务 ID 或板块：\`${target}\``, { parse_mode: 'Markdown' });
+}
+
 async function handleListSubscriptions(
   ctx: Context,
   userId: number,
@@ -328,15 +424,22 @@ async function handleListSubscriptions(
     return;
   }
 
+  const kb = new InlineKeyboard();
   const taskList = tasks.map((t, idx) => {
     const nextRunDate = new Date(t.nextRun).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return `**${idx + 1}.** 任务指令: \`${t.message}\`\n  └ 每天 \`${t.schedule}\` · 下次执行: ${nextRunDate} · ID: \`${t.id.slice(0, 8)}\``;
-  }).join('\n\n');
+    const segMatch = /\/watchlist report\s*(\w+)/.exec(t.message);
+    const seg = segMatch ? segMatch[1] : 'all';
+    const segLabel = seg === 'cn' ? 'A股' : seg === 'hk' ? '港股' : seg === 'us' ? '美股' : '全市场';
+    kb.text(`🗑 取消 ${segLabel}(${t.schedule})`, `wl_unsub:${t.id.slice(0, 8)}`).row();
+    return `**${idx + 1}.** 【${segLabel}】\`${t.schedule}\` (下次: ${nextRunDate}) · ID: \`${t.id.slice(0, 8)}\``;
+  }).join('\n');
+
+  kb.text('🗑 取消全部定时订阅', 'wl_unsub:all');
 
   await ctx.reply(
     `📋 **当前已订阅的自选股 AI 复盘任务 (${tasks.length} 个)**\n\n` +
     `${taskList}\n\n` +
-    `_如需取消某项任务，使用 \`/schedule cancel <ID>\` 即可。_`,
-    { parse_mode: 'Markdown' }
+    `_点击下方按钮即可一键取消指定任务或全部订阅：_`,
+    { parse_mode: 'Markdown', reply_markup: kb }
   );
 }
