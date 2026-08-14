@@ -669,10 +669,19 @@ export async function findNewImageArtifacts(conversationId: string, turnStartTim
   return images.sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Compare display name: hide the backend prefix (Web2API:/OpenCode:) only in
+ * the inline compare UI. DeepSeek is kept because it is a model family name,
+ * not a backend. This intentionally does NOT use displayModelName globally.
+ */
+export function compareModelName(model: string): string {
+  return model.replace(/^(?:Web2API|OpenCode)\s*:\s*/i, '');
+}
+
 /** Renders the compare picker (selection screen) markdown for a /v result. */
 function renderComparePicker(cmp: CompareContext): string {
   const displayPrompt = cmp.prompt.length > 300 ? cmp.prompt.slice(0, 300) + '...' : cmp.prompt;
-  const picked = cmp.selectedIdx.map((idx, i) => `**${i + 1}.** ${displayModelName(cmp.candidates[idx])}`).join('\n');
+  const picked = cmp.selectedIdx.map((idx, i) => `**${i + 1}.** ${compareModelName(cmp.candidates[idx])}`).join('\n');
   const pickedBlock = picked ? `\n✅ **Selected models:**\n${picked}\n` : '';
 
   if (cmp.currentPage === 0) {
@@ -693,7 +702,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
 
   // Add selected models display (compact, no buttons)
   if (cmp.selectedIdx.length > 0) {
-    rows.push([{ text: `Selected ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}: ${cmp.selectedIdx.map(i => displayModelName(cmp.candidates[i]).slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
+    rows.push([{ text: `Selected ${cmp.selectedIdx.length}/${MAX_COMPARE_MODELS}: ${cmp.selectedIdx.map(i => compareModelName(cmp.candidates[i]).slice(0, 15)).join(' · ')}`, callback_data: 'inline_noop' }]);
   }
 
   if (cmp.currentPage === 0) {
@@ -704,7 +713,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
       ? configDefaults
       : compareGroup.length > 0 ? [cmp.candidates[0], ...compareGroup].filter(Boolean) : [];
     const defaultLabel = labelModels.length > 0
-      ? `🚀 Default group compare (${labelModels.map(m => m.replace(/^(Web2API|DeepSeek|OpenCode)\s*:\s*/i, '').split(' ')[0].split('：')[0]).join(' + ')})`
+      ? `🚀 Default group compare (${labelModels.map(m => compareModelName(m).split(' ')[0].split('：')[0]).join(' + ')})`
       : '🚀 Default group compare';
     rows.push([{ text: defaultLabel, callback_data: `inline_cmp_default:${cmp.resultId}` }]);
     rows.push([{ text: '▶️ Browse/select models (full list)', callback_data: `inline_cmp_page:${cmp.resultId}:1` }]);
@@ -727,7 +736,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
   for (let i = startIdx; i < endIdx; i++) {
     if (cmp.selectedIdx.includes(i)) continue;
     const model = cmp.candidates[i];
-    const display = displayModelName(model).length > 20 ? displayModelName(model).slice(0, 20) + '…' : displayModelName(model);
+    const display = compareModelName(model).length > 20 ? compareModelName(model).slice(0, 20) + '…' : compareModelName(model);
     row.push({ text: display, callback_data: `inline_cmp_pick:${cmp.resultId}:${i}` });
     if (row.length >= 2) {
       rows.push(row);
@@ -935,7 +944,7 @@ export function registerInlineHandler(
         return;
       }
       cmp.selectedIdx.push(idx);
-      await ctx.answerCallbackQuery({ text: `✅ Selected ${displayModelName(cmp.candidates[idx])}`, show_alert: true }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: `✅ Selected ${compareModelName(cmp.candidates[idx])}`, show_alert: true }).catch(() => {});
       await ctx.api.raw.editMessageText({
         inline_message_id: inlineMessageId,
         rich_message: { markdown: renderComparePicker(cmp) },
@@ -1856,9 +1865,9 @@ async function runCompareGeneration(
   const renderStatus = (): string => {
     const lines = statuses.map((s, i) => {
       const num = ['1.', '2.', '3.'][i] ?? `${i + 1}.`;
-      if (s.error) return `${num} \`${displayModelName(s.model)}\`\n❌ Generation failed`;
-      if (s.done) return `${num} \`${displayModelName(s.model)}\`\n✅ Done`;
-      return `${num} \`${displayModelName(s.model)}\`\n⏳ Thinking...`;
+      if (s.error) return `${num} \`${compareModelName(s.model)}\`\n❌ Generation failed`;
+      if (s.done) return `${num} \`${compareModelName(s.model)}\`\n✅ Done`;
+      return `${num} \`${compareModelName(s.model)}\`\n⏳ Thinking...`;
     }).join('\n\n');
     const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
     return `**⚖️ Multi-model comparison in progress...**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${lines}\n\n_⏱️ elapsed ${elapsed}s, will update in place when complete._`;
@@ -1882,7 +1891,7 @@ async function runCompareGeneration(
     );
     if (result?.output) {
       statuses[i] = {
-        model: `${displayModelName(modelUsed)}${isFallback ? ' (downgraded)' : ''}`,
+        model: `${compareModelName(modelUsed)}${isFallback ? ' (downgraded)' : ''}`,
         done: true,
         output: result.output,
         usage: result.usage ?? undefined,
@@ -1924,8 +1933,8 @@ async function runCompareGeneration(
   const pageItems: InlinePage[] = doneModels.map((s, i) => {
     const clean = stripWholeMessageCodeFence(s.output || '');
     const num = ['1.', '2.', '3.'][i] ?? `${i + 1}.`;
-    const modelLine = `**${num} ${displayModelName(s.model)}**\n\n`;
-    const summaryTitle = `💡 Click to expand full answer of ${s.model.split(' ')[0] || s.model} (${displayModelName(s.model)})`;
+    const modelLine = `**${num} ${compareModelName(s.model)}**\n\n`;
+    const summaryTitle = `💡 Click to expand full answer of ${s.model.split(' ')[0] || s.model} (${compareModelName(s.model)})`;
     const bodyMarkdown = `> [details] ${summaryTitle}\n> \n` + clean.split('\n').map(line => `> ${line}`).join('\n');
     const footer = `\n\n_⏱️ ${((Date.now() - startedAt) / 1000).toFixed(1)}s_`;
     const fullMd = `${header}${modelLine}${bodyMarkdown}${footer}`;
@@ -1937,8 +1946,8 @@ async function runCompareGeneration(
   const pageCount = pageItems.length;
 
   const allSucceeded = failedModels.length === 0;
-  const doneStr = doneModels.map((s) => displayModelName(s.model)).join(', ');
-  const failNote = failedModels.length > 0 ? `\n\n_⚠️ Failed: ${failedModels.map((s) => displayModelName(s.model)).join(', ')}_` : '';
+  const doneStr = doneModels.map((s) => compareModelName(s.model)).join(', ');
+  const failNote = failedModels.length > 0 ? `\n\n_⚠️ Failed: ${failedModels.map((s) => compareModelName(s.model)).join(', ')}_` : '';
 
   // First page + pagination keyboard + regenerate.
   const footerText = `${allSucceeded ? 'Comparison complete' : 'Partially complete'}: ${doneStr}${failNote}`;

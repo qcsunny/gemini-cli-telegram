@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName } from './inlineHandler.js';
 import { displayModelName } from '../../../core/modelRegistry.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
@@ -69,6 +69,21 @@ describe('displayModelName', () => {
     expect(displayModelName('Gemini 3.6 Flash (High)')).toBe('Gemini 3.6 Flash (High)');
     expect(displayModelName('Web2API: Gemini 3.1 Pro Enhanced')).toBe('Web2API: Gemini 3.1 Pro Enhanced');
     expect(displayModelName('DeepSeek: Pro Thinking')).toBe('DeepSeek: Pro Thinking');
+  });
+});
+
+describe('compareModelName', () => {
+  it('should hide backend prefixes only in compare display', () => {
+    expect(compareModelName('Web2API: Gemini 3.1 Pro Enhanced')).toBe('Gemini 3.1 Pro Enhanced');
+    expect(compareModelName('OpenCode: DeepSeek V4 Flash')).toBe('DeepSeek V4 Flash');
+  });
+
+  it('should keep DeepSeek prefix since DeepSeek is a model family name', () => {
+    expect(compareModelName('DeepSeek: Pro Thinking')).toBe('DeepSeek: Pro Thinking');
+  });
+
+  it('should leave unprefixed names unchanged', () => {
+    expect(compareModelName('Gemini 3.6 Flash (High)')).toBe('Gemini 3.6 Flash (High)');
   });
 });
 
