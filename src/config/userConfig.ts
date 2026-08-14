@@ -253,6 +253,18 @@ const userConfigSchema = z.object({
      * Default: 1000 — handles ~1000 messages/day with room for burst traffic.
      */
     cacheMaxSize: z.number().optional(),
+    /**
+     * Auto-approve ALL tool permissions for backend model runs in the regular
+     * chat path (not just /invest): opencode gets `--auto`, agy native gets
+     * `--dangerously-skip-permissions`. This lets models use web search, run
+     * commands, etc. without manual approval.
+     *
+     * - true:  models can call any tool (web fetch, bash, file writes) freely.
+     * - false: tools stay disabled in regular chat (current default behavior).
+     *
+     * Default: true — this is a personal bot; the owner wants full tool access.
+     */
+    autoApproveTools: z.boolean().optional(),
   }).optional(),
 });
 
@@ -302,6 +314,7 @@ export const TUNING_DEFAULTS = {
   maxHistoryMessages: 40,
   cacheTtlMs: 24 * 60 * 60 * 1000,
   cacheMaxSize: 1000,
+  autoApproveTools: true,
 };
 
 /**
@@ -315,6 +328,7 @@ type TuningConfig = {
   maxHistoryMessages: number;
   cacheTtlMs: number;
   cacheMaxSize: number;
+  autoApproveTools: boolean;
 };
 
 let _cachedTuning: TuningConfig | undefined;
