@@ -11,5 +11,18 @@
     "active": true,
     "createdAt": 1786678760414,
     "runCount": 0
+  },
+  {
+    "id": "a6b43898-91bd-4ad6-bc99-38e7a5994353",
+    "chatId": 8431249190,
+    "threadId": 8695,
+    "message": "/watchlist report us",
+    "type": "recurring",
+    "schedule": "05:15",
+    "intervalMinutes": 1440,
+    "nextRun": 1786742100000,
+    "active": true,
+    "createdAt": 1786679026835,
+    "runCount": 0
   }
 ]
