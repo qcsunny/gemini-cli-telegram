@@ -177,6 +177,37 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
     );
   `);
 
+  // Migration: allow the 'opencode' backend in the messages table CHECK
+  // constraint. SQLite cannot ALTER a CHECK constraint, so rebuild the table
+  // preserving all existing columns and data. Runs once on databases created
+  // before opencode routing existed (CREATE TABLE IF NOT EXISTS does not touch
+  // an existing table).
+  try {
+    const msgSql = sqlite.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'`).get() as { sql?: string } | undefined;
+    if (msgSql?.sql && !msgSql.sql.includes("'opencode'")) {
+      const cols = sqlite.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
+      const names = cols.map((c) => c.name);
+      const colDefs = names.map((n) => {
+        if (n === 'id') return 'id INTEGER PRIMARY KEY AUTOINCREMENT';
+        if (n === 'conversation_id') return 'conversation_id TEXT NOT NULL';
+        if (n === 'role') return "role TEXT NOT NULL CHECK(role IN ('user','assistant'))";
+        if (n === 'content') return 'content TEXT NOT NULL';
+        if (n === 'backend') return "backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode'))";
+        if (n === 'created_at') return 'created_at TEXT NOT NULL';
+        return `"${n}" TEXT`;
+      });
+      sqlite.transaction(() => {
+        sqlite.exec(`CREATE TABLE messages_new (${colDefs.join(',\n')})`);
+        sqlite.exec(`INSERT INTO messages_new (${names.join(',')}) SELECT ${names.join(',')} FROM messages`);
+        sqlite.exec(`DROP TABLE messages`);
+        sqlite.exec(`ALTER TABLE messages_new RENAME TO messages`);
+      })();
+      logger.info(`[db] Migrated 'messages' table to allow 'opencode' backend (${names.length} columns, data preserved)`);
+    }
+  } catch (e: any) {
+    logger.warn(`[db] messages CHECK constraint migration failed: ${e.message}`);
+  }
+
   // Dynamically add usage column to messages table if it doesn't exist in legacy databases
   try {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN usage TEXT;`);

@@ -170,4 +170,53 @@ describe('opencode session reuse', () => {
     child.emit('close', 0);
     await p;
   });
+
+  it('runOpenCode embeds reasoning and tool calls as a <thinking> block in output', async () => {
+    const { runOpenCode } = await import('./opencode.js');
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const thoughtEvents: string[] = [];
+    const p = runOpenCode({
+      prompt: 'hello',
+      cwd: '/tmp',
+      conversationId: 'conv-think',
+      model: 'OpenCode: DeepSeek V4 Flash Free',
+      onEvent: (event) => { if (event.type === 'thought') thoughtEvents.push(event.content || ''); },
+    });
+
+    child.stdout.emit('data', JSON.stringify({ type: 'text', part: { type: 'reasoning', text: 'let me think' } }) + '\n');
+    child.stdout.emit('data', JSON.stringify({ type: 'tool', part: { type: 'tool', tool: 'bash', state: { input: { command: 'git status' } } } }) + '\n');
+    child.stdout.emit('data', JSON.stringify({ type: 'text', part: { type: 'text', text: 'the answer' } }) + '\n');
+    child.stdout.emit('data', JSON.stringify({ type: 'step_finish', part: { reason: 'stop' } }) + '\n');
+    child.emit('close', 0);
+
+    const result = await p;
+    expect(result.output).toContain('<thinking time="');
+    expect(result.output).toContain('let me think');
+    expect(result.output).toContain('[bash] git status');
+    expect(result.output).toMatch(/<\/thinking>\n\nthe answer/);
+    // tool calls are surfaced as thought events (thinking chain), not as body text
+    expect(thoughtEvents).toContain('[bash] git status\n');
+  });
+
+  it('runOpenCode does not emit a thinking block when there is no reasoning', async () => {
+    const { runOpenCode } = await import('./opencode.js');
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const p = runOpenCode({
+      prompt: 'hello',
+      cwd: '/tmp',
+      conversationId: 'conv-nothink',
+      model: 'OpenCode: DeepSeek V4 Flash Free',
+    });
+
+    child.stdout.emit('data', JSON.stringify({ type: 'text', part: { type: 'text', text: 'plain answer' } }) + '\n');
+    child.stdout.emit('data', JSON.stringify({ type: 'step_finish', part: { reason: 'stop' } }) + '\n');
+    child.emit('close', 0);
+
+    const result = await p;
+    expect(result.output).toBe('plain answer');
+  });
 });

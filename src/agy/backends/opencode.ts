@@ -110,17 +110,25 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
     const stdoutDecoder = new StringDecoder('utf-8');
     const stderrDecoder = new StringDecoder('utf-8');
-    let stdoutBuf = '';
     let errBuf = '';
     let thoughtBuf = '';
     let contentBuf = '';
+    let thoughtStartTime = 0;
     let stepFinished = false;
     let usageTokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } | undefined;
 
     let leftover = '';
+    // Assemble the final output with the thinking chain embedded (mirrors the
+    // deepseek backend's `<thinking time="...">…</thinking>` format) so both the
+    // main chat path (extractThoughtAndContent) and inline cards render it.
+    const buildOutput = (content: string): string => {
+      const thought = thoughtBuf.trim();
+      if (!thought) return content;
+      const durationSec = thoughtStartTime ? ((Date.now() - thoughtStartTime) / 1000).toFixed(1) : '0.0';
+      return `<thinking time="${durationSec}">${thought}</thinking>\n\n${content}`;
+    };
     child.stdout.on('data', (chunk: Buffer) => {
       const text = stdoutDecoder.write(chunk);
-      stdoutBuf += text;
       const fullText = leftover + text;
       const lines = fullText.split('\n');
       leftover = lines.pop() || ''; // keep incomplete last line for next chunk
@@ -131,18 +139,26 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
           const part = event.part || {};
           if (part.type === 'reasoning' && part.text) {
             logger.debug(`[TRACE opencode] reasoning event: text.length=${part.text.length} preview="${part.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
+            if (!thoughtStartTime) thoughtStartTime = Date.now();
             thoughtBuf += part.text + '\n';
+            opts.onActivity?.();
             opts.onEvent?.({ type: 'thought', content: part.text });
           } else if (part.type === 'text' && part.text) {
             contentBuf += part.text + '\n';
+            opts.onActivity?.();
+            opts.onChunk?.(part.text);
             opts.onEvent?.({ type: 'text', content: part.text });
           } else if (part.type === 'tool') {
             const toolName = part.tool || 'tool';
             const toolDesc = part.state?.title || part.state?.input?.command || part.state?.input?.filePath || '';
             const note = `[${toolName}] ${toolDesc}`;
-            opts.onEvent?.({ type: 'text', content: note + '\n' });
+            if (!thoughtStartTime) thoughtStartTime = Date.now();
+            thoughtBuf += note + '\n';
+            opts.onActivity?.();
+            opts.onEvent?.({ type: 'thought', content: note + '\n' });
           } else if (event.type === 'step_finish') {
             stepFinished = part.reason === 'stop';
+            opts.onActivity?.();
             if (part.tokens) {
               usageTokens = usageTokens ? {
                 input: (usageTokens.input ?? 0) + (part.tokens.input ?? 0),
@@ -198,12 +214,12 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
       // If abort already settled the promise, skip DB side-effects
       if (settled) {
-        resolve({ conversationId: convId, output: stdoutBuf.trim(), exitCode: code ?? 1, stderr: errBuf });
+        resolve({ conversationId: convId, output: buildOutput(contentBuf.trim()), exitCode: code ?? 1, stderr: errBuf });
         return;
       }
       settled = true;
 
-      const trimmedOutput = stdoutBuf.trim();
+      const trimmedOutput = buildOutput(contentBuf.trim());
 
       const usage = usageTokens ? {
         input: usageTokens.input ?? 0,

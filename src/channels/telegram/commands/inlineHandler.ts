@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import type { SessionManager } from '../../../core/session.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
-import { runAgyPrint } from '../../../agy/agyCli.js';
+import { runAgyPrint, extractThoughtAndContent } from '../../../agy/agyCli.js';
 import { getAgyDataDir, getDefaultModel, getDefaultModels, loadUserConfig } from '../../../config/userConfig.js';
 import { formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
@@ -302,7 +302,7 @@ export class InlineStreamQueue {
   private async executeEdit(isFinal: boolean): Promise<boolean> {
     if (!this.pendingMarkdown) return false;
 
-    const targetMarkdown = this.pendingMarkdown;
+    let targetMarkdown = this.pendingMarkdown;
     let attempts = 0;
     const maxAttempts = isFinal ? 5 : 1;
 
@@ -361,6 +361,17 @@ export class InlineStreamQueue {
             if (targetMarkdown === this.pendingMarkdown) this.pendingMarkdown = null;
             this.pendingBlocks = null;
             return true;
+          } else if (errMsg.includes('RICH_MESSAGE_PHOTO_URL_INVALID') && /!\[|<img\b/i.test(targetMarkdown)) {
+            // Telegram's server-side markdown→blocks conversion rejected a
+            // photo URL it could not fetch. Strip every image (keeping alt
+            // text) and retry so the text answer is still delivered instead of
+            // leaving the card stuck on the placeholder.
+            targetMarkdown = stripInlineImages(targetMarkdown, 'all');
+            this.pendingMarkdown = targetMarkdown;
+            this.pendingBlocks = null;
+            logger.warn(`[InlineQueue] Photo URL rejected (${errMsg}); retrying without images on inline_message_id=${this.inlineMessageId}`);
+            if (isFinal) continue;
+            break;
           } else {
             logger.warn(`[InlineQueue] Edit failed on inline_message_id=${this.inlineMessageId}: ${errMsg}`);
           }
@@ -467,6 +478,51 @@ const THUMBNAILS = {
   thinking: `${THUMBNAIL_BASE}/1f914.png`,
   warning: `${THUMBNAIL_BASE}/26a0.png`,
 };
+
+/**
+ * Strip image syntax from inline markdown before it is flushed to Telegram.
+ * Telegram's server-side markdown→blocks conversion rejects photo URLs it
+ * cannot use (`RICH_MESSAGE_PHOTO_URL_INVALID`), which previously aborted the
+ * whole final edit and left the card stuck on the placeholder.
+ *
+ * `mode='invalid-only'` strips only non-HTTP(S) URLs (data:, file:, tg://,
+ * relative paths…); `mode='all'` strips every image as a recovery retry when
+ * Telegram rejects a URL it could not fetch (404 / hotlink / wrong type).
+ * Alt text of markdown images is preserved so the surrounding text stays
+ * readable.
+ */
+export function stripInlineImages(markdown: string, mode: 'invalid-only' | 'all'): string {
+  if (!markdown) return markdown;
+  const isHttp = (url: string): boolean => /^https?:\/\//i.test(url.trim());
+  let out = markdown;
+  // Markdown images: ![alt](url)
+  out = out.replace(/!\[([^\]]*)\]\(([^)]*)\)/g, (_full, alt: string, url: string) => {
+    if (mode === 'all' || !isHttp(url)) return (alt ?? '').trim();
+    return _full;
+  });
+  // HTML <img ...> tags
+  out = out.replace(/<img\b([^>]*)>/gi, (_full, attrs: string) => {
+    const src = attrs.match(/src="([^"]*)"/i)?.[1] ?? '';
+    if (mode === 'all' || !isHttp(src)) return '';
+    return _full;
+  });
+  return out;
+}
+
+/**
+ * Convert a backend-embedded `<thinking>…</thinking>` block into a native
+ * Telegram `<details>` fold so inline cards show the reasoning chain.
+ * Extracts the thought (agnostic to <thought>/<thinking>/<think> variants),
+ * sanitizes images inside it, and returns clean content otherwise.
+ */
+export function inlineThinkingToDetails(markdown: string): string {
+  if (!markdown) return markdown;
+  const { thought, content } = extractThoughtAndContent(markdown);
+  if (!thought) return markdown;
+  const thoughtClean = stripInlineImages(thought, 'invalid-only').trim();
+  if (!thoughtClean) return content.trim();
+  return `<details><summary>🧠 思考过程</summary>\n\n${thoughtClean}\n\n</details>\n\n${content.trim()}`;
+}
 
 export function parseInlineModelAndPrompt(
   rawQuery: string,
@@ -596,6 +652,11 @@ export async function runModelWithFallbackChain(
           model: modelToUse,
           proxy: defaultOptions.proxy || loadUserConfig()?.proxy || process.env['HTTP_PROXY'] || process.env['http_proxy'],
           onChunk: wrappedChunk,
+          // Any backend stream activity (text, reasoning, tool calls) resets the
+          // inactivity timer. Without this, long opencode runs — which stream
+          // events but never call onChunk — get killed by the 180s inactivity
+          // timeout even while actively generating.
+          onActivity: armTimer,
           signal: combined ? combined.signal : timeoutCtrl.signal,
           allowTools,
         });
@@ -1746,7 +1807,7 @@ async function runInlineGeneration(
   if (result?.output) {
     const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
 
-    const cleanOutput = stripWholeMessageCodeFence(result.output);
+    const cleanOutput = stripInlineImages(inlineThinkingToDetails(stripWholeMessageCodeFence(result.output)), 'invalid-only');
     const rawOutputLen = cleanOutput.length;
 
     let footerParts: string[] = [];
