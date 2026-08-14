@@ -39,8 +39,12 @@ export function registerCallbackRouter(
       // ignore
     }
 
+    const data = ctx.callbackQuery.data;
+    const chatId = ctx.chat?.id;
+    const threadId = ctx.callbackQuery?.message?.message_thread_id;
+
     // Hand off watchlist callbacks directly to watchlist handler
-    if (data.startsWith('wl_')) {
+    if (data && data.startsWith('wl_')) {
       await next();
       return;
     }
