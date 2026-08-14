@@ -38,10 +38,17 @@ import {
   ensureQuoteDividendYield,
   buildFinancialBlocks,
 } from './stockHandler.js';
-import { fetchInvestAnalysis, buildInvestPrompt } from './investDataFetcher.js';
+import {
+  fetchInvestAnalysis,
+  fetchInvestAnalyses,
+  buildInvestPrompt,
+  buildComparePrompt,
+} from './investDataFetcher.js';
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 import { getFundDataset, type FundDataset } from '../../../stock/provider/fund.js';
 import { analyzeFund, type FundAnalysisResult } from '../../../stock/analyzer/fundAnalyzer.js';
+import { saveMessage } from '../../../agy/messageStore.js';
+import { getChannelModel } from '../../../core/modelRegistry.js';
 
 // ── Dimension types ──
 
@@ -786,22 +793,106 @@ function getInvestProjectPath(): string {
   return process.cwd();
 }
 
+async function runInvestModel(opts: {
+  prompt: string;
+  userPrompt: string;
+  cwd: string;
+  model: string;
+  proxy?: string;
+  conversationId?: string;
+}) {
+  const { prompt, userPrompt, cwd, model, proxy, conversationId } = opts;
+  const res = await runAgyPrint({
+    prompt,
+    cwd,
+    model,
+    proxy,
+    allowTools: true,
+    conversationId,
+  });
+  if (res.exitCode === 0 && res.output && conversationId) {
+    const channel = (getChannelModel(model) || 'agy') as 'agy' | 'deepseek' | 'web2api' | 'opencode';
+    saveMessage(conversationId, 'user', userPrompt, channel);
+    saveMessage(conversationId, 'assistant', res.output, channel);
+  }
+  return res;
+}
+
 export function registerInvestHandler(
   bot: Bot,
-  _sessionManager: SessionManager,
-  _defaultOptions: SessionOptions,
+  sessionManager: SessionManager,
+  defaultOptions: SessionOptions,
 ): void {
   bot.command('invest', async (ctx) => {
     const rawArgs = ctx.match;
-    const symbol = typeof rawArgs === 'string' ? rawArgs.trim().replace(/^\$/, '') : '';
+    const trimmed = typeof rawArgs === 'string' ? rawArgs.trim() : '';
 
-    if (!symbol) {
+    if (!trimmed) {
       await ctx.reply(
-        `${ICONS.info} <b>Invest Usage:</b>\n\n<code>/invest NVDA</code>\n<code>/invest 600519</code>\n<code>/invest 005827</code>`,
+        `${ICONS.info} <b>Invest Usage:</b>\n\n<code>/invest NVDA</code>\n<code>/invest 600519</code>\n<code>/invest 600519,000858</code>\n<code>/invest NVDA vs AAPL</code>\n<code>/invest 005827</code>`,
         { parse_mode: 'HTML' }
       );
       return;
     }
+
+    const session = await sessionManager.getOrCreate(
+      ctx.chat.id,
+      defaultOptions,
+      ctx.message?.message_thread_id,
+    );
+    const conversationId = session.conversationId;
+    const proxy = loadUserConfig()?.proxy || undefined;
+
+    // Check if multi-symbol comparison (e.g. "NVDA,AAPL", "600519 vs 000858", "对比 600519 000858", "600519，000858")
+    const cleanArgs = trimmed.replace(/^(对比|compare|vs)\s+/i, '');
+    const symbols = cleanArgs
+      .split(/[,\s，、]+|(?:\s+(?:vs|VS|对比|对)\s+)/)
+      .map((s) => s.replace(/^\$/, '').trim())
+      .filter(Boolean);
+
+    if (symbols.length >= 2) {
+      const investCwd = getInvestProjectPath();
+      await ctx.reply(
+        `${ICONS.info} 正在并发抓取 <b>${symbols.join('、')}</b> 确定性财报与估值数据进行同行业对比…`,
+        { parse_mode: 'HTML' }
+      );
+      try {
+        const fetchResults = await fetchInvestAnalyses(symbols, investCwd);
+        const okResults = fetchResults.filter((r) => r.ok && r.data);
+        const model = getDefaultModel();
+        if (model) {
+          await ctx.reply(`${ICONS.thinking} 正在生成多标的价值投资深度对比报告…`);
+          const userPrompt = `/invest ${symbols.join(' vs ')}`;
+          const prompt = okResults.length > 0
+            ? buildComparePrompt(
+                fetchResults,
+                `请对以下 ${okResults.map((r) => r.symbol ?? '?').join('、')} 做同行业深度对比分析，输出对比报告。`,
+              )
+            : `请对以下标的 ${symbols.join('、')} 进行同行业价值投资深度对比分析。`;
+
+          const res = await runInvestModel({
+            prompt,
+            userPrompt,
+            cwd: investCwd,
+            model,
+            proxy,
+            conversationId,
+          });
+          if (res.exitCode === 0 && res.output) {
+            await ctx.api.sendRichMessage(ctx.chat.id, { markdown: res.output });
+          } else {
+            await ctx.reply(`${ICONS.warning} 多标的对比报告生成失败（exit ${res.exitCode}）`);
+          }
+        }
+        return;
+      } catch (err) {
+        logger.error(`Failed to handle multi-symbol /invest comparison: ${err}`);
+        await ctx.reply(`${ICONS.error} <b>对比分析失败</b>: ${(err as Error)?.message || err}`);
+        return;
+      }
+    }
+
+    const symbol = symbols[0] || trimmed.replace(/^\$/, '').trim();
 
     try {
       // 1. Check if symbol is a Fund / ETF (e.g. 005827, 012708, sh510300)
@@ -815,11 +906,13 @@ export function registerInvestHandler(
         if (model) {
           await ctx.reply(`${ICONS.thinking} 正在基于 7 维度框架生成基金深度分析报告…`);
           const prompt = buildFundDeepReportPrompt(fundResult, fundDataset);
-          const res = await runAgyPrint({
+          const res = await runInvestModel({
             prompt,
+            userPrompt: `/invest ${symbol}`,
             cwd: getInvestProjectPath(),
             model,
-            proxy: loadUserConfig()?.proxy || undefined,
+            proxy,
+            conversationId,
           });
           if (res.exitCode === 0 && res.output) {
             await ctx.api.sendRichMessage(ctx.chat.id, {
@@ -851,11 +944,13 @@ export function registerInvestHandler(
               `请对 ${investResult.symbol ?? symbol} 做深度价值投资分析。`,
               investResult.data,
             );
-            const res = await runAgyPrint({
+            const res = await runInvestModel({
               prompt,
+              userPrompt: `/invest ${investResult.symbol ?? symbol}`,
               cwd: investCwd,
               model,
-              proxy: loadUserConfig()?.proxy || undefined,
+              proxy,
+              conversationId,
             });
             if (res.exitCode === 0 && res.output) {
               await ctx.api.sendRichMessage(ctx.chat.id, { markdown: res.output });
@@ -911,11 +1006,13 @@ export function registerInvestHandler(
       if (model) {
         await ctx.reply(`${ICONS.thinking} 正在生成深度分析报告…`);
         const prompt = buildDeepReportPrompt(result, quote);
-        const res = await runAgyPrint({
+        const res = await runInvestModel({
           prompt,
+          userPrompt: `/invest ${quote.symbol}`,
           cwd: getInvestProjectPath(),
           model,
-          proxy: loadUserConfig()?.proxy || undefined,
+          proxy,
+          conversationId,
         });
         if (res.exitCode === 0 && res.output) {
           await ctx.api.sendRichMessage(ctx.chat.id, {

@@ -78,14 +78,18 @@ export class StockFallbackProvider implements MarketDataProvider {
       }
     }
 
-    // 1. Check if query is A-share (e.g., SH600519, 600519, SZ000001) or HK stock (e.g. HK00700, 00700)
-    const isAshare = /^(SH|SZ)?\d{6}$/i.test(cleanSym);
+    // 1. Check if query is A-share (e.g., SH600519, 600519, SZ000001, BJ920002, 920002) or HK stock (e.g. HK00700, 00700)
+    const isAshare = /^(SH|SZ|BJ)?\d{6}$/i.test(cleanSym);
     const isHK = /^(HK)?\d{5}$/i.test(cleanSym);
 
     if (isAshare || isHK) {
       let sinaCode = cleanSym.toLowerCase();
-      if (isAshare && !sinaCode.startsWith('sh') && !sinaCode.startsWith('sz')) {
-        sinaCode = (sinaCode.startsWith('6') || sinaCode.startsWith('9') ? 'sh' : 'sz') + sinaCode;
+      if (isAshare && !sinaCode.startsWith('sh') && !sinaCode.startsWith('sz') && !sinaCode.startsWith('bj')) {
+        if (sinaCode.startsWith('92') || sinaCode.startsWith('8') || sinaCode.startsWith('4')) {
+          sinaCode = 'bj' + sinaCode;
+        } else {
+          sinaCode = (sinaCode.startsWith('6') || sinaCode.startsWith('9') ? 'sh' : 'sz') + sinaCode;
+        }
       } else if (isHK && !sinaCode.startsWith('hk')) {
         sinaCode = 'hk' + sinaCode;
       }
@@ -129,7 +133,7 @@ export class StockFallbackProvider implements MarketDataProvider {
                 low,
                 previousClose: prevClose,
                 volume,
-                market: sinaCode.startsWith('sh') ? 'SSE' : 'SZSE',
+                market: sinaCode.startsWith('sh') ? 'SSE' : sinaCode.startsWith('bj') ? 'BJ' : 'SZSE',
                 currency: 'CNY',
                 timestamp: Math.floor(Date.now() / 1000),
                 source: 'SinaFinance',
