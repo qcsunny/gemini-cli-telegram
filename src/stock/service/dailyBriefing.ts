@@ -13,7 +13,7 @@ import { getUserWatchlist } from './watchlist.js';
 import { marketService } from './quote.js';
 import type { StockQuote } from '../types.js';
 import { logger } from '../../utils/logger.js';
-import { getDefaultModel } from '../../config/userConfig.js';
+import { getDefaultModel, loadUserConfig } from '../../config/userConfig.js';
 import { runModelWithFallbackChain } from '../../channels/telegram/commands/inlineHandler.js';
 import { getInvestProjectPath } from '../../channels/telegram/commands/investDataFetcher.js';
 
@@ -247,10 +247,11 @@ ${segmentPromptFocus}
   const initialModel = options?.model || getDefaultModel() || 'Gemini 3.7 Flash (High)';
   logger.info(`[DailyBriefing] Generating ${segment} briefing for user ${userId} (${symbols.length} symbols) using model ${initialModel}`);
 
+  const proxy = loadUserConfig()?.proxy;
   const runResult = await runModelWithFallbackChain(
     prompt,
     initialModel,
-    {},
+    { proxy },
     options?.signal,
     getInvestProjectPath(),
     options?.onChunk
