@@ -29,6 +29,7 @@ const TASK_TITLES: Record<InlineTask, string> = {
   summarize: '📝 Content Summary',
   image: '🖼️ Image Generation',
   compare: '🔀 Model Comparison',
+  read: '📖 Smart Link Summary',
 };
 
 export function registerPrivateTaskHandlers(
