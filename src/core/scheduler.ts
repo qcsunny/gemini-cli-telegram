@@ -99,15 +99,25 @@ export class ChatScheduler {
         if (task.type === 'once') {
           task.active = false;
           logger.info(`One-time task ${task.id} completed`);
-        } else if (task.type === 'recurring' && task.intervalMinutes) {
-          task.nextRun = now + task.intervalMinutes * 60 * 1000;
+        } else if (task.type === 'recurring') {
+          if (/^\d{1,2}:\d{2}$/.test(task.schedule)) {
+            task.nextRun = this.parseScheduleTime(task.schedule);
+          } else if (task.intervalMinutes) {
+            task.nextRun = now + task.intervalMinutes * 60 * 1000;
+          } else {
+            task.nextRun = now + 24 * 60 * 60 * 1000;
+          }
           logger.info(`Recurring task ${task.id} rescheduled for ${new Date(task.nextRun).toISOString()}`);
         }
       } catch (e) {
         logger.error(`Scheduled task ${task.id} failed: ${e}`);
         // Don't deactivate recurring tasks on failure, just reschedule
-        if (task.type === 'recurring' && task.intervalMinutes) {
-          task.nextRun = now + task.intervalMinutes * 60 * 1000;
+        if (task.type === 'recurring') {
+          if (/^\d{1,2}:\d{2}$/.test(task.schedule)) {
+            task.nextRun = this.parseScheduleTime(task.schedule);
+          } else if (task.intervalMinutes) {
+            task.nextRun = now + task.intervalMinutes * 60 * 1000;
+          }
         } else {
           task.active = false;
         }
@@ -130,7 +140,7 @@ export class ChatScheduler {
     const now = Date.now();
     let nextRun: number;
 
-    if (type === 'once') {
+    if (type === 'once' || /^\d{1,2}:\d{2}$/.test(schedule)) {
       // Parse the schedule as a time string
       nextRun = this.parseScheduleTime(schedule);
     } else {
