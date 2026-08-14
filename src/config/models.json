@@ -16,10 +16,10 @@
       "priority": 1,
       "models": [
         "Gemini 3.7 Flash (High)",
+        "OpenCode: DeepSeek V4 Flash",
         "OpenCode: Kimi K2.7 Code",
-        "OpenCode: DeepSeek V4 Flash Free",
         "Gemini 3.1 Pro (Low)",
-        "OpenCode: Nemotron 3 Ultra Free"
+        "OpenCode: DeepSeek V4 Flash Free"
       ]
     },
     {
@@ -27,9 +27,8 @@
       "priority": 2,
       "models": [
         "Gemini 3.7 Flash (Medium)",
-        "Gemini 3.7 Flash (Low)",
+        "OpenCode: Nemotron 3 Ultra Free",
         "GPT-OSS 120B (Medium)",
-        "OpenCode: Qwen 3.6 35B A3B",
         "OpenCode: Laguna S 2.1 Free",
         "OpenCode: MiMo V2.5 Free"
       ]
@@ -38,7 +37,8 @@
       "name": "轻量与免费",
       "priority": 3,
       "models": [
-        "OpenCode: DeepSeek V4 Flash",
+        "Gemini 3.7 Flash (Low)",
+        "OpenCode: Qwen 3.6 35B A3B",
         "OpenCode: Ling 3.0 Flash Free",
         "OpenCode: North Mini Code Free"
       ]
@@ -47,15 +47,15 @@
       "name": "远程备用",
       "priority": 4,
       "models": [
+        "Web2API: Gemini 3.1 Pro Enhanced",
+        "Web2API: Gemini 3.1 Pro",
         "DeepSeek: Pro Thinking",
         "DeepSeek: Flash Thinking Search",
         "DeepSeek: Pro",
+        "Web2API: Gemini 3.6 Flash Thinking",
         "DeepSeek: Flash Thinking",
         "DeepSeek: Flash Search",
         "DeepSeek: Flash",
-        "Web2API: Gemini 3.1 Pro Enhanced",
-        "Web2API: Gemini 3.1 Pro",
-        "Web2API: Gemini 3.6 Flash Thinking",
         "Web2API: Gemini Auto",
         "Web2API: Gemini 3.5 Flash Thinking Lite",
         "Web2API: Gemini Flash Lite"
@@ -68,28 +68,28 @@
     "Claude Sonnet 4.6 (Thinking)",
     "OpenCode: GLM 5.2",
     "Gemini 3.7 Flash (High)",
+    "OpenCode: DeepSeek V4 Flash",
     "OpenCode: Kimi K2.7 Code",
-    "OpenCode: DeepSeek V4 Flash Free",
     "Gemini 3.1 Pro (Low)",
-    "OpenCode: Nemotron 3 Ultra Free",
+    "OpenCode: DeepSeek V4 Flash Free",
     "Gemini 3.7 Flash (Medium)",
-    "Gemini 3.7 Flash (Low)",
+    "OpenCode: Nemotron 3 Ultra Free",
     "GPT-OSS 120B (Medium)",
-    "OpenCode: Qwen 3.6 35B A3B",
     "OpenCode: Laguna S 2.1 Free",
     "OpenCode: MiMo V2.5 Free",
-    "OpenCode: DeepSeek V4 Flash",
+    "Gemini 3.7 Flash (Low)",
+    "OpenCode: Qwen 3.6 35B A3B",
     "OpenCode: Ling 3.0 Flash Free",
     "OpenCode: North Mini Code Free",
+    "Web2API: Gemini 3.1 Pro Enhanced",
+    "Web2API: Gemini 3.1 Pro",
     "DeepSeek: Pro Thinking",
     "DeepSeek: Flash Thinking Search",
     "DeepSeek: Pro",
+    "Web2API: Gemini 3.6 Flash Thinking",
     "DeepSeek: Flash Thinking",
     "DeepSeek: Flash Search",
     "DeepSeek: Flash",
-    "Web2API: Gemini 3.1 Pro Enhanced",
-    "Web2API: Gemini 3.1 Pro",
-    "Web2API: Gemini 3.6 Flash Thinking",
     "Web2API: Gemini Auto",
     "Web2API: Gemini 3.5 Flash Thinking Lite",
     "Web2API: Gemini Flash Lite"
@@ -123,9 +123,9 @@
   },
   "descriptions": {
     "OpenCode: GLM 5.2":                     "GLM 5.2 旗舰推理大模型 · 适用：复杂算法设计、架构决策、高难度全栈开发",
+    "OpenCode: DeepSeek V4 Flash":           "DeepSeek V4 Flash 旗舰强力模型 (512k 上下文) · 适用：复杂代码分析、长文本理解、高精度推理",
     "OpenCode: Kimi K2.7 Code":              "Kimi K2.7 代码专精模型 · 适用：代码重构、算法实现、复杂代码审查与调试",
-    "OpenCode: Qwen 3.6 35B A3B":            "通义千问 3.6 35B 高性能通用模型 · 适用：通用开发、多步骤任务、中等复杂度分析",
-    "OpenCode: DeepSeek V4 Flash":           "DeepSeek V4 Flash 极速模型 · 适用：快速代码生成、日常问答、轻量级脚本",
+    "OpenCode: Qwen 3.6 35B A3B":            "通义千问 3.6 35B 极速轻量模型 (3B激活) · 适用：快速代码片段生成、日常快答、极速响应",
     "OpenCode: Nemotron 3 Ultra Free":       "综合推理最强，代码能力顶级 · 适用：复杂算法设计、架构决策、高难度调试",
     "OpenCode: DeepSeek V4 Flash Free":      "速度快、成本低、能力均衡 · 适用：日常编码、中等复杂度任务、高频调用",
     "OpenCode: Laguna S 2.1 Free":           "Agent编码能力突出，工具调用强 · 适用：自动化工作流、多步骤任务、MLOps管道",

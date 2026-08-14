@@ -144,10 +144,10 @@ describe('processMessage', () => {
       expect.objectContaining({ model: 'Gemini 3.1 Pro (Low)' })
     );
 
-    // Fourth call uses the fallback model (next in tier-aware chain: OpenCode: Nemotron 3 Ultra Free).
+    // Fourth call uses the fallback model (next in tier-aware chain: OpenCode: DeepSeek V4 Flash Free).
     expect(runAgyPrint).toHaveBeenNthCalledWith(
       4,
-      expect.objectContaining({ model: 'OpenCode: Nemotron 3 Ultra Free' })
+      expect.objectContaining({ model: 'OpenCode: DeepSeek V4 Flash Free' })
     );
 
     // Warning should have been sent to channel (original + fallback models).
@@ -155,11 +155,11 @@ describe('processMessage', () => {
       expect.stringContaining('Gemini 3.1 Pro (Low)')
     );
     expect(mockReply.send).toHaveBeenCalledWith(
-      expect.stringContaining('OpenCode: Nemotron 3 Ultra Free')
+      expect.stringContaining('OpenCode: DeepSeek V4 Flash Free')
     );
 
     // Session model must have updated
-    expect(mockSession.model).toBe('OpenCode: Nemotron 3 Ultra Free');
+    expect(mockSession.model).toBe('OpenCode: DeepSeek V4 Flash Free');
     expect(mockSession.conversationId).toBe('fallback-conv-id');
 
     // Conversation should be saved to database with fallback model
@@ -167,19 +167,19 @@ describe('processMessage', () => {
       123456,
       'fallback-conv-id',
       '/test/project/path',
-      'OpenCode: Nemotron 3 Ultra Free',
+      'OpenCode: DeepSeek V4 Flash Free',
       undefined
     );
   });
 
   it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
-    // Chain from Web2API: Gemini 3.6 Flash Thinking is 4 models long under the
-    // monotonic downgrade tier system (T4 远程备用 tail: 3.6 Flash Thinking →
-    // Gemini Auto → Gemini 3.5 Flash Thinking Lite → Gemini Flash Lite).
+    // Chain from Web2API: Gemini Auto is 3 models long under the
+    // monotonic downgrade tier system (T4 远程备用 tail: Gemini Auto →
+    // Gemini 3.5 Flash Thinking Lite → Gemini Flash Lite).
     // Each model is retried 3x, then downgraded. When the LAST model in the chain
     // (Web2API: Gemini Flash Lite) also fails its 3 retries, the session must
     // terminate — it must NOT wrap back to higher tiers.
-    mockSession.model = 'Web2API: Gemini 3.6 Flash Thinking';
+    mockSession.model = 'Web2API: Gemini Auto';
     const input: MultimodalInput = { text: 'hello full loop' };
 
     vi.mocked(runAgyPrint).mockResolvedValue({
@@ -191,17 +191,17 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // chain.length (4) * RETRIES_PER_MODEL (3) = 12 total attempts.
-    expect(runAgyPrint).toHaveBeenCalledTimes(12);
+    // chain.length (3) * RETRIES_PER_MODEL (3) = 9 total attempts.
+    expect(runAgyPrint).toHaveBeenCalledTimes(9);
     // First 3 attempts: original model.
-    expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini 3.6 Flash Thinking' }));
-    expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini 3.6 Flash Thinking' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini Auto' }));
     // Last 3 attempts: downgraded last model (Web2API: Gemini Flash Lite).
-    expect(runAgyPrint).toHaveBeenNthCalledWith(10, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
-    expect(runAgyPrint).toHaveBeenNthCalledWith(12, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
-    // NO 13th call.
+    expect(runAgyPrint).toHaveBeenNthCalledWith(7, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(9, expect.objectContaining({ model: 'Web2API: Gemini Flash Lite' }));
+    // NO 10th call.
     // Session model is unchanged (it never succeeded).
-    expect(mockSession.model).toBe('Web2API: Gemini 3.6 Flash Thinking');
+    expect(mockSession.model).toBe('Web2API: Gemini Auto');
     // An error/termination message must have been surfaced to the channel.
     expect(mockReply.send).toHaveBeenCalled();
   });
