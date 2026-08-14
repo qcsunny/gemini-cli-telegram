@@ -62,7 +62,7 @@ describe('dailyBriefing service - briefing generation', () => {
   });
 
   it('should filter watchlist data by market segment', async () => {
-    vi.spyOn(watchlistService, 'getUserWatchlist').mockResolvedValueOnce(['NVDA', '600519']);
+    vi.spyOn(watchlistService, 'getUserWatchlist').mockResolvedValue(['NVDA', '600519']);
     vi.spyOn(marketService, 'getQuote').mockImplementation(async (sym) => {
       if (sym === 'NVDA') return mockNvdaQuote;
       if (sym === '600519') return mockMoutaiQuote;
