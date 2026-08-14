@@ -15,6 +15,7 @@ import type { StockQuote } from '../types.js';
 import { logger } from '../../utils/logger.js';
 import { getDefaultModel } from '../../config/userConfig.js';
 import { runModelWithFallbackChain } from '../../channels/telegram/commands/inlineHandler.js';
+import { getInvestProjectPath } from '../../channels/telegram/commands/investDataFetcher.js';
 
 export type MarketSegment = 'all' | 'cn' | 'hk' | 'us' | 'crypto';
 
@@ -251,7 +252,7 @@ ${segmentPromptFocus}
     initialModel,
     {},
     options?.signal,
-    undefined,
+    getInvestProjectPath(),
     options?.onChunk
   );
 
