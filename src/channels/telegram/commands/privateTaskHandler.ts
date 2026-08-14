@@ -12,6 +12,7 @@ import type { SessionOptions } from '../../../core/types.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { logger } from '../../../utils/logger.js';
 import { getDefaultModels } from '../../../config/userConfig.js';
+import { buildChannelReply } from '../bot/channelReply.js';
 import {
   parseInlineModelAndPrompt,
   runModelWithFallbackChain,
@@ -108,7 +109,8 @@ async function handlePrivateTask(
       `**🤖 Output (${modelUsed}):**\n\n${cleanOutput}\n\n` +
       `_${footerParts.join(' · ')}_`;
 
-    await ctx.reply(reply, { parse_mode: 'MarkdownV2' }).catch(async () => {
+    const replyObj = buildChannelReply(ctx, chatId, 'RichText');
+    await replyObj.send(reply).catch(async () => {
       await ctx.reply(reply).catch(() => {});
     });
     logger.info(`[${task}] Delivered result (${cleanOutput.length} chars) to chatId=${chatId}`);

@@ -7,7 +7,7 @@ import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import { getAgyDataDir, getDefaultModel, getDefaultModels, loadUserConfig } from '../../../config/userConfig.js';
-import { findSafeCutPoint, formatTokenCount } from '../formatter/core.js';
+import { formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
@@ -137,7 +137,7 @@ function deleteInlinePages(resultId: string): void {
 }
 
 /** Max models user can pick for a /v multi-model comparison. */
-const MAX_COMPARE_MODELS = 3;
+const MAX_COMPARE_MODELS = 4;
 /** Max candidate models offered per page in the picker. */
 const COMPARE_MODELS_PER_PAGE = 4;
 
@@ -258,7 +258,9 @@ export class InlineStreamQueue {
   public async flushFinal(markdown: string, replyMarkup?: unknown, blocks?: RichBlock[]): Promise<boolean> {
     this.pendingMarkdown = markdown;
     if (replyMarkup !== undefined) this.pendingReplyMarkup = replyMarkup;
-    if (blocks !== undefined) this.pendingBlocks = blocks;
+    // A final flush without explicit blocks must not inherit stale blocks
+    // (e.g. the placeholder) from a prior setBlocks call.
+    this.pendingBlocks = blocks !== undefined && blocks.length > 0 ? blocks : null;
     return new Promise<boolean>((resolve) => {
       this.queue = this.queue.then(async () => {
         const success = await this.executeEdit(true);
@@ -357,6 +359,7 @@ export class InlineStreamQueue {
           if (errMsg.includes('message is not modified')) {
             this.lastSentLen = targetMarkdown.length;
             if (targetMarkdown === this.pendingMarkdown) this.pendingMarkdown = null;
+            this.pendingBlocks = null;
             return true;
           } else {
             logger.warn(`[InlineQueue] Edit failed on inline_message_id=${this.inlineMessageId}: ${errMsg}`);
@@ -463,7 +466,6 @@ const THUMBNAILS = {
   sparkles: `${THUMBNAIL_BASE}/2728.png`,
   thinking: `${THUMBNAIL_BASE}/1f914.png`,
   warning: `${THUMBNAIL_BASE}/26a0.png`,
-  chat: `${THUMBNAIL_BASE}/1f4ac.png`,
 };
 
 export function parseInlineModelAndPrompt(
@@ -643,32 +645,6 @@ function anySignal(...signals: AbortSignal[]): { signal: AbortSignal; cleanup: (
     }
   };
   return { signal: ctrl.signal, cleanup };
-}
-
-const PAGE_CHARS = 2500;
-const PAGE_THRESHOLD = 6000;
-
-
-
-function splitIntoPages(text: string, pageChars: number = PAGE_CHARS): string[] {
-  if (text.length <= pageChars) return [text];
-  const pages: string[] = [];
-  let remaining = text;
-  while (remaining.length > 0) {
-    if (remaining.length <= pageChars) {
-      pages.push(remaining);
-      break;
-    }
-    let cut = findSafeCutPoint(remaining, pageChars);
-    if (cut <= 0 || cut >= remaining.length) {
-      cut = pageChars;
-    }
-    const pageChunk = remaining.slice(0, cut).trim();
-    if (pageChunk) pages.push(pageChunk);
-    remaining = remaining.slice(cut).trim();
-  }
-  if (pages.length === 0) pages.push(text);
-  return pages;
 }
 
 export async function findNewImageArtifacts(conversationId: string, turnStartTime: number): Promise<string[]> {
@@ -853,12 +829,12 @@ export function registerInlineHandler(
       // Immediately edit the message text to show loading feedback so the user knows it's actively thinking!
       if (regen.task !== 'image') {
         const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
-        const initMarkdown = `✨ **AI 推理引擎重新启动中**\n\n**🧠 目标模型：** \`${displayModelName(regen.model)}\`\n\n**💬 问题：**\n> ${displayPrompt}\n\n*🚀 正在重新深度推演，生成完成后将自动在此处刷新...*`;
+        const initMarkdown = `✨ **AI 推理引擎重新启动中**\n\n**🧠 目标模型：** \`${displayModelName(regen.model)}\`\n\n**💬 问题：**\n> ${displayPrompt}\n\n_🚀 正在重新深度推演，完成后自动刷新…_`;
         await ctx.api.raw.editMessageText({
           inline_message_id: inlineMessageId,
           rich_message: { markdown: initMarkdown },
           reply_markup: {
-            inline_keyboard: [[{ text: '⏹ 停止生成', callback_data: `inline_stop:${resultId}` }]],
+            inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${resultId}` }]],
           },
         } as any).catch((e: Error) => logger.warn(`[InlineResult] Regenerate initial edit failed: ${e}`));
       }
@@ -894,6 +870,7 @@ export function registerInlineHandler(
           streamQueue,
           onModelStart,
           onChunk,
+          getPartialOutput: () => accumulatedText,
         });
       } catch (e) {
         logger.warn(`[InlineResult] Regenerate failed: ${e}`);
@@ -1065,13 +1042,13 @@ export function registerInlineHandler(
         }
       }
       
-      // 3. Fall back to index-based [0, 1, 2] if still less than 2 models
+      // 3. Fall back to index-based first N models if still less than 2 models
       if (selectedIndices.length >= 2) {
-        activeCmp.selectedIdx = selectedIndices.slice(0, 3);
+        activeCmp.selectedIdx = selectedIndices.slice(0, MAX_COMPARE_MODELS);
       } else {
-        activeCmp.selectedIdx = [0, 1, 2].filter(i => i < activeCmp.candidates.length);
+        activeCmp.selectedIdx = Array.from({ length: MAX_COMPARE_MODELS }, (_, i) => i).filter(i => i < activeCmp.candidates.length);
         if (activeCmp.selectedIdx.length < 2) {
-          activeCmp.selectedIdx = activeCmp.candidates.map((_, i) => i).slice(0, 3);
+          activeCmp.selectedIdx = activeCmp.candidates.map((_, i) => i).slice(0, MAX_COMPARE_MODELS);
         }
       }
       const models = activeCmp.selectedIdx.map((idx: number) => activeCmp.candidates[idx]);
@@ -1219,7 +1196,7 @@ export function registerInlineHandler(
 
       let title = `📈 查询股票行情: $${queryStr}`;
       let description = `点击获取 $${queryStr} 最新价格、涨跌幅及华尔街机构评级`;
-      let quoteText = `📈 **正在查询 $${queryStr} 实时行情...**\n\n*🚀 数据加载中，请稍候...*`;
+      let quoteText = `📈 **正在查询 $${queryStr} 实时行情...**\n\n_🚀 数据加载中，请稍候…_`;
       let webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(cleanSym)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
       if (cached) {
@@ -1248,8 +1225,8 @@ export function registerInlineHandler(
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '📊 查看详情', url: webAppUrl },
-              { text: '📈 K线图', url: webAppUrl }
+              { text: '📊 View details', url: webAppUrl },
+              { text: '📈 K-line chart', url: webAppUrl }
             ],
           ],
         },
@@ -1425,7 +1402,7 @@ export function registerInlineHandler(
             description: `Answer with ${displayModelName(candidateModel)}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
-              rich_message: buildInputRichMessage(`${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`),
+              rich_message: buildInputRichMessage(`${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:** ${displayPrompt}\n\n_🚀 Reasoning in progress; answer updates in place._`),
             } as any,
             // An inline keyboard is REQUIRED for Telegram to return
             // inline_message_id on chosen_inline_result, which is the handle used
@@ -1449,14 +1426,13 @@ export function registerInlineHandler(
         : task === 'summarize' ? `📋 Click to summarize [${displayModelName(modelToUse)}]`
         : task === 'read' ? `📖 Click to read & analyze link [${displayModelName(modelToUse)}]`
         : task === 'compare' ? '⚖️ Click to select models to compare'
-        : `🤔 Click to send and start thinking [${displayModelName(modelToUse)}]`;
+        : `🤔 Ask ${displayModelName(modelToUse)}`;
       let initMarkdown: string;
       if (task === 'image') {
-        initMarkdown = `**🎨 Image generation mode**\n\n**💬 Prompt:**\n> ${displayPrompt}\n\n*🚀 Generating images; will update in place when complete.*`;
+        initMarkdown = `**🎨 Image generation mode**\n\n**💬 Prompt:** ${displayPrompt}\n\n_🚀 Generating images; updates in place._`;
       } else {
         const modelLine = `**🧠 Target model:** \`${displayModelName(modelToUse)}\`\n`;
-        const statusTable = `\n\n| 模型 | 状态 |\n| --- | --- |\n| ${displayModelName(modelToUse)} | ⏳ 推理中 |\n\n> [details] 查看详情\n> 回复完成后此处将自动更新为完整答案。`;
-        initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI inference engine started**\n\n${modelLine}**💬 Question:**\n> ${displayPrompt}\n\n${statusTable}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`;
+        initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI inference engine started**\n\n${modelLine}**💬 Question:** ${displayPrompt}\n\n_🚀 Reasoning in progress; answer updates in place._`;
       }
 
       const suggestionCards: any[] = [];
@@ -1473,7 +1449,7 @@ export function registerInlineHandler(
             description: `Switch to model ${displayModelName(candidateModel)}`,
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
-              rich_message: buildInputRichMessage(`**🧠 Model switch:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:**\n> ${displayPrompt}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`),
+              rich_message: buildInputRichMessage(`**🧠 Model switch:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:** ${displayPrompt}\n\n_🚀 Reasoning in progress; answer updates in place._`),
             } as any,
             reply_markup: {
               inline_keyboard: [[
@@ -1502,16 +1478,6 @@ export function registerInlineHandler(
               { text: '⏹ Stop', callback_data: `inline_stop:${resultId}` }
             ]],
           },
-        },
-        {
-          type: 'article' as const,
-          id: `prompt-${Date.now()}`,
-          title: `💬 Send question card (default model)`,
-          description: `Model: ${displayModelName(modelToUse)} | "${prompt.slice(0, 40)}..."`,
-          thumbnail_url: THUMBNAILS.chat,
-          input_message_content: {
-            rich_message: buildInputRichMessage(`**💬 AI question card**\n\n**Model:** \`${displayModelName(modelToUse)}\`\n**Question:** ${displayPrompt}\n\n*${ICONS.sparkles} Question card sent.*`),
-          } as any,
         },
         ...suggestionCards,
       ];
@@ -1655,10 +1621,10 @@ export function registerInlineHandler(
     // the placeholder through the SAME streamQueue path used by streaming.
     // Blocks are built directly so the placeholder is a native RichMessage.
     const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
-    const statusTable = `\n\n| 模型 | 状态 |\n| --- | --- |\n| ${displayModelName(pending.model)} | ⏳ 推理中 |\n\n> [details] 查看详情\n> 回复完成后此处将自动更新为完整答案。`;
+    const modelStatusLine = `🤖 **${displayModelName(pending.model)}** · ⏳ 推理中`;
     const placeholderMarkdown = pending.task
-      ? `${pending.task.toUpperCase()} ✨ **AI inference engine started**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${statusTable}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`
-      : `✨ **AI inference engine started**\n\n**💬 Question:**\n> ${displayPrompt}\n\n${statusTable}\n\n*🚀 Deep reasoning in progress; the answer will be updated in place when complete.*`;
+      ? `${pending.task.toUpperCase()} ✨ **AI inference engine started**\n\n**💬 Question:** ${displayPrompt}\n\n${modelStatusLine}\n\n_🚀 Reasoning in progress; answer updates in place._`
+      : `✨ **AI inference engine started**\n\n**💬 Question:** ${displayPrompt}\n\n${modelStatusLine}\n\n_🚀 Reasoning in progress; answer updates in place._`;
     streamQueue.setReplyMarkup({
       inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${chosen.result_id}` }]],
     });
@@ -1701,6 +1667,7 @@ export function registerInlineHandler(
         onModelStart,
         onChunk,
         allowTools: !!pending.isInvest,
+        getPartialOutput: () => accumulatedText,
       });
     } catch (e) {
       logger.warn(`[InlineResult] Failed to edit message: ${e}`);
@@ -1725,6 +1692,8 @@ interface InlineGenerationContext {
   onChunk: (chunk: string) => void;
   /** Allow the model to auto-approve tools (web fetch / file read). Only set for /invest. */
   allowTools?: boolean;
+  /** Returns the text streamed so far; used to preserve partial output on manual stop. */
+  getPartialOutput?: () => string;
 }
 
 async function runInlineGeneration(
@@ -1735,7 +1704,7 @@ async function runInlineGeneration(
 ): Promise<void> {
   const {
     resultId, inlineMessageId, fromId, prompt, model, projectPath,
-    task, ctrl, streamQueue, onModelStart, onChunk, allowTools,
+    task, ctrl, streamQueue, onModelStart, onChunk, allowTools, getPartialOutput,
   } = gctx;
 
   // Keep regenerate context alive so the 🔄 button can re-run this prompt.
@@ -1795,64 +1764,22 @@ async function runInlineGeneration(
     }
     const footerText = footerParts.join(' · ');
 
-    let fullMarkdown: string;
-    let replyMarkup: unknown;
-    let isCollapsible = false;
-    let pageCount = 1;
-    let finalBlocks: RichBlock[] | undefined = undefined;
+    // Fold every answer (short or long) into a single native `<details>` block
+    // so the inline card stays compact. Rich messages support up to 32768
+    // chars, so no pagination is needed. The fold is expressed in rich
+    // Markdown (`<details>`) and flushed via `rich_message: { markdown }` so
+    // Telegram's server builds the collapsible block (pre-built `blocks` with
+    // a `details` type render as an uncollapsible blockquote via inline edit).
+    const summaryTitle = `💡 Click to expand full answer (${rawOutputLen} chars)`;
+    const foldedBody = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
+    const fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${foldedBody}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
+    const replyMarkup = {
+      inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
+    };
 
-    if (cleanOutput.trim().length > 250) {
-      if (cleanOutput.length > PAGE_THRESHOLD) {
-        // Long answer → paginate with collapsible fold
-        const pages = splitIntoPages(cleanOutput);
-        pageCount = pages.length;
-        const header = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**`;
-        const pageItems: InlinePage[] = pages.map((page) => {
-          const summaryTitle = `💡 ${page.length}-char full answer`;
-          const details = `> [details] ${summaryTitle}\n> \n` + page.split('\n').map(line => `> ${line}`).join('\n');
-          const footer = footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : '';
-          const fullMd = `${header}\n\n${details}${footer}`;
-          const blocks = markdownToRichBlocks(fullMd);
-          return { markdown: fullMd, blocks: blocks.length > 0 ? blocks : undefined };
-        });
-        setInlinePages(resultId, pageItems);
-        fullMarkdown = pageItems[0].markdown || '';
-        finalBlocks = pageItems[0].blocks;
-        const baseButtons: { text: string; callback_data: string }[] = [
-          { text: '◀️ Prev', callback_data: 'inline_noop' },
-          { text: `1/${pageCount}`, callback_data: 'inline_noop' },
-          { text: 'Next ▶️', callback_data: `inline_page:${resultId}:1` },
-        ];
+    logger.info(`[InlineResult] Submitting final flush edit: userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length}`);
 
-        replyMarkup = {
-          inline_keyboard: [
-            baseButtons.filter((b) => !(b.text === '◀️ Prev')),
-            [{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }],
-          ],
-        };
-      } else {
-        // Medium answer → single collapsible fold
-        const summaryTitle = `💡 Click to expand full AI answer (${rawOutputLen} chars)`;
-        const bodyMarkdown = `> [details] ${summaryTitle}\n> \n` + cleanOutput.split('\n').map(line => `> ${line}`).join('\n');
-        isCollapsible = true;
-        fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${bodyMarkdown}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
-        const blocks = markdownToRichBlocks(fullMarkdown);
-        finalBlocks = blocks.length > 0 ? blocks : undefined;
-        replyMarkup = {
-          inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
-        };
-      }
-    } else {
-      // Short answer → plain text
-      fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${cleanOutput}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
-      replyMarkup = {
-        inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
-      };
-    }
-
-    logger.info(`[InlineResult] Submitting final flush edit: userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} isCollapsible=${isCollapsible}`);
-
-    const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup, finalBlocks);
+    const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup);
     if (success) {
       logger.info(`[InlineResult] Successfully flushed final inline message: inline_message_id=${inlineMessageId} userId=${fromId}`);
     }
@@ -1863,23 +1790,31 @@ async function runInlineGeneration(
 
     let reasonText: string;
     if (wasStopped) {
-      reasonText = '⏹ **生成已被手动停止**';
+      reasonText = '⏹ **生成已停止**';
     } else if (isTimeoutErr) {
       reasonText = '⏱️ **响应超时**\n后端模型装载或网络代理建立连接超时，请稍后重试。';
     } else {
       reasonText = '⚠️ **未能生成有效回答**\n模型通道未返回有效文本（可能是 API 配额受限或网络断开）。';
     }
 
-    const failMarkdown = `**💬 问题：** ${displayPrompt}\n\n${reasonText}\n\n*💡 提示：您可以点击下方按钮重新尝试。*`;
-    await ctx.api.raw.editMessageText({
-      inline_message_id: inlineMessageId,
-      rich_message: { markdown: failMarkdown },
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '🔄 重新生成', callback_data: `inline_regenerate:${resultId}` }
-        ]],
-      },
-    } as any).catch(() => {});
+    // On manual stop, keep whatever was already streamed and fold it into a
+    // native `<details>` block so nothing is lost but the card stays compact.
+    // Flushed through streamQueue (markdown path) so queued streaming frames
+    // can never overwrite this notice afterwards, and the Stop keyboard is
+    // replaced by the Regenerate button.
+    const partialRaw = getPartialOutput?.() ?? '';
+    const partialClean = wasStopped && partialRaw.trim().length > 0 ? stripWholeMessageCodeFence(partialRaw) : '';
+    const partialBlock = partialClean
+      ? `\n\n<details><summary>💡 Click to expand partial answer (${partialClean.length} chars)</summary>\n\n${partialClean}\n\n</details>`
+      : '';
+
+    const failMarkdown = `**💬 问题：** ${displayPrompt}\n\n${reasonText}${partialBlock}\n\n_💡 提示：您可以点击下方按钮重新尝试。_`;
+    const replyMarkup = {
+      inline_keyboard: [[
+        { text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }
+      ]],
+    };
+    await streamQueue.flushFinal(failMarkdown, replyMarkup);
   }
 }
 
@@ -1977,12 +1912,15 @@ async function runCompareGeneration(
     await ctx.api.raw.editMessageText({
       inline_message_id: inlineMessageId,
       rich_message: { markdown: failText },
+      reply_markup: {
+        inline_keyboard: [[{ text: '🔄 Re-compare', callback_data: `inline_regenerate:${resultId}` }]],
+      },
     } as any).catch(() => {});
     return;
   }
 
   // Build paginated comparison: one page per successfully answered model.
-  const header = `**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n`;
+  const header = `**⚖️ Multi-model comparison**\n\n**💬 Question:** ${displayPrompt}\n\n`;
   const pageItems: InlinePage[] = doneModels.map((s, i) => {
     const clean = stripWholeMessageCodeFence(s.output || '');
     const num = ['1.', '2.', '3.'][i] ?? `${i + 1}.`;

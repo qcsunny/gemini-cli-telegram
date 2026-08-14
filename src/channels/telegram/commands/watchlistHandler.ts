@@ -21,6 +21,7 @@ import {
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 import type { ChatScheduler } from '../../../core/scheduler.js';
+import { buildChannelReply } from '../bot/channelReply.js';
 
 export function buildWatchlistKeyboard(symbols: string[]): InlineKeyboard {
   const kb = new InlineKeyboard();
@@ -237,85 +238,57 @@ async function handleReportGeneration(
 ): Promise<void> {
   const chatId = ctx.chat?.id ?? userId;
   const segmentLabel = segment === 'cn' ? '🇨🇳 A股' : segment === 'hk' ? '🇭🇰 港股' : segment === 'us' ? '🇺🇸 美股' : '🌐 全市场';
-  
+
+  // Reuse the same rich-block pipeline as the private-chat message loop:
+  // sendRich / editRichDraft / editRich render native Telegram Bot API 10.2
+  // blocks (tables, <details>, math) instead of raw Markdown V1.
+  const reply = buildChannelReply(ctx, chatId, 'RichText');
+
   let msgId: number | undefined;
+  const statusText = `${ICONS.clock} 正在聚合【${segmentLabel}】自选股与大盘行情，AI 买方分析师正在全力出具复盘报告...`;
   try {
-    const sent = await ctx.reply(`${ICONS.clock} 正在聚合【${segmentLabel}】自选股与大盘行情，AI 买方分析师正在全力出具复盘报告...`, {
-      parse_mode: 'Markdown',
-    });
-    msgId = sent.message_id;
-  } catch {
+    msgId = await reply.send(statusText);
+  } catch (e) {
+    logger.error(`[WatchlistHandler] Failed to send initial status message: ${e}`);
     try {
-      const sent = await ctx.api.sendMessage(chatId, `${ICONS.clock} 正在聚合【${segmentLabel}】自选股与大盘行情，AI 买方分析师正在全力出具复盘报告...`);
+      const sent = await ctx.api.sendMessage(chatId, statusText);
       msgId = sent.message_id;
-    } catch (e) {
-      logger.error(`[WatchlistHandler] Failed to send initial status message: ${e}`);
+    } catch (e2) {
+      logger.error(`[WatchlistHandler] Failed to send initial status message (fallback): ${e2}`);
     }
   }
-
-  // Throttle streaming edits to avoid Telegram 429 rate limits
-  let lastEditTime = 0;
-  let pendingText: string | null = null;
-  let editTimer: NodeJS.Timeout | null = null;
-
-  const flushStreamEdit = async (text: string) => {
-    if (!msgId || !text.trim()) return;
-    try {
-      await ctx.api.editMessageText(chatId, msgId, text, { parse_mode: 'Markdown' }).catch(async () => {
-        await ctx.api.editMessageText(chatId, msgId!, text).catch(() => {});
-      });
-      lastEditTime = Date.now();
-    } catch {
-      // ignore intermediate edit errors
-    }
-  };
 
   try {
     const briefing = await generateDailyBriefing(userId, {
       segment,
+      // editRichDraft paces updates internally (adaptive draft throttle) and
+      // renders rich markdown while streaming, so no manual 1200ms throttle here.
       onChunk: (chunk) => {
-        pendingText = chunk;
-        const now = Date.now();
-        if (now - lastEditTime >= 1200) {
-          if (editTimer) {
-            clearTimeout(editTimer);
-            editTimer = null;
-          }
-          flushStreamEdit(chunk);
-        } else if (!editTimer) {
-          editTimer = setTimeout(() => {
-            editTimer = null;
-            if (pendingText) {
-              flushStreamEdit(pendingText);
-            }
-          }, 1200 - (now - lastEditTime));
+        if (!msgId || !chunk.trim()) return;
+        if (reply.editRichDraft) {
+          reply.editRichDraft(msgId, chunk).catch(() => {});
+        } else {
+          reply.edit(msgId, chunk).catch(() => {});
         }
       },
     });
 
-    if (editTimer) {
-      clearTimeout(editTimer);
-      editTimer = null;
-    }
-
     if (msgId) {
-      await ctx.api.editMessageText(chatId, msgId, briefing.markdown, { parse_mode: 'Markdown' }).catch(async () => {
-        await ctx.api.editMessageText(chatId, msgId!, briefing.markdown).catch(() => {});
-      });
+      await reply.edit(msgId, briefing.markdown);
     } else {
-      await ctx.reply(briefing.markdown, { parse_mode: 'Markdown' }).catch(async () => {
+      await reply.send(briefing.markdown).catch(async () => {
         await ctx.reply(briefing.markdown).catch(() => {});
       });
     }
   } catch (err) {
-    if (editTimer) {
-      clearTimeout(editTimer);
-    }
     logger.error(`[WatchlistHandler] Failed to generate daily briefing for user ${userId}: ${err}`);
+    const errText = `❌ 生成复盘简报失败：${err}`;
     if (msgId) {
-      await ctx.api.editMessageText(chatId, msgId, `❌ 生成复盘简报失败：${err}`).catch(() => {});
+      await reply.edit(msgId, errText).catch(async () => {
+        await ctx.api.editMessageText(chatId, msgId!, errText).catch(() => {});
+      });
     } else {
-      await ctx.reply(`❌ 生成复盘简报失败：${err}`).catch(() => {});
+      await ctx.reply(errText).catch(() => {});
     }
   }
 }
