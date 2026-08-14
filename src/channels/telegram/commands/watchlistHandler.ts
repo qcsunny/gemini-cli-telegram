@@ -313,7 +313,7 @@ async function handleListSubscriptions(
     return;
   }
 
-  const tasks = scheduler.listTasks(chatId).filter(t => t.message.startsWith('/watchlist'));
+  const tasks = scheduler.getTasksForChat(chatId).filter(t => t.message.startsWith('/watchlist'));
 
   if (tasks.length === 0) {
     await ctx.reply(
