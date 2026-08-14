@@ -6,7 +6,7 @@ import type { SessionManager } from '../../../core/session.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
-import { getAgyDataDir, getDefaultModel, getDefaultModels } from '../../../config/userConfig.js';
+import { getAgyDataDir, getDefaultModel, getDefaultModels, loadUserConfig } from '../../../config/userConfig.js';
 import { findSafeCutPoint, formatTokenCount } from '../formatter/core.js';
 import { markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
@@ -592,7 +592,7 @@ export async function runModelWithFallbackChain(
           prompt,
           cwd: customCwd || defaultOptions.cwd || process.cwd(),
           model: modelToUse,
-          proxy: defaultOptions.proxy,
+          proxy: defaultOptions.proxy || loadUserConfig()?.proxy || process.env['HTTP_PROXY'] || process.env['http_proxy'],
           onChunk: wrappedChunk,
           signal: combined ? combined.signal : timeoutCtrl.signal,
           allowTools,
