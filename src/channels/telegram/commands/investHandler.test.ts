@@ -118,13 +118,13 @@ describe('investHandler', () => {
       'test-conv-uuid',
       'user',
       '/invest 600519',
-      'agy'
+      'gemini-direct'
     );
     expect(messageStore.saveMessage).toHaveBeenCalledWith(
       'test-conv-uuid',
       'assistant',
       '深度投资分析报告内容',
-      'agy'
+      'gemini-direct'
     );
   });
 
@@ -154,7 +154,7 @@ describe('investHandler', () => {
       'test-conv-uuid',
       'user',
       '/invest 600519 vs 000858',
-      'agy'
+      'gemini-direct'
     );
   });
 

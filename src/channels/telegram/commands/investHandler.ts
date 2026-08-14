@@ -793,6 +793,13 @@ function getInvestProjectPath(): string {
   return process.cwd();
 }
 
+function toStoreBackend(channel: string | null): 'web2api' | 'deepseek' | 'gemini-direct' | 'opencode' {
+  if (channel === 'web2api') return 'web2api';
+  if (channel === 'deepseek') return 'deepseek';
+  if (channel === 'opencode') return 'opencode';
+  return 'gemini-direct';
+}
+
 async function runInvestModel(opts: {
   prompt: string;
   userPrompt: string;
@@ -811,9 +818,9 @@ async function runInvestModel(opts: {
     conversationId,
   });
   if (res.exitCode === 0 && res.output && conversationId) {
-    const channel = (getChannelModel(model) || 'agy') as 'agy' | 'deepseek' | 'web2api' | 'opencode';
-    saveMessage(conversationId, 'user', userPrompt, channel);
-    saveMessage(conversationId, 'assistant', res.output, channel);
+    const backend = toStoreBackend(getChannelModel(model));
+    saveMessage(conversationId, 'user', userPrompt, backend);
+    saveMessage(conversationId, 'assistant', res.output, backend);
   }
   return res;
 }
