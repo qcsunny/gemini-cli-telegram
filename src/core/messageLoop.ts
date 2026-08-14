@@ -299,6 +299,10 @@ export async function processMessage(
               printTimeout: agyPrintTimeout(),
               signal: runSignal,
               extraDirs: mediaExtraDirs,
+              // Regular chat: auto-approve all tool permissions (web search,
+              // bash, file ops) unless explicitly disabled in tuning config.
+              // /invest already passes allowTools: true on its own path.
+              allowTools: getTuningConfig().autoApproveTools,
               onActivity: () => resetInactivity(),
               onSpawn: (pid) => { session.childPid = pid; },
               onEvent: (event) => {
