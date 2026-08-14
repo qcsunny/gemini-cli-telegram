@@ -6,23 +6,27 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName, stripInlineImages, inlineThinkingToDetails } from './inlineHandler.js';
 import { displayModelName } from '../../../core/modelRegistry.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 
 // Mock agyCli
-vi.mock('../../../agy/agyCli.js', () => ({
-  runAgyPrint: vi.fn().mockImplementation(async (opts: any) => {
-    if (opts?.onChunk) {
-      opts.onChunk('这是关于量子计算的测试回答。');
-    }
-    return {
-      output: '这是关于量子计算的测试回答。',
-    };
-  }),
-}));
+vi.mock('../../../agy/agyCli.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../../agy/agyCli.js')>();
+  return {
+    ...mod,
+    runAgyPrint: vi.fn().mockImplementation(async (opts: any) => {
+      if (opts?.onChunk) {
+        opts.onChunk('这是关于量子计算的测试回答。');
+      }
+      return {
+        output: '这是关于量子计算的测试回答。',
+      };
+    }),
+  };
+});
 
 vi.mock('node:fs/promises', () => ({
   readdir: vi.fn().mockResolvedValue(['generated-image.png', '.system_generated']),
@@ -84,6 +88,65 @@ describe('compareModelName', () => {
 
   it('should leave unprefixed names unchanged', () => {
     expect(compareModelName('Gemini 3.6 Flash (High)')).toBe('Gemini 3.6 Flash (High)');
+  });
+});
+
+describe('stripInlineImages', () => {
+  it('should strip markdown images with non-http URLs but keep alt text (invalid-only)', () => {
+    expect(stripInlineImages('![logo](data:image/png;base64,abc)', 'invalid-only')).toBe('logo');
+    expect(stripInlineImages('![shot](/local/path.png)', 'invalid-only')).toBe('shot');
+    expect(stripInlineImages('![shot](tg://photo?id=1)', 'invalid-only')).toBe('shot');
+  });
+
+  it('should keep http(s) markdown images in invalid-only mode', () => {
+    const md = 'see ![diagram](https://example.com/a.png) above';
+    expect(stripInlineImages(md, 'invalid-only')).toBe(md);
+  });
+
+  it('should strip all markdown images (keeping alt) in all mode', () => {
+    expect(stripInlineImages('see ![diagram](https://example.com/a.png) above', 'all')).toBe('see diagram above');
+  });
+
+  it('should strip non-http HTML <img> tags in invalid-only mode and all <img> tags in all mode', () => {
+    expect(stripInlineImages('<img src="file:///tmp/x.png"> text', 'invalid-only')).toBe(' text');
+    expect(stripInlineImages('text <img src="https://example.com/a.png">', 'all')).toBe('text ');
+    expect(stripInlineImages('text <img src="https://example.com/a.png">', 'invalid-only')).toBe('text <img src="https://example.com/a.png">');
+  });
+
+  it('should handle empty and image-free input', () => {
+    expect(stripInlineImages('', 'all')).toBe('');
+    expect(stripInlineImages('plain text, no images', 'invalid-only')).toBe('plain text, no images');
+  });
+});
+
+describe('inlineThinkingToDetails', () => {
+  it('should convert a <thinking> block into a native <details> fold', () => {
+    const out = inlineThinkingToDetails('<thinking time="12.3">step one\nstep two</thinking>\n\nanswer body');
+    expect(out).toContain('<details><summary>🧠 思考过程</summary>');
+    expect(out).toContain('step one\nstep two');
+    expect(out).toContain('</details>\n\nanswer body');
+    expect(out).not.toContain('<thinking');
+  });
+
+  it('should handle <thought> and <think> variants', () => {
+    const thought = inlineThinkingToDetails('<thought>a</thought>\n\nbody');
+    expect(thought).toContain('<details>');
+    expect(thought).toContain('a');
+    expect(thought).toContain('body');
+    const think = inlineThinkingToDetails('<think>b</think>\n\nbody2');
+    expect(think).toContain('<details>');
+    expect(think).toContain('b');
+  });
+
+  it('should strip invalid images inside the thought before folding', () => {
+    const out = inlineThinkingToDetails('<thinking>![shot](/local.png) reason</thinking>\n\nanswer');
+    expect(out).not.toContain('/local.png');
+    expect(out).toContain('shot');
+  });
+
+  it('should return the input unchanged when no thinking block is present', () => {
+    const md = 'just plain answer';
+    expect(inlineThinkingToDetails(md)).toBe(md);
   });
 });
 

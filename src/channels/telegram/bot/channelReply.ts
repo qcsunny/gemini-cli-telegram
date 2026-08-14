@@ -43,17 +43,23 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
 /**
  * Streaming-safe markdown: strips any literal <thought>/<think> XML so the
  * typewriter render never shows raw tags. Body content renders as markdown;
- * while only thinking, show a short "thinking..." placeholder so the bubble
- * is never empty (mirrors the inline path, which streams raw accumulated text).
+ * while only thinking, show the actual reasoning text typewriter-style so the
+ * user sees the thinking chain grow (not a static placeholder).
  *
- * Collapsible blocks (<details> / `> [details]` blockquotes) are collapsed to
- * their plain-text summary during streaming: the client re-renders the whole
- * message on every edit, which resets the <details> open state each time, so a
- * folded block appears "stuck" and can never be opened. Only the summary line
- * (plus a short hint) is streamed; the full folded content is restored at
- * finalize (editRich → buildFinalBlocks).
+ * Phase 1 (thought present, no body): stream the thinking text verbatim under a
+ * "🧠 Thinking..." header.
+ * Phase 2 (body present): fold the thinking into a collapsed <details> block
+ * (summary matches finalize's "🧠 Thinking Process") and stream the body below.
+ * Phase 3 (finalize): handled separately by buildFinalBlocks (native blocks).
+ *
+ * Collapsible blocks (<details> / `> [details]` blockquotes) inside the BODY are
+ * collapsed to their plain-text summary during streaming: the client re-renders
+ * the whole message on every edit, which resets the <details> open state each
+ * time, so a folded block appears "stuck" and can never be opened. Only the
+ * summary line (plus a short hint) is streamed; the full folded content is
+ * restored at finalize (editRich → buildFinalBlocks).
  */
-function getStreamingMarkdown(text: string | StructuredMessage): string {
+export function getStreamingMarkdown(text: string | StructuredMessage): string {
   const strip = (s: string) => s
     .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
     .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
@@ -113,11 +119,19 @@ function getStreamingMarkdown(text: string | StructuredMessage): string {
     const content = collapseDetails(strip(text));
     return content || '🧠 Thinking...';
   }
-  const content = collapseDetails(strip(text.content || ''));
-  const thought = strip(text.thought || '');
-  if (content) return content;
-  if (thought) return '🧠 Thinking...';
-  return '🧠 Thinking...';
+  const rawThought = strip(text.thought || '');
+  const rawContent = strip(text.content || '');
+  if (rawThought) {
+    if (rawContent) {
+      // Phase 2: thinking is done — fold it into a collapsed block (summary
+      // matches the finalize details block) and stream the body below it.
+      return `<details><summary>🧠 Thinking Process</summary>\n\n${rawThought}\n\n</details>\n\n${collapseDetails(rawContent)}`;
+    }
+    // Phase 1: typewriter-stream the actual thinking text as it grows.
+    return `**🧠 Thinking...**\n\n${rawThought}`;
+  }
+  const content = collapseDetails(rawContent);
+  return content || '🧠 Thinking...';
 }
 
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
