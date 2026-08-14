@@ -18,7 +18,6 @@ import {
   formatWatchlistSnapshotTable,
   type MarketSegment,
 } from '../../../stock/service/dailyBriefing.js';
-import { buildChannelReply } from '../bot/channelReply.js';
 import { ICONS } from '../ui.js';
 import { logger } from '../../../utils/logger.js';
 import type { ChatScheduler } from '../../../core/scheduler.js';
