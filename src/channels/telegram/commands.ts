@@ -37,6 +37,7 @@ export function registerCommands(
   registerContentHandlers(bot, sessionManager, defaultOptions);
   registerAutomationHandlers(bot, sessionManager, defaultOptions, triggerAutopilot);
   registerProjectHandlers(bot, sessionManager, defaultOptions);
+  registerWatchlistCommands(bot, sessionManager.getChatScheduler());
   registerSettingsHandler(bot, sessionManager, defaultOptions);
   registerCallbackRouter(bot, sessionManager, defaultOptions);
   registerInlineHandler(bot, sessionManager, defaultOptions, { allowedUsers });
@@ -44,6 +45,5 @@ export function registerCommands(
   registerSumHandler(bot, sessionManager, defaultOptions);
   registerStockHandler(bot, sessionManager, defaultOptions);
   registerInvestHandler(bot, sessionManager, defaultOptions);
-  registerWatchlistCommands(bot, sessionManager.getChatScheduler());
   registerLinkSummarizerCommands(bot);
 }
