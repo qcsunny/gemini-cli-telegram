@@ -253,15 +253,50 @@ async function handleReportGeneration(
     }
   }
 
+  // Throttle streaming edits to avoid Telegram 429 rate limits
+  let lastEditTime = 0;
+  let pendingText: string | null = null;
+  let editTimer: NodeJS.Timeout | null = null;
+
+  const flushStreamEdit = async (text: string) => {
+    if (!msgId || !text.trim()) return;
+    try {
+      await ctx.api.editMessageText(chatId, msgId, text, { parse_mode: 'Markdown' }).catch(async () => {
+        await ctx.api.editMessageText(chatId, msgId!, text).catch(() => {});
+      });
+      lastEditTime = Date.now();
+    } catch {
+      // ignore intermediate edit errors
+    }
+  };
+
   try {
     const briefing = await generateDailyBriefing(userId, {
       segment,
       onChunk: (chunk) => {
-        if (msgId) {
-          ctx.api.editMessageText(chatId, msgId, chunk, { parse_mode: 'Markdown' }).catch(() => {});
+        pendingText = chunk;
+        const now = Date.now();
+        if (now - lastEditTime >= 1200) {
+          if (editTimer) {
+            clearTimeout(editTimer);
+            editTimer = null;
+          }
+          flushStreamEdit(chunk);
+        } else if (!editTimer) {
+          editTimer = setTimeout(() => {
+            editTimer = null;
+            if (pendingText) {
+              flushStreamEdit(pendingText);
+            }
+          }, 1200 - (now - lastEditTime));
         }
       },
     });
+
+    if (editTimer) {
+      clearTimeout(editTimer);
+      editTimer = null;
+    }
 
     if (msgId) {
       await ctx.api.editMessageText(chatId, msgId, briefing.markdown, { parse_mode: 'Markdown' }).catch(async () => {
@@ -273,6 +308,9 @@ async function handleReportGeneration(
       });
     }
   } catch (err) {
+    if (editTimer) {
+      clearTimeout(editTimer);
+    }
     logger.error(`[WatchlistHandler] Failed to generate daily briefing for user ${userId}: ${err}`);
     if (msgId) {
       await ctx.api.editMessageText(chatId, msgId, `❌ 生成复盘简报失败：${err}`).catch(() => {});
