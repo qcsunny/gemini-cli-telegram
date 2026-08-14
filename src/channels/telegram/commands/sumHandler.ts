@@ -159,6 +159,14 @@ async function handleSum(
   const config = getSummarizationConfig();
   const arg = typeof ctx.match === 'string' ? ctx.match.trim() : '';
 
+  const { extractFirstUrl } = await import('../../../tools/urlParser/urlParser.js');
+  const { handleLinkSummarizeWorkflow } = await import('./linkSummarizerHandler.js');
+  const urlInArg = extractFirstUrl(arg);
+  if (urlInArg) {
+    await handleLinkSummarizeWorkflow(ctx, urlInArg, session.model);
+    return;
+  }
+
   let count = config.defaultCount;
   let targetUsername: string | undefined;
 

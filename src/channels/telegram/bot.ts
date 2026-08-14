@@ -689,6 +689,8 @@ export class TelegramBot {
       { command: 'autopilot', description: 'Auto-reply until goal achieved' },
       { command: 'invest', description: 'Value investing multi-dimension analysis & compare' },
       { command: 'stock', description: 'Query real-time stock & crypto quotes' },
+      { command: 'watchlist', description: 'Stock watchlist & daily AI market review briefing' },
+      { command: 'read', description: 'Smart summary for ArXiv/GitHub/WeChat/Zhihu/Twitter/Web links' },
       { command: 'sum', description: 'Summarize recent chat messages' },
       { command: 'addfolder', description: 'Add a folder for read+write access' },
       { command: 'id', description: 'Show current session ID' },

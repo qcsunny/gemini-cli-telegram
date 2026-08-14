@@ -988,7 +988,8 @@ export function registerInvestHandler(
           inline_keyboard: [
             [
               { text: '📊 查看详情', url: detailUrl },
-              { text: '📈 K线图', url: chartUrl }
+              { text: '📈 K线图', url: chartUrl },
+              { text: '⭐ 加自选', callback_data: `wl_add:${quote.symbol}` }
             ]
           ]
         }

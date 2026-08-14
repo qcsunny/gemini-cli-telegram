@@ -19,6 +19,8 @@ import { registerSettingsHandler } from './commands/settingsHandler.js';
 import { registerSumHandler } from './commands/sumHandler.js';
 import { registerStockHandler } from './commands/stockHandler.js';
 import { registerInvestHandler } from './commands/investHandler.js';
+import { registerWatchlistCommands } from './commands/watchlistHandler.js';
+import { registerLinkSummarizerCommands } from './commands/linkSummarizerHandler.js';
 
 /**
  * Register Telegram slash command handlers on the bot.
@@ -42,4 +44,6 @@ export function registerCommands(
   registerSumHandler(bot, sessionManager, defaultOptions);
   registerStockHandler(bot, sessionManager, defaultOptions);
   registerInvestHandler(bot, sessionManager, defaultOptions);
+  registerWatchlistCommands(bot, sessionManager.getChatScheduler());
+  registerLinkSummarizerCommands(bot);
 }
