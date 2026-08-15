@@ -343,6 +343,11 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
                 break;
               }
             }
+            // Unrecognized inline HTML tag (e.g. a literal <details> mentioned in
+            // prose): keep the raw tag as plain text instead of silently dropping
+            // it, matching the HTML path (markdownToIR appends html_inline content).
+            // This point is only reached when no branch above matched a known tag.
+            pushPlain(token.content);
           }
           if (token.children) walk(token.children, depth + 1);
           break;

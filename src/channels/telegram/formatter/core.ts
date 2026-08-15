@@ -833,16 +833,25 @@ export function trimHtmlBr(html: string): string {
 
 export function normalizeMarkdownFences(markdown: string): string {
   if (!markdown) return markdown;
-  let inputLines = markdown.split('\n');
-  for (let i = 0; i < inputLines.length; i++) {
-    inputLines[i] = inputLines[i].replace(/(^|.+?)(`{3,}|~{3,})([a-zA-Z0-9_+#.-]*)/g, (match, before, fence, info) => {
+  const inputLines = markdown.split('\n');
+  // 1. Split code fences glued to preceding inline text (e.g. "代码```python")
+  //    onto their own line so markdown-it parses them as a real fence. Track
+  //    which fence fragments came from such inline splits so we can demote
+  //    them back to literal text when the fence is never closed (the model was
+  //    merely quoting "```" in prose, e.g. "I'll use ``` fences for code.",
+  //    not opening a code block).
+  const inlineFenceFragments = new Set<string>();
+  const splitLines: string[] = [];
+  for (const line of inputLines) {
+    splitLines.push(line.replace(/(^|.+?)(`{3,}|~{3,})([a-zA-Z0-9_+#.-]*)/g, (match, before, fence, info) => {
       if (/[^ \t>]/.test(before)) {
+        inlineFenceFragments.add(fence + info);
         return before + '\n' + fence + info;
       }
       return match;
-    });
+    }));
   }
-  let text = inputLines.join('\n');
+  let text = splitLines.join('\n');
   text = text.replace(/(`{3,})([a-zA-Z0-9_+#.-]*)\n?([^\n`])/g, '$1$2\n$3');
   // 2. Isolate every fence delimiter (a line that is only ````` + optional lang)
   //    with blank lines so markdown-it parses it as a real fence instead of
@@ -854,6 +863,9 @@ export function normalizeMarkdownFences(markdown: string): string {
   const out: string[] = [];
   let prevWasBlank = true;
   let openFenceBackticks = 0;
+  let openFenceChar = '';
+  let openFenceOutIdx = -1;
+  let openFenceIsInlineSplit = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const fenceMatch = line.match(fenceRe);
@@ -862,12 +874,16 @@ export function normalizeMarkdownFences(markdown: string): string {
       const backtickCount = fenceMatch![2].length;
       if (openFenceBackticks === 0) {
         // Not inside a fence — this is a real fence opener
+        const core = fenceMatch![2] + (fenceMatch![3] ?? '');
         openFenceBackticks = backtickCount;
+        openFenceChar = fenceMatch![2];
+        openFenceIsInlineSplit = inlineFenceFragments.has(core);
         if (!prevWasBlank) {
           out.push('');
           prevWasBlank = true;
         }
         out.push(line);
+        openFenceOutIdx = out.length - 1;
         if (i + 1 < lines.length && lines[i + 1].trim() !== '' && !fenceRe.test(lines[i + 1])) {
           out.push('');
           prevWasBlank = true;
@@ -877,6 +893,8 @@ export function normalizeMarkdownFences(markdown: string): string {
       } else if (backtickCount >= openFenceBackticks) {
         // Closing fence: same or more backticks than opener
         openFenceBackticks = 0;
+        openFenceOutIdx = -1;
+        openFenceIsInlineSplit = false;
         if (!prevWasBlank) {
           out.push('');
         }
@@ -892,7 +910,23 @@ export function normalizeMarkdownFences(markdown: string): string {
       prevWasBlank = line.trim() === '';
     }
   }
-  // 3. Collapse excessive blank lines.
+  // 3. Handle fences left unclosed.
+  if (openFenceBackticks !== 0) {
+    if (openFenceIsInlineSplit && openFenceOutIdx >= 0) {
+      // The model quoted "```" in prose without ever closing it — demote the
+      // opener to literal text so the rest of the message renders as normal
+      // content instead of one giant code block swallowing the remainder.
+      out[openFenceOutIdx] = out[openFenceOutIdx].replace(/([`~])/g, '\\$1');
+    } else {
+      // Standalone truncated code block: close it explicitly so downstream
+      // processing sees a balanced fence (content before the close stays code).
+      if (out.length > 0 && out[out.length - 1].trim() !== '') {
+        out.push('');
+      }
+      out.push(openFenceChar);
+    }
+  }
+  // 4. Collapse excessive blank lines.
   return out.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
