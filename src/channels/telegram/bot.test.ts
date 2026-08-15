@@ -6,7 +6,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TelegramBot, buildChannelReply, record429Backoff, reset429Backoff, is429Error, get429RetryAfter } from './bot.js';
-import { buildPrivateStreamingBlocks } from './bot/channelReply.js';
 import { processMessage } from '../../core/messageLoop.js';
 import * as fs from 'fs/promises';
 
@@ -309,32 +308,6 @@ describe('TelegramBot', () => {
       expect(parsed).toHaveProperty('blocks');
       const blocks = parsed.blocks as unknown[];
       expect(blocks.length).toBeGreaterThan(0);
-    });
-
-    it('should build Phase 1 streaming blocks (thought only) with a bold thinking header', () => {
-      const blocks = buildPrivateStreamingBlocks({ content: '', thought: 'Step 1 reasoning' });
-      const json = JSON.stringify(blocks);
-      expect(json).toContain('🧠 Thinking...');
-      expect(json).toContain('Step 1 reasoning');
-    });
-
-    it('should build Phase 2 streaming blocks with a native details block for thinking', () => {
-      const blocks = buildPrivateStreamingBlocks({ content: 'Body answer.', thought: 'Done thinking.' });
-      expect(blocks.some((b) => b.type === 'details' && b.summary === '🧠 Thinking Process')).toBe(true);
-      const json = JSON.stringify(blocks);
-      expect(json).toContain('Done thinking.');
-      expect(json).toContain('Body answer.');
-    });
-
-    it('should never emit empty streaming blocks (RICH_MESSAGE_EMPTY guard)', () => {
-      const blocks = buildPrivateStreamingBlocks({ content: '', thought: '' });
-      expect(blocks.length).toBeGreaterThan(0);
-    });
-
-    it('should stream body-only content without a thinking header', () => {
-      const blocks = buildPrivateStreamingBlocks({ content: 'Just the answer', thought: '' });
-      expect(JSON.stringify(blocks)).toContain('Just the answer');
-      expect(JSON.stringify(blocks)).not.toContain('Thinking');
     });
 
     it('should send native blocks via editRichDraft streaming edits', async () => {

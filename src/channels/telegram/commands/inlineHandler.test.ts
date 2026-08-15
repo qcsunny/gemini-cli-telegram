@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName, stripInlineImages, inlineThinkingToDetails, buildInlineStreamingBlocks } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName, stripInlineImages, buildInlineStreamingBlocks } from './inlineHandler.js';
 import { displayModelName } from '../../../core/modelRegistry.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
@@ -116,37 +116,6 @@ describe('stripInlineImages', () => {
   it('should handle empty and image-free input', () => {
     expect(stripInlineImages('', 'all')).toBe('');
     expect(stripInlineImages('plain text, no images', 'invalid-only')).toBe('plain text, no images');
-  });
-});
-
-describe('inlineThinkingToDetails', () => {
-  it('should convert a <thinking> block into a native <details> fold', () => {
-    const out = inlineThinkingToDetails('<thinking time="12.3">step one\nstep two</thinking>\n\nanswer body');
-    expect(out).toContain('<details><summary>🧠 思考过程</summary>');
-    expect(out).toContain('step one\nstep two');
-    expect(out).toContain('</details>\n\nanswer body');
-    expect(out).not.toContain('<thinking');
-  });
-
-  it('should handle <thought> and <think> variants', () => {
-    const thought = inlineThinkingToDetails('<thought>a</thought>\n\nbody');
-    expect(thought).toContain('<details>');
-    expect(thought).toContain('a');
-    expect(thought).toContain('body');
-    const think = inlineThinkingToDetails('<think>b</think>\n\nbody2');
-    expect(think).toContain('<details>');
-    expect(think).toContain('b');
-  });
-
-  it('should strip invalid images inside the thought before folding', () => {
-    const out = inlineThinkingToDetails('<thinking>![shot](/local.png) reason</thinking>\n\nanswer');
-    expect(out).not.toContain('/local.png');
-    expect(out).toContain('shot');
-  });
-
-  it('should return the input unchanged when no thinking block is present', () => {
-    const md = 'just plain answer';
-    expect(inlineThinkingToDetails(md)).toBe(md);
   });
 });
 

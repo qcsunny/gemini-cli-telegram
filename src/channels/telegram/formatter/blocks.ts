@@ -1106,8 +1106,8 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
 /**
  * Format a structured message with optional thought into Telegram RichBlocks.
  * The returned blocks array is suitable for `sendRichMessage` / `editMessageText`
- * (final, persisted messages). For streaming drafts use
- * `buildStreamingBlocks` instead.
+ * (final, persisted messages). For streaming drafts the channel layer builds
+ * lightweight blocks directly.
  */
 export function buildFinalBlocks(
   content: string,
@@ -1216,43 +1216,6 @@ export function buildFinalBlocks(
   }
 
   return blocks;
-}
-
-/**
- * Build blocks for a streaming draft (Bot API 10.2, draft-only).
- *
- * - While the model is thinking (thought non-empty, no body yet):
- *   emits a native `thinking` placeholder block with the live thought text.
- * - When body arrives alongside thought:
- *   emits ordinary paragraphs; persistent streaming edits should not use
- *   collapsible blocks. The final formatter adds the native details block.
- * - When only body (no thought): emits body blocks directly (no thinking block).
- * - When both empty: emits a static `thinking` placeholder ("正在思考...").
- */
-export function buildStreamingBlocks(input: {
-  content?: string;
-  thought?: string;
-}): RichBlock[] {
-  const thought = (input.thought ?? '').trim();
-  const content = (input.content ?? '').trim();
-
-  if (thought && content) {
-    return [
-      ...markdownToRichBlocks(`**🧠 Thinking:**\n\n${thought}`),
-      ...markdownToRichBlocks(content),
-    ];
-  }
-
-  if (thought && !content) {
-    return markdownToRichBlocks(`**🧠 Thinking:**\n\n${thought}`);
-  }
-
-  if (!thought && content) {
-    return markdownToRichBlocks(content);
-  }
-
-  // Both empty
-  return markdownToRichBlocks('**🧠 Thinking...**');
 }
 
 /**
