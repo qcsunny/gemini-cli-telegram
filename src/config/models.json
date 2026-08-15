@@ -43,8 +43,6 @@
         "OpenCode: GLM 4.7 Flash",
         "OpenCode: Nemotron 3.5 Lightning Free",
         "OpenCode: Qwen 3.6 35B A3B",
-        "OpenCode: Ling 3.0 Flash Free",
-        "OpenCode: North Mini Code Free",
         "OpenCode: OpenRouter Free"
       ]
     },
@@ -88,8 +86,6 @@
     "OpenCode: GLM 4.7 Flash",
     "OpenCode: Nemotron 3.5 Lightning Free",
     "OpenCode: Qwen 3.6 35B A3B",
-    "OpenCode: Ling 3.0 Flash Free",
-    "OpenCode: North Mini Code Free",
     "OpenCode: OpenRouter Free",
     "Web2API: Gemini 3.1 Pro Enhanced",
     "Web2API: Gemini 3.1 Pro",
@@ -122,10 +118,8 @@
     "OpenCode: Nemotron 3 Ultra Free":         "opencode/nemotron-3-ultra-free",
     "OpenCode: Nemotron 3.5 Lightning Free":   "opencode/nemotron-3.5-lightning-free",
     "OpenCode: Hunyuan 3.0 Free":              "opencode/hy3-free",
-    "OpenCode: North Mini Code Free":          "opencode/north-mini-code-free",
     "OpenCode: Laguna S 2.1 Free":             "opencode/laguna-s-2.1-free",
     "OpenCode: MiMo V2.5 Free":              "opencode/mimo-v2.5-free",
-    "OpenCode: Ling 3.0 Flash Free":          "opencode/ling-3.0-flash-free",
     "OpenCode: Ling 3.0 Tiny Free":          "opencode/ling-3.0-tiny-free",
     "OpenCode: Longcat 2.0 Free":            "opencode/longcat-2.0-free",
     "OpenCode: OpenRouter Free":             "openrouter/openrouter/free",
@@ -150,7 +144,6 @@
     "OpenCode: DeepSeek V4 Flash Free":      "速度快、成本低、能力均衡 · 适用：日常编码、中等复杂度任务、高频调用",
     "OpenCode: Laguna S 2.1 Free":           "Agent编码能力突出，工具调用强 · 适用：自动化工作流、多步骤任务、MLOps管道",
     "OpenCode: MiMo V2.5 Free":              "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解",
-    "OpenCode: North Mini Code Free":        "轻量高效，响应迅速 · 适用：简单脚本编写、代码片段生成、快速原型设计",
     "OpenCode: Ling 3.0 Tiny Free":         "轻量级中文优化模型，快速响应 · 适用：中文对话、简单问答、文本生成",
     "OpenCode: Longcat 2.0 Free":           "超长上下文模型 · 适用：长文档处理、大型代码库理解"
   }
