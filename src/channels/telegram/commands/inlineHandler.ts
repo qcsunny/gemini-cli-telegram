@@ -712,6 +712,12 @@ export async function runModelWithFallbackChain(
           allowTools,
         });
         clearTimers();
+        // A user-initiated stop must terminate the whole chain immediately —
+        // never auto-retry an aborted attempt. SSE backends resolve (not reject)
+        // with partial output on abort, so check the signal even on success.
+        if (signal?.aborted) {
+          return { result: null, modelUsed: initialModel, isFallback: false };
+        }
         // A timed-out run may carry partial stdout; treat it as a failure rather
         // than returning a truncated "successful" answer. Same for a user stop:
         // web2api/deepseek/opencode backends resolve with partial output (isTimeout
