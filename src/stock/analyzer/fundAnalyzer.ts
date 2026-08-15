@@ -11,7 +11,7 @@
 
 import type { FundDataset, FundInfo, FundNavRow } from '../provider/fund.js';
 
-export interface DimensionScore {
+interface DimensionScore {
   id: string;
   name: string;
   score: number;

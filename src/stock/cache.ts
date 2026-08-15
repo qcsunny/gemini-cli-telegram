@@ -14,7 +14,7 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
-export class MarketCache {
+class MarketCache {
   private cache = new Map<string, CacheEntry<any>>();
   private readonly maxEntries: number;
 
