@@ -543,6 +543,7 @@ export function registerStockHandler(
             [
               { text: '📊 查看详情', url: detailUrl },
               { text: '📈 K线图', url: chartUrl },
+              { text: '⚖️ 价值分析', callback_data: `stock_invest:${quote.symbol}` },
               { text: '⭐ 加自选', callback_data: `wl_add:${quote.symbol}` }
             ]
           ]

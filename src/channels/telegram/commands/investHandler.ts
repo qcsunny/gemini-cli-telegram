@@ -816,7 +816,7 @@ export function registerInvestHandler(
   sessionManager: SessionManager,
   defaultOptions: SessionOptions,
 ): void {
-  bot.command('invest', async (ctx) => {
+  const handleInvest = async (ctx: any): Promise<void> => {
     const rawArgs = ctx.match;
     const trimmed = typeof rawArgs === 'string' ? rawArgs.trim() : '';
 
@@ -1020,5 +1020,18 @@ export function registerInvestHandler(
       logger.error(`Failed to handle /invest command for ${symbol}: ${err}`);
       await ctx.reply(`${ICONS.error} <b>Error running invest analysis for ${symbol}</b>: ${(err as Error)?.message || err}`);
     }
+  };
+
+  bot.command('invest', handleInvest);
+  bot.on('callback_query:data', async (ctx, next) => {
+    const match = ctx.callbackQuery.data.match(/^stock_invest:(.+)$/);
+    if (!match) {
+      await next();
+      return;
+    }
+    const symbol = match[1]?.trim();
+    if (!symbol) return;
+    await ctx.answerCallbackQuery('正在启动价值分析…').catch(() => {});
+    await handleInvest({ ...ctx, match: symbol });
   });
 }

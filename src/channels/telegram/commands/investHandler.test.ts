@@ -46,6 +46,7 @@ vi.mock('../../../stock/provider/fund.js', () => ({
 
 describe('investHandler', () => {
   let commands: Record<string, Function>;
+  let callbackHandler: Function | undefined;
   let mockBot: Partial<Bot>;
   let mockSessionManager: any;
   let mockCtx: any;
@@ -53,9 +54,14 @@ describe('investHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     commands = {};
+    callbackHandler = undefined;
     mockBot = {
       command: vi.fn((name: string, handler: Function) => {
         commands[name] = handler;
+        return mockBot as any;
+      }),
+      on: vi.fn((event: string, handler: Function) => {
+        if (event === 'callback_query:data') callbackHandler = handler;
         return mockBot as any;
       }),
     };
@@ -74,6 +80,7 @@ describe('investHandler', () => {
       api: {
         sendRichMessage: vi.fn().mockResolvedValue({ message_id: 2 }),
       },
+      answerCallbackQuery: vi.fn().mockResolvedValue(true),
     };
 
     registerInvestHandler(mockBot as Bot, mockSessionManager, {});
@@ -82,6 +89,23 @@ describe('investHandler', () => {
   it('should register /invest command', () => {
     expect(mockBot.command).toHaveBeenCalledWith('invest', expect.any(Function));
     expect(commands['invest']).toBeDefined();
+    expect(callbackHandler).toBeDefined();
+  });
+
+  it('should start /invest from the stock card callback', async () => {
+    vi.mocked(investDataFetcher.fetchInvestAnalysis).mockResolvedValue({
+      ok: true,
+      symbol: 'NVDA',
+      data: '{"grade":"A","totalScore":88}',
+    });
+
+    await callbackHandler!({
+      ...mockCtx,
+      callbackQuery: { data: 'stock_invest:NVDA' },
+    }, vi.fn());
+
+    expect(investDataFetcher.fetchInvestAnalysis).toHaveBeenCalledWith('NVDA', '/test/invest-path');
+    expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith('正在启动价值分析…');
   });
 
   it('should show usage when no symbol is provided', async () => {
