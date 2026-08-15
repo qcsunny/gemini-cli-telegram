@@ -27,7 +27,6 @@ scripts/mirror_response.sh
 experts/
 AGENTS.md
 .superpowers/
-docs/superpowers/
 .agents/
 patches/
 playground/
@@ -38,11 +37,8 @@ scratch/
 scripts/
 events_test.txt
 
-# Telegram Bot API 文档(本地参考,不推送远程)
+# 本地文档/参考(不推送远程)
+docs/
 telegramBotAPI/
 notebook/
 documents/
-docs/telegram-bot-api.md
-
-# 本地个人对比文档(不推送远程)
-docs/global_top10_llm_comparison.md
