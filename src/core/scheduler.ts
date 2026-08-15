@@ -208,7 +208,7 @@ export class ChatScheduler {
       const tomorrow = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
       const [hours, minutes] = timeStr.split(':').map(Number);
-      tomorrow.setHours(hours || 9, minutes || 0, 0, 0);
+      tomorrow.setHours(hours, minutes || 0, 0, 0);
       return tomorrow.getTime();
     }
     if (lower === 'tonight') {

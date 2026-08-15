@@ -126,6 +126,15 @@ describe('ChatScheduler', () => {
       const expected = new Date(2026, 4, 11, 14, 30, 0).getTime();
       expect(nextRun).toBe(expected);
     });
+
+    it('should preserve midnight hour for "tomorrow at 0:30"', async () => {
+      const now = new Date(2026, 4, 10, 10, 0, 0); // 10:00 AM
+      vi.setSystemTime(now);
+
+      const nextRun = (scheduler as any).parseScheduleTime('tomorrow at 0:30');
+      const expected = new Date(2026, 4, 11, 0, 30, 0).getTime();
+      expect(nextRun).toBe(expected);
+    });
   });
 
   describe('task execution', () => {
