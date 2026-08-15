@@ -27,13 +27,13 @@ export interface FundNavRow {
   shtz: string;
 }
 
-export interface ManagerTenure {
+interface ManagerTenure {
   since: string;
   days: number;
   returnPct: number | null;
 }
 
-export interface FundReturns {
+interface FundReturns {
   w1: number | null;
   m1: number | null;
   m3: number | null;
@@ -60,7 +60,7 @@ export interface FundInfo {
   sellStatus: string;
 }
 
-export interface FundTopHolding {
+interface FundTopHolding {
   stockCode: string;
   stockName: string;
   ratioPct: number | null;
@@ -115,7 +115,7 @@ function decodeGbk(buf: ArrayBuffer): string {
   return new TextDecoder('gbk').decode(buf);
 }
 
-export async function fetchFundNav(code: string, pageSize = 250): Promise<FundNavRow[]> {
+async function fetchFundNav(code: string, pageSize = 250): Promise<FundNavRow[]> {
   const rows: FundNavRow[] = [];
   const pageLen = 20;
   const pages = Math.ceil(pageSize / pageLen);
@@ -151,7 +151,7 @@ function exchangePrefix(code: string): string | null {
   return null;
 }
 
-export async function fetchETFQuote(code: string): Promise<FundDataset['quote']> {
+async function fetchETFQuote(code: string): Promise<FundDataset['quote']> {
   const prefix = exchangePrefix(code);
   if (!prefix) return null;
   const url = `https://qt.gtimg.cn/q=${prefix}${code}`;
@@ -208,7 +208,7 @@ function parseRankData(text: string): { codes: string[]; total: number } | null 
   return { codes, total };
 }
 
-export async function fetchFundPeerRank(code: string, type: string): Promise<FundDataset['peerRank']> {
+async function fetchFundPeerRank(code: string, type: string): Promise<FundDataset['peerRank']> {
   const entry = RANK_FT_MAP.find((r) => r.match.test(type));
   if (!entry) return null;
   const cached = rankCache.get(entry.ft);
@@ -242,7 +242,7 @@ function buildRank(code: string, codes: string[], total: number): FundDataset['p
   return { total, rank, percentilePct: Math.round((rank / total) * 1000) / 10, metric: RANK_METRIC };
 }
 
-export async function fetchFundTopHoldings(code: string, topline = 20): Promise<FundTopHolding[]> {
+async function fetchFundTopHoldings(code: string, topline = 20): Promise<FundTopHolding[]> {
   const url = `${F10_BASE}/FundArchivesDatas.aspx?type=jjcc&code=${code}&topline=${topline}&year=&month=`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -310,7 +310,7 @@ async function fetchFundFees(code: string): Promise<{ managementFeePct: number |
   }
 }
 
-export async function fetchManagerTenure(code: string): Promise<ManagerTenure | null> {
+async function fetchManagerTenure(code: string): Promise<ManagerTenure | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -336,7 +336,7 @@ export async function fetchManagerTenure(code: string): Promise<ManagerTenure | 
   }
 }
 
-export async function fetchFundInfo(code: string): Promise<FundInfo | null> {
+async function fetchFundInfo(code: string): Promise<FundInfo | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {

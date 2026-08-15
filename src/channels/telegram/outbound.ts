@@ -31,7 +31,7 @@ export type SendMediaFn = (
 ) => Promise<void>;
 
 /** Single item inside an album (media group) delivery */
-export interface SendMediaGroupItem {
+interface SendMediaGroupItem {
   filePath: string;
   type: Exclude<MediaType, 'sticker' | 'video_note' | 'auto'>;
   caption?: string;
