@@ -140,11 +140,20 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
                 const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? '';
                 if (reasoning) {
                   if (!thoughtStartTime) thoughtStartTime = Date.now();
+                  if (!inThoughts) {
+                    inThoughts = true;
+                    if (onChunk) onChunk('<thinking time="0.0">');
+                  }
                   thoughtBuf += reasoning;
                   onChunk?.(reasoning);
                   opts.onEvent?.({ type: 'thought', content: reasoning });
                 }
                 if (delta) {
+                  if (thoughtStartTime && !thoughtEndTime) thoughtEndTime = Date.now();
+                  if (inThoughts) {
+                    inThoughts = false;
+                    if (onChunk) onChunk('</thinking>\n\n');
+                  }
                   contentBuf += delta;
                   onChunk?.(delta);
                   opts.onEvent?.({ type: 'text', content: delta });
