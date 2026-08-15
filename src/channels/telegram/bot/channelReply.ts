@@ -16,7 +16,7 @@ import { Context, InputFile } from 'grammy';
 
 import type { InputRichMessage } from '@grammyjs/types/rich.js';
 import type { RichBlock } from '../richMessage.js';
-import { markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
+import { markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks, buildFinalBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
 import { draftBackoffUntil, record429Backoff, is429Error, get429RetryAfter } from './rateLimiter.js';
@@ -40,6 +40,65 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
     : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
 }
 
+/** Strips literal <thought>/<think>/<thinking> XML so the typewriter render never shows raw tags. */
+function stripThoughtTags(s: string): string {
+  return s
+    .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<\/?thought[^>]*>/gi, '')
+    .replace(/<\/?thinking[^>]*>/gi, '')
+    .replace(/<\/?think[^>]*>/gi, '')
+    .trim();
+}
+
+/**
+ * Streaming-safe body transform: flattens any collapsible block inside the BODY
+ * to its plain-text summary + visible body. The client re-renders the whole
+ * message on every edit, which resets the `<details>` open state each time, so
+ * a folded block appears "stuck" and can never be opened. Only the summary line
+ * (plus a short hint) is streamed; the full folded content is restored at
+ * finalize (editRich → buildFinalBlocks). Also strips literal `<details>` tags
+ * (markdown mode only understands `**bold**` / `*italic*`).
+ */
+function collapseDetailsInStreaming(s: string): string {
+  let t = s;
+  // `<details>` may be unclosed mid-stream: strip the opening tag and turn
+  // `<summary>...</summary>` into a bold heading. The following body lines
+  // (if any) are kept verbatim so folded content is visible while streaming.
+  t = t.replace(/<details[^>]*>\s*<summary>([\s\S]*?)<\/summary>/gi, (m, summaryHtml) => {
+    const summary = summaryHtml.replace(/<[^>]*>/g, '').trim() || 'Details';
+    return `**${summary}**\n`;
+  });
+  // A bare unclosed `<details>` (summary may be emitted later): drop the tag,
+  // keep whatever follows.
+  t = t.replace(/<details[^>]*>/gi, '\n');
+  // Drop every closing tag — body content before it is preserved.
+  t = t.replace(/<\/details>/gi, '');
+  // A `> [details] summary` blockquote → flatten to bold summary + body lines.
+  t = t.replace(/(^|\n)(?:[ \t]*> *)+\[details\]\s*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
+    const sTrim = (summary || '').trim();
+    if (!sTrim) return `${lead}${m}`;
+    // Keep the quoted body (indented lines) but drop the `> [details]` marker
+    // and unquote the lines so they render as plain body text.
+    const body = m
+      .replace(/(^|\n)[ \t]*> *\[details\]\s*[^\n]*/, '')
+      .replace(/(^|\n)[ \t]*> */g, '$1')
+      .trim();
+    return `${lead}**${sTrim}**${body ? `\n${body}` : ''}`;
+  });
+  // Model-native collapsible prompts: `> 点击展开...` / `> ▶ ...` / a bare
+  // `[details]` line followed by a blockquote line. Flatten to bold summary.
+  t = t.replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
+    const sTrim = (summary || '').trim();
+    const body = m
+      .replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*[^\n]*/, '')
+      .replace(/(^|\n)[ \t]*> */g, '$1')
+      .trim();
+    return `${lead}${sTrim ? `**${sTrim}**` : ''}${body ? `\n${body}` : ''}`;
+  });
+  return t;
+}
+
 /**
  * Streaming-safe markdown: strips any literal <thought>/<think> XML so the
  * typewriter render never shows raw tags. Body content renders as markdown;
@@ -52,86 +111,73 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
  * (summary matches finalize's "🧠 Thinking Process") and stream the body below.
  * Phase 3 (finalize): handled separately by buildFinalBlocks (native blocks).
  *
- * Collapsible blocks (<details> / `> [details]` blockquotes) inside the BODY are
- * collapsed to their plain-text summary during streaming: the client re-renders
- * the whole message on every edit, which resets the <details> open state each
- * time, so a folded block appears "stuck" and can never be opened. Only the
- * summary line (plus a short hint) is streamed; the full folded content is
- * restored at finalize (editRich → buildFinalBlocks).
+ * Used by the rich-markdown fallback path; the primary streaming path emits
+ * native blocks via `buildPrivateStreamingBlocks` (same semantics).
  */
 export function getStreamingMarkdown(text: string | StructuredMessage): string {
-  const strip = (s: string) => s
-    .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
-    .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
-    .replace(/<\/?thought[^>]*>/gi, '')
-    .replace(/<\/?thinking[^>]*>/gi, '')
-    .replace(/<\/?think[^>]*>/gi, '')
-    .trim();
-
-  // During streaming the <details> open/close tags are stripped and the folded
-  // block is FLATTENED into visible content (summary bold + body markdown).
-  // A real <details> can't be opened mid-stream because every editMessageText
-  // re-renders and resets its open state, so we show the body inline instead of
-  // a placeholder. At finalize (buildFinalBlocks) the raw text is re-parsed and
-  // the blocks are restored as native collapsible details.
-  // NOTE: streaming uses rich MARKDOWN mode (`sendRichMessage({ markdown })`),
-  // which only understands `**bold**` / `*italic*` — not `<b>`/`<i>` HTML tags.
-  const collapseDetails = (s: string) => {
-    let t = s;
-    // `<details>` may be unclosed mid-stream: strip the opening tag and turn
-    // `<summary>...</summary>` into a bold heading. The following body lines
-    // (if any) are kept verbatim so folded content is visible while streaming.
-    t = t.replace(/<details[^>]*>\s*<summary>([\s\S]*?)<\/summary>/gi, (m, summaryHtml) => {
-      const summary = summaryHtml.replace(/<[^>]*>/g, '').trim() || 'Details';
-      return `**${summary}**\n`;
-    });
-    // A bare unclosed `<details>` (summary may be emitted later): drop the tag,
-    // keep whatever follows.
-    t = t.replace(/<details[^>]*>/gi, '\n');
-    // Drop every closing tag — body content before it is preserved.
-    t = t.replace(/<\/details>/gi, '');
-    // A `> [details] summary` blockquote → flatten to bold summary + body lines.
-    t = t.replace(/(^|\n)(?:[ \t]*> *)+\[details\]\s*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
-      const sTrim = (summary || '').trim();
-      if (!sTrim) return `${lead}${m}`;
-      // Keep the quoted body (indented lines) but drop the `> [details]` marker
-      // and unquote the lines so they render as plain body text.
-      const body = m
-        .replace(/(^|\n)[ \t]*> *\[details\]\s*[^\n]*/, '')
-        .replace(/(^|\n)[ \t]*> */g, '$1')
-        .trim();
-      return `${lead}**${sTrim}**${body ? `\n${body}` : ''}`;
-    });
-    // Model-native collapsible prompts: `> 点击展开...` / `> ▶ ...` / a bare
-    // `[details]` line followed by a blockquote line. Flatten to bold summary.
-    t = t.replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
-      const sTrim = (summary || '').trim();
-      const body = m
-        .replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*[^\n]*/, '')
-        .replace(/(^|\n)[ \t]*> */g, '$1')
-        .trim();
-      return `${lead}${sTrim ? `**${sTrim}**` : ''}${body ? `\n${body}` : ''}`;
-    });
-    return t;
-  };
-
   if (typeof text === 'string') {
-    const content = collapseDetails(strip(text));
+    const content = collapseDetailsInStreaming(stripThoughtTags(text));
     return content || '🧠 Thinking...';
   }
-  const rawThought = strip(text.thought || '');
-  const rawContent = strip(text.content || '');
+  const rawThought = stripThoughtTags(text.thought || '');
+  const rawContent = stripThoughtTags(text.content || '');
   if (rawThought) {
     if (rawContent) {
       // Phase 2: thinking is done — fold it into a collapsed block (summary
       // matches the finalize details block) and stream the body below it.
-      return `<details><summary>🧠 Thinking Process</summary>\n\n${rawThought}\n\n</details>\n\n${collapseDetails(rawContent)}`;
+      return `<details><summary>🧠 Thinking Process</summary>\n\n${rawThought}\n\n</details>\n\n${collapseDetailsInStreaming(rawContent)}`;
     }
     // Phase 1: typewriter-stream the actual thinking text as it grows.
     return `**🧠 Thinking...**\n\n${rawThought}`;
   }
-  const content = collapseDetails(rawContent);
+  const content = collapseDetailsInStreaming(rawContent);
   return content || '🧠 Thinking...';
+}
+
+/**
+ * Build native 10.2 blocks for a streaming draft update (private chat).
+ *
+ * Mirrors the phases of `getStreamingMarkdown` so the typewriter UX is
+ * identical, but emits native blocks instead of raw markdown:
+ *  - Phase 1 (thought, no body): bold "🧠 Thinking..." header + growing thought.
+ *  - Phase 2 (thought + body): the thought folds into a native collapsible
+ *    `details` block (summary matches finalize's "🧠 Thinking Process") and the
+ *    body streams below it; body `<details>` blocks stay flattened (see
+ *    collapseDetailsInStreaming).
+ *  - Body only: body blocks.  - Empty: plain "🧠 Thinking..." paragraph
+ *    (RICH_MESSAGE_EMPTY guard).
+ *
+ * Uses the lightweight per-frame `markdownToRichBlocks` (<50ms at 21KB) — NOT
+ * the heavy finalize pipeline (buildFinalBlocks), whose per-update use caused
+ * the visible stutter that previously forced streaming back to markdown.
+ */
+export function buildPrivateStreamingBlocks(text: string | StructuredMessage): RichBlock[] {
+  const bodyBlocks = (s: string) => markdownToRichBlocks(collapseDetailsInStreaming(stripThoughtTags(s)));
+
+  if (typeof text === 'string') {
+    const blocks = bodyBlocks(text);
+    return blocks.length > 0 ? blocks : markdownToRichBlocks('🧠 Thinking...');
+  }
+  const thought = stripThoughtTags(text.thought || '');
+  const content = stripThoughtTags(text.content || '');
+  if (thought && content) {
+    const thoughtBlocks = markdownToRichBlocks(thought);
+    return [
+      {
+        type: 'details',
+        summary: '🧠 Thinking Process',
+        blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thought }],
+      },
+      ...markdownToRichBlocks(collapseDetailsInStreaming(content)),
+    ];
+  }
+  if (thought) {
+    return markdownToRichBlocks(`**🧠 Thinking...**\n\n${thought}`);
+  }
+  if (content) {
+    return bodyBlocks(content);
+  }
+  return markdownToRichBlocks('🧠 Thinking...');
 }
 
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
@@ -688,12 +734,34 @@ export function buildChannelReply(
       // Visible streaming: send a REAL persisted message via sendRichMessage so the
       // user's client renders the bubble, then editMessageText updates it in place.
       //
-      // Performance: during the streaming phase we send RICH MARKDOWN directly
-      // (Option C), skipping the expensive per-update blocks/AST parse. Parsing the
-      // accumulated markdown into native 10.2 blocks on every chunk caused visible
-      // stutter for long answers (same agy model streams smoothly via the inline
-      // path, which edits raw markdown). Blocks are rendered only once at finalize
-      // (editRich / editRichBlocks).
+      // Blocks-first: the draft bubble is sent as native 10.2 blocks (and later
+      // streamed by editRichDraft) so send/edit/finalize share one rendering path.
+      // The lightweight per-frame builder is used — NOT buildFinalBlocks. The
+      // per-update blocks/AST parse that previously caused visible stutter used
+      // the heavy finalize pipeline; markdownToRichBlocks measures <50ms even at
+      // 21KB, so streaming native blocks is smooth again.
+      const draftBlocks = buildPrivateStreamingBlocks(originalText);
+      if (draftBlocks.length > 0 && validateBlocksPayload(draftBlocks)) {
+        try {
+          logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option A - blocks): blocks=${draftBlocks.length}`);
+          const res = await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(draftBlocks), {
+            message_thread_id: messageThreadId,
+          });
+          const realId = res.message_id;
+          draftIds.set(chatId, realId);
+          activeDraftIds.add(realId);
+          messageCache.set(realId, cacheMarkdown);
+          if (reactionEnabled(session)) {
+            await setThinkingReaction(ctx, chatId, realId);
+          }
+          logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft blocks) success: real message id=${realId}.`);
+          return realId;
+        } catch (err: any) {
+          logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (blocks) failed: ${err.message || err}. Stack: ${err.stack}`);
+        }
+      }
+
+      // Fallback: rich markdown streaming (client-side markdown parse).
       const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
       logger.info(`[TRACE-EVIDENCE] Calling sendRichMessage (sendRichDraft Option C - Markdown streaming)`);
       try {
@@ -725,10 +793,10 @@ export function buildChannelReply(
       // sendRichMessage), so we update it in place with editMessageText for a
       // visible typewriter effect.
       //
-      // Performance: during the streaming phase edit the RICH MARKDOWN directly
-      // (Option C), skipping the per-update blocks/AST parse that caused visible
-      // stutter (see sendRichDraft). Blocks are rendered once at finalize via
-      // editRich / editRichBlocks.
+      // Streaming uses the lightweight per-frame blocks builder (buildPrivateStreamingBlocks),
+      // NOT buildFinalBlocks — the per-update blocks/AST parse that previously caused
+      // visible stutter used the heavy finalize pipeline; markdownToRichBlocks measures
+      // <50ms even at 21KB, so native-blocks streaming is smooth again.
       if (isStreaming) {
         const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
         // Adaptive pacing: skip when too soon AND content barely changed;
@@ -737,6 +805,30 @@ export function buildChannelReply(
         if (!shouldEdit) {
           messageCache.set(draftId, cacheMarkdown);
           return;
+        }
+        // Blocks-first (native 10.2 blocks); falls back to rich markdown below.
+        const streamingBlocks = buildPrivateStreamingBlocks(originalText);
+        if (streamingBlocks.length > 0 && validateBlocksPayload(streamingBlocks)) {
+          try {
+            logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft streaming - blocks): messageId=${draftId}, blocks=${streamingBlocks.length}`);
+            await ctx.api.editMessageText(chatId, draftId, buildRichMessagePayload(streamingBlocks));
+            logger.info(`[TRACE-EVIDENCE] editMessageText (edit streaming blocks) success for messageId=${draftId}.`);
+            markDraftEditSuccess(chatId, safeMarkdown.length);
+            messageCache.set(draftId, cacheMarkdown);
+            return;
+          } catch (err: any) {
+            if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+              markDraftEditSuccess(chatId, safeMarkdown.length);
+              messageCache.set(draftId, cacheMarkdown);
+              return;
+            }
+            if (is429Error(err)) {
+              markDraft429(chatId, get429RetryAfter(err));
+              record429Backoff(chatId, get429RetryAfter(err));
+            }
+            logger.info(`[TRACE-EVIDENCE] editRichDraft streaming blocks failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+            throw err;
+          }
         }
         try {
           logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft streaming - Markdown)`);

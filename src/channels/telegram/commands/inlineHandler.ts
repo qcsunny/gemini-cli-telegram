@@ -212,8 +212,8 @@ export class InlineStreamQueue {
   private pendingBlocks: RichBlock[] | null = null;
   private isProcessing = false;
   private nextAllowedTime = 0;
-  private currentThrottleMs = 500; // Start with fast 500ms adaptive throttle for smooth typing
-  private minThrottleMs = 500;
+  private currentThrottleMs = 250; // Start with fast 250ms adaptive throttle for smooth typing
+  private minThrottleMs = 250;
   private maxThrottleMs = 4000;
   private lastEditTime = 0;
   private lastSentLen = 0;
