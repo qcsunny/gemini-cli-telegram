@@ -917,19 +917,16 @@ Thanks for reading! 🚀
       });
       expect(blocks.length).toBeGreaterThanOrEqual(2);
       const first = blocks[0] as any;
-      expect(first.type).toBe('details');
-      expect(first.summary).toBe('🧠 Thinking Process');
-      expect(first.is_open).toBeUndefined();
-      const bodyStart = blocks[1] as any;
-      expect(bodyStart.type).toBe('heading');
+      expect(first.type).toBe('paragraph');
+      expect(JSON.stringify(first.text)).toContain('Thinking:');
+      expect(blocks.some((block: any) => block.type === 'heading')).toBe(true);
     });
 
     it('should render only thinking block when thought present but content empty', () => {
       const blocks = buildStreamingBlocks({ thought: 'Still thinking...' });
-      expect(blocks.length).toBe(1);
-      const first = blocks[0] as any;
-      expect(first.type).toBe('thinking');
-      expect(first.text).toBe('Still thinking...');
+      expect(blocks.length).toBeGreaterThanOrEqual(1);
+      expect(blocks.every((block: any) => block.type !== 'details' && block.type !== 'thinking')).toBe(true);
+      expect(JSON.stringify(blocks)).toContain('Still thinking...');
     });
 
     it('should render only body blocks when content present but no thought', () => {
@@ -943,8 +940,8 @@ Thanks for reading! 🚀
       const blocks = buildStreamingBlocks({});
       expect(blocks.length).toBe(1);
       const first = blocks[0] as any;
-      expect(first.type).toBe('thinking');
-      expect(first.text).toBe('Thinking...');
+      expect(first.type).toBe('paragraph');
+      expect(JSON.stringify(first.text)).toContain('Thinking...');
     });
   });
 

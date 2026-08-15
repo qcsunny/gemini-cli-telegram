@@ -227,14 +227,9 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       partPollTimer = setInterval(pollLiveParts, PART_POLL_MS);
       partPollTimer.unref?.();
     }
-    child.stdout.on('data', (chunk: Buffer) => {
-      const text = stdoutDecoder.write(chunk);
-      const fullText = leftover + text;
-      const lines = fullText.split('\n');
-      leftover = lines.pop() || ''; // keep incomplete last line for next chunk
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
+    const processStdoutLine = (line: string): void => {
+      if (!line.trim()) return;
+      try {
           const event = JSON.parse(line);
           const part = event.part || {};
           if (part.type === 'reasoning' && part.text) {
@@ -265,10 +260,16 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
               opts.onEvent?.({ type: 'done' });
             }
           }
-        } catch {
-          // ignore non-JSON lines
-        }
+      } catch {
+        // ignore non-JSON lines
       }
+    };
+    child.stdout.on('data', (chunk: Buffer) => {
+      const text = stdoutDecoder.write(chunk);
+      const fullText = leftover + text;
+      const lines = fullText.split('\n');
+      leftover = lines.pop() || ''; // keep incomplete last line for next chunk
+      for (const line of lines) processStdoutLine(line);
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
@@ -297,6 +298,10 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
 
     child.on('close', (code) => {
       if (partPollTimer) clearInterval(partPollTimer);
+      const finalStdout = stdoutDecoder.end();
+      if (finalStdout) leftover += finalStdout;
+      processStdoutLine(leftover);
+      leftover = '';
       pollLiveParts();
       try { partPollDb?.close(); } catch { /* ignore */ }
       if (!thoughtBuf.trim() && stdoutThoughtBuf.trim()) thoughtBuf = stdoutThoughtBuf;

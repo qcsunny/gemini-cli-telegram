@@ -220,6 +220,25 @@ describe('opencode session reuse', () => {
     expect(result.output).toBe('plain answer');
   });
 
+  it('runOpenCode consumes a final text JSON line without a trailing newline', async () => {
+    const { runOpenCode } = await import('./opencode.js');
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const p = runOpenCode({
+      prompt: 'hello',
+      cwd: '/tmp',
+      conversationId: 'conv-final-line',
+      model: 'OpenCode: DeepSeek V4 Flash Free',
+    });
+
+    child.stdout.emit('data', JSON.stringify({ type: 'text', part: { type: 'text', text: 'final answer' } }));
+    child.emit('close', 0);
+
+    const result = await p;
+    expect(result.output).toBe('final answer');
+  });
+
   it('runOpenCode streams growing reasoning and text parts from the database', async () => {
     const db = new Database(path.join(tmpDir, 'opencode.db'));
     db.exec(`

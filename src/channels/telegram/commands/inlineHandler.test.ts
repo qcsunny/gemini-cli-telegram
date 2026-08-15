@@ -151,17 +151,14 @@ describe('inlineThinkingToDetails', () => {
 });
 
 describe('buildInlineStreamingBlocks', () => {
-  it('uses an open details block while thinking and closes it when body starts', () => {
+  it('uses ordinary paragraphs while thinking and when body starts', () => {
     const thinking = buildInlineStreamingBlocks({ prompt: 'Q', model: 'M', thought: 'step one' }) as any[];
-    const openDetails = thinking.find(block => block.type === 'details');
-    expect(openDetails.is_open).toBe(true);
+    expect(thinking.some(block => block.type === 'details')).toBe(false);
+    expect(JSON.stringify(thinking)).toContain('step one');
 
     const body = buildInlineStreamingBlocks({ prompt: 'Q', model: 'M', thought: 'step one', content: 'answer' }) as any[];
-    const detailsIndex = body.findIndex(block => block.type === 'details');
-    const closedDetails = body[detailsIndex];
-    expect(closedDetails.is_open).toBeUndefined();
-    expect(detailsIndex).toBeGreaterThan(0);
-    expect(JSON.stringify(body[detailsIndex - 1])).toContain('Answer');
+    expect(body.some(block => block.type === 'details')).toBe(false);
+    expect(JSON.stringify(body)).toContain('Answer');
     expect(body.some(block => block.type === 'paragraph')).toBe(true);
   });
 });

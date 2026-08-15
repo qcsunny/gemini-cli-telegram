@@ -1219,7 +1219,8 @@ export function buildFinalBlocks(
  * - While the model is thinking (thought non-empty, no body yet):
  *   emits a native `thinking` placeholder block with the live thought text.
  * - When body arrives alongside thought:
- *   emits a collapsed `thinking` block showing thought, followed by body blocks.
+ *   emits ordinary paragraphs; persistent streaming edits should not use
+ *   collapsible blocks. The final formatter adds the native details block.
  * - When only body (no thought): emits body blocks directly (no thinking block).
  * - When both empty: emits a static `thinking` placeholder ("正在思考...").
  */
@@ -1231,20 +1232,14 @@ export function buildStreamingBlocks(input: {
   const content = (input.content ?? '').trim();
 
   if (thought && content) {
-    const body = markdownToRichBlocks(content);
-    const thoughtBlocks = markdownToRichBlocks(thought);
     return [
-      {
-        type: 'details',
-        summary: '🧠 Thinking Process',
-        blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thought }],
-      },
-      ...body,
+      ...markdownToRichBlocks(`**🧠 Thinking:**\n\n${thought}`),
+      ...markdownToRichBlocks(content),
     ];
   }
 
   if (thought && !content) {
-    return [{ type: 'thinking', text: thought } as RichBlock];
+    return markdownToRichBlocks(`**🧠 Thinking:**\n\n${thought}`);
   }
 
   if (!thought && content) {
@@ -1252,7 +1247,7 @@ export function buildStreamingBlocks(input: {
   }
 
   // Both empty
-  return [{ type: 'thinking', text: 'Thinking...' } as RichBlock];
+  return markdownToRichBlocks('**🧠 Thinking...**');
 }
 
 /**

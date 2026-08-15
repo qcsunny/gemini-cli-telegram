@@ -440,8 +440,9 @@ function buildInputRichMessage(markdown: string): { blocks: RichBlock[] } | { ma
 
 /**
  * Build an editable inline frame using only persistent Bot API 10.2 blocks.
- * `thinking` blocks are draft-only, so inline messages use an open `details`
- * block while reasoning and the same details block closed once body text starts.
+ * Inline streaming deliberately uses ordinary paragraphs only. Telegram does
+ * not reliably allow a persistent inline edit to open a details block while
+ * the model is still producing it; the final edit adds the native details.
  */
 export function buildInlineStreamingBlocks(input: {
   prompt: string;
@@ -455,29 +456,13 @@ export function buildInlineStreamingBlocks(input: {
   const blocks = markdownToRichBlocks(`**💬 Question:** ${prompt}`);
 
   if (thought) {
-    const thoughtBlocks = markdownToRichBlocks(thought);
-    if (content) {
-      blocks.push(...markdownToRichBlocks(`**🤖 Answer (${displayModelName(input.model)}):**`));
-    }
-    blocks.push({
-      type: 'details',
-      summary: content ? '🧠 Thinking Process' : '🧠 Thinking...',
-      blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thought }],
-      ...(content ? {} : { is_open: true as const }),
-    });
+    blocks.push(...markdownToRichBlocks(`**🧠 Thinking:**\n\n${thought}`));
   } else if (!content) {
-    blocks.push({
-      type: 'details',
-      summary: '🧠 Thinking...',
-      blocks: [{ type: 'paragraph', text: 'Waiting for model output...' }],
-      is_open: true,
-    });
+    blocks.push(...markdownToRichBlocks('**🧠 Thinking...**'));
   }
 
   if (content) {
-    if (!thought) {
-      blocks.push(...markdownToRichBlocks(`**🤖 Answer (${displayModelName(input.model)}):**`));
-    }
+    blocks.push(...markdownToRichBlocks(`**🤖 Answer (${displayModelName(input.model)}):**`));
     blocks.push(...markdownToRichBlocks(content));
   }
   return blocks;
@@ -1905,7 +1890,13 @@ async function runInlineGeneration(
 
     const parsedOutput = extractThoughtAndContent(stripWholeMessageCodeFence(result.output));
     const finalThought = inlineThinkingStreaming ? parsedOutput.thought.trim() : '';
-    const cleanOutput = stripInlineImages(parsedOutput.content, 'invalid-only');
+    // OpenCode can finish with a reasoning-only envelope even though its live
+    // text events already delivered the answer. Preserve that answer buffer.
+    const streamedContent = getPartialOutput?.().trim() ?? '';
+    const cleanOutput = stripInlineImages(
+      parsedOutput.content.trim() || streamedContent,
+      'invalid-only',
+    );
     const rawOutputLen = cleanOutput.length;
 
     let footerParts: string[] = [];
