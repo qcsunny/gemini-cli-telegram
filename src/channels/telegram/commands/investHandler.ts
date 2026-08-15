@@ -816,8 +816,8 @@ export function registerInvestHandler(
   sessionManager: SessionManager,
   defaultOptions: SessionOptions,
 ): void {
-  const handleInvest = async (ctx: any): Promise<void> => {
-    const rawArgs = ctx.match;
+  const handleInvest = async (ctx: any, symbolOverride?: string): Promise<void> => {
+    const rawArgs = symbolOverride ?? ctx.match;
     const trimmed = typeof rawArgs === 'string' ? rawArgs.trim() : '';
 
     if (!trimmed) {
@@ -1022,7 +1022,7 @@ export function registerInvestHandler(
     }
   };
 
-  bot.command('invest', handleInvest);
+  bot.command('invest', (ctx) => handleInvest(ctx));
   bot.on('callback_query:data', async (ctx, next) => {
     const match = ctx.callbackQuery.data.match(/^stock_invest:(.+)$/);
     if (!match) {
@@ -1032,6 +1032,6 @@ export function registerInvestHandler(
     const symbol = match[1]?.trim();
     if (!symbol) return;
     await ctx.answerCallbackQuery('正在启动价值分析…').catch(() => {});
-    await handleInvest({ ...ctx, match: symbol });
+    await handleInvest(ctx, symbol);
   });
 }
