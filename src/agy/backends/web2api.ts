@@ -57,10 +57,29 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
     let outputBuf = '';
     let inReasoning = false;
     let chunkCount = 0;
+    let settled = false;
+    const finish = (result: AgyRunResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const req = http.request(reqOptions, (res) => {
       logger.info(`[web2api] Response status=${res.statusCode}`);
       const decoder = new StringDecoder('utf-8');
       let buf = '';
+
+      if (res.statusCode !== undefined && (res.statusCode < 200 || res.statusCode >= 300)) {
+        let errorBody = '';
+        res.on('data', (chunk) => { errorBody += Buffer.from(chunk).toString('utf8'); });
+        res.on('end', () => finish({
+          conversationId: convId,
+          output: '',
+          exitCode: 1,
+          stderr: `Web2API HTTP ${res.statusCode}: ${errorBody.slice(0, 1000)}`,
+        }));
+        return;
+      }
 
       res.on('data', (chunk: Buffer) => {
         buf += decoder.write(chunk);
@@ -107,6 +126,40 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
       });
 
       res.on('end', () => {
+        buf += decoder.end();
+        if (buf.trim()) {
+          const line = buf.trim();
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data !== '[DONE]') {
+              try {
+                const parsed = JSON.parse(data);
+                const delta = parsed?.choices?.[0]?.delta?.content ?? '';
+                const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? '';
+                if (reasoning) {
+                  if (!inReasoning) {
+                    inReasoning = true;
+                    outputBuf += '<thought>';
+                    onChunk?.('<thought>');
+                  }
+                  outputBuf += reasoning;
+                  onChunk?.(reasoning);
+                  opts.onEvent?.({ type: 'thought', content: reasoning });
+                }
+                if (delta) {
+                  if (inReasoning) {
+                    inReasoning = false;
+                    outputBuf += '</thought>\n\n';
+                    onChunk?.('</thought>\n\n');
+                  }
+                  outputBuf += delta;
+                  onChunk?.(delta);
+                  opts.onEvent?.({ type: 'text', content: delta });
+                }
+              } catch { /* ignore malformed final SSE line */ }
+            }
+          }
+        }
         if (inReasoning) {
           inReasoning = false;
           const endTag = '</thought>';
@@ -135,7 +188,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
         // Surface a clear message instead of sending a blank message.
         if (!outputBuf.trim()) {
           logger.warn(`[web2api] Empty response from upstream for model=${modelId}`);
-          resolve({
+          finish({
             conversationId: convId,
             output: '',
             exitCode: 1,
@@ -143,13 +196,17 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
           });
           return;
         }
-        resolve({ conversationId: convId, output: outputBuf, exitCode: 0, stderr: '' });
+        finish({ conversationId: convId, output: outputBuf, exitCode: 0, stderr: '' });
       });
 
-      res.on('error', reject);
+      res.on('error', (err) => {
+        if (!settled) reject(err);
+      });
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (!settled) reject(err);
+    });
     req.setTimeout(120000, () => {
       logger.error(`[web2api] Request timeout after 120s for model=${modelId}`);
       req.destroy(new Error('web2api request timeout'));
@@ -158,7 +215,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
     signal?.addEventListener('abort', () => {
       logger.debug('[web2api] Aborting request');
       req.destroy();
-      resolve({ conversationId: convId, output: outputBuf, exitCode: 1, stderr: 'Aborted' });
+      finish({ conversationId: convId, output: outputBuf, exitCode: 1, stderr: 'Aborted' });
     }, { once: true });
 
     req.write(body);

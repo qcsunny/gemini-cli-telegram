@@ -191,6 +191,9 @@ export async function deleteConversation(chatId: number, threadId?: number): Pro
       db.delete(schema.messages)
         .where(eq(schema.messages.conversationId, existing.conversationId))
         .run();
+      db.delete(schema.modelOutputs)
+        .where(eq(schema.modelOutputs.conversationId, existing.conversationId))
+        .run();
       deleteKnownConversation(existing.conversationId);
     } catch (e) {
       logger.warn(`[conversationStore] Failed to delete history rows for conv ${existing.conversationId}: ${e}`);

@@ -30,9 +30,10 @@ export function startHealthServer(port: number): void {
     return;
   }
 
-  server = http.createServer(async (req, res) => {
-    const handled = await handleStockRoutes(req, res);
-    if (handled) return;
+  server = http.createServer((req, res) => {
+    void (async () => {
+      const handled = await handleStockRoutes(req, res);
+      if (handled) return;
 
     if (req.url === '/health' && req.method === 'GET') {
       const now = Date.now();
@@ -89,7 +90,12 @@ export function startHealthServer(port: number): void {
     } else {
       res.writeHead(404);
       res.end('Not Found\n');
-    }
+      }
+    })().catch((error) => {
+      logger.error(`[healthServer] Request failed: ${error}`);
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+      if (!res.writableEnded) res.end(JSON.stringify({ error: 'Internal Server Error' }));
+    });
   });
 
   server.listen(port, '127.0.0.1', () => {

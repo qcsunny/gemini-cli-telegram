@@ -11,13 +11,24 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { marketService } from '../service/quote.js';
+import { getStockApiToken } from '../../config/userConfig.js';
 
 export async function handleStockRoutes(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url || '';
   const method = req.method || 'GET';
 
+  const isWatchlistRoute = url.startsWith('/api/watchlist');
+  if (isWatchlistRoute) {
+    const expected = getStockApiToken();
+    if (!expected || req.headers.authorization !== `Bearer ${expected}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return true;
+    }
+  }
+
   // 1. Mini App Unified Page: GET /app or GET /app?symbol=NVDA
-  if ((url.startsWith('/app') || url.startsWith('/chart')) && method === 'GET') {
+  if (url.startsWith('/app') && method === 'GET') {
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>

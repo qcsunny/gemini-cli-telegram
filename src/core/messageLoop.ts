@@ -457,7 +457,7 @@ export async function processMessage(
       const finalResult = lastResult || { conversationId: '', output: answerBuffer, exitCode: 1 };
 
       // 4. Save and persist the updated conversation ID
-      if (finalResult.conversationId) {
+      if (finalResult.conversationId && finalResult.exitCode === 0) {
         session.conversationId = finalResult.conversationId;
         await setConversation(chatId, finalResult.conversationId, cwd, session.model, session.threadId);
       }
@@ -832,4 +832,3 @@ function parseErrorMessage(reason: string): {
 //
 // The channel is detected at runtime by getChannelModel() using model-name
 // prefixes, so cross-channel fallback is fully automatic.
-
