@@ -10,7 +10,6 @@ import {
   markdownToMarkdownV2, 
   markdownToRichBlocks, 
   buildFinalBlocks,
-  buildStreamingBlocks,
   splitRichBlocks,
   telegramFormatter,
   splitTextWithOpenTags,
@@ -526,7 +525,7 @@ Thanks for reading! 🚀
       expect(html).toContain('<details open><summary>🧠 Gemini Thinking · 3.4s · 1.3K</summary>');
     });
 
-    it('should format completed thought blocks with <details open> when isStreaming=true', () => {
+    it('should format completed thought blocks with <details open> when isStreaming=true (no metadata)', () => {
       const input = 'Pre-text\n<thought>\nThinking content\n</thought>\nPost-text';
       const html = markdownToHtml(input, true);
       expect(html).toContain('<details open><summary>🧠 Thinking...</summary>');
@@ -947,42 +946,6 @@ Thanks for reading! 🚀
       for (const b of result) {
         expect(b.type).toBeDefined();
       }
-    });
-  });
-
-  describe('buildStreamingBlocks', () => {
-    it('should render thinking block + body blocks when both thought and content are present', () => {
-      const blocks = buildStreamingBlocks({
-        thought: 'Let me analyze this step by step.',
-        content: '## Answer\nThe result is 42.',
-      });
-      expect(blocks.length).toBeGreaterThanOrEqual(2);
-      const first = blocks[0] as any;
-      expect(first.type).toBe('paragraph');
-      expect(JSON.stringify(first.text)).toContain('Thinking:');
-      expect(blocks.some((block: any) => block.type === 'heading')).toBe(true);
-    });
-
-    it('should render only thinking block when thought present but content empty', () => {
-      const blocks = buildStreamingBlocks({ thought: 'Still thinking...' });
-      expect(blocks.length).toBeGreaterThanOrEqual(1);
-      expect(blocks.every((block: any) => block.type !== 'details' && block.type !== 'thinking')).toBe(true);
-      expect(JSON.stringify(blocks)).toContain('Still thinking...');
-    });
-
-    it('should render only body blocks when content present but no thought', () => {
-      const blocks = buildStreamingBlocks({ content: 'Hello world' });
-      expect(blocks.length).toBe(1);
-      expect(blocks[0].type).toBe('paragraph');
-      expect((blocks[0] as any).text).toBe('Hello world');
-    });
-
-    it('should render placeholder thinking block when both empty', () => {
-      const blocks = buildStreamingBlocks({});
-      expect(blocks.length).toBe(1);
-      const first = blocks[0] as any;
-      expect(first.type).toBe('paragraph');
-      expect(JSON.stringify(first.text)).toContain('Thinking...');
     });
   });
 

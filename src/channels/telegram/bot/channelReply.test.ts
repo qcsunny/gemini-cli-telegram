@@ -9,7 +9,7 @@
  *  - Body-only / empty replies still fall back to the body or placeholder
  */
 import { describe, it, expect } from 'vitest';
-import { getStreamingMarkdown } from './channelReply.js';
+import { getStreamingMarkdown, buildPrivateStreamingBlocks } from './channelReply.js';
 
 describe('getStreamingMarkdown', () => {
   it('streams the actual thinking text typewriter-style while only thinking (Phase 1)', () => {
@@ -45,5 +45,33 @@ describe('getStreamingMarkdown', () => {
 
   it('handles plain-string input', () => {
     expect(getStreamingMarkdown('hello')).toBe('hello');
+  });
+});
+
+describe('buildPrivateStreamingBlocks', () => {
+  it('builds Phase 1 streaming blocks (thought only) with a bold thinking header', () => {
+    const blocks = buildPrivateStreamingBlocks({ content: '', thought: 'Step 1 reasoning' });
+    const json = JSON.stringify(blocks);
+    expect(json).toContain('🧠 Thinking...');
+    expect(json).toContain('Step 1 reasoning');
+  });
+
+  it('builds Phase 2 streaming blocks with a native details block for thinking', () => {
+    const blocks = buildPrivateStreamingBlocks({ content: 'Body answer.', thought: 'Done thinking.' });
+    expect(blocks.some((b) => b.type === 'details' && b.summary === '🧠 Thinking Process')).toBe(true);
+    const json = JSON.stringify(blocks);
+    expect(json).toContain('Done thinking.');
+    expect(json).toContain('Body answer.');
+  });
+
+  it('never emits empty streaming blocks (RICH_MESSAGE_EMPTY guard)', () => {
+    const blocks = buildPrivateStreamingBlocks({ content: '', thought: '' });
+    expect(blocks.length).toBeGreaterThan(0);
+  });
+
+  it('streams body-only content without a thinking header', () => {
+    const blocks = buildPrivateStreamingBlocks({ content: 'Just the answer', thought: '' });
+    expect(JSON.stringify(blocks)).toContain('Just the answer');
+    expect(JSON.stringify(blocks)).not.toContain('Thinking');
   });
 });

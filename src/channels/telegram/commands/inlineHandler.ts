@@ -546,21 +546,6 @@ export function stripInlineImages(markdown: string, mode: 'invalid-only' | 'all'
   return out;
 }
 
-/**
- * Convert a backend-embedded `<thinking>…</thinking>` block into a native
- * Telegram `<details>` fold so inline cards show the reasoning chain.
- * Extracts the thought (agnostic to <thought>/<thinking>/<think> variants),
- * sanitizes images inside it, and returns clean content otherwise.
- */
-export function inlineThinkingToDetails(markdown: string): string {
-  if (!markdown) return markdown;
-  const { thought, content } = extractThoughtAndContent(markdown);
-  if (!thought) return markdown;
-  const thoughtClean = stripInlineImages(thought, 'invalid-only').trim();
-  if (!thoughtClean) return content.trim();
-  return `<details><summary>🧠 思考过程</summary>\n\n${thoughtClean}\n\n</details>\n\n${content.trim()}`;
-}
-
 export function parseInlineModelAndPrompt(
   rawQuery: string,
   defaultModel: string,
