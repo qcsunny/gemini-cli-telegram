@@ -41,4 +41,20 @@ describe('Stock REST API & Mini App Routes Unit Tests', () => {
     expect(json.symbol).toBe('NVDA');
     expect(json.data.length).toBeGreaterThan(0);
   });
+
+  it('should handle /api/stocks/search endpoint (not swallowed by symbol route)', async () => {
+    let responseData = '';
+    let statusCode = 0;
+    const req = { url: '/api/stocks/search?q=NVDA', method: 'GET' } as IncomingMessage;
+    const res = {
+      writeHead: (status: number) => { statusCode = status; },
+      end: (data: string) => { responseData = data; },
+    } as unknown as ServerResponse;
+
+    const handled = await handleStockRoutes(req, res);
+    expect(handled).toBe(true);
+    expect(statusCode).toBe(200);
+    const json = JSON.parse(responseData);
+    expect(Array.isArray(json)).toBe(true);
+  });
 });

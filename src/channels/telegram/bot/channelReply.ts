@@ -188,8 +188,6 @@ function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming
   return html;
 }
 
-const draftThrottleTimestamps = new Map<number, number>();
-
 interface DraftThrottleState {
   currentMs: number;
   lastEditTime: number;
@@ -270,7 +268,6 @@ function markDraft429(chatId: number, retryAfterSec?: number): void {
     // Adaptively expand the throttle window on 429.
     st.currentMs = Math.min(DRAFT_THROTTLE_MAX_MS, Math.max(st.currentMs * 2, backoffMs));
   }
-  draftThrottleTimestamps.set(chatId, Date.now());
 }
 
 // ── Block payload validation ──
