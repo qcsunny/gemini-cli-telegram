@@ -41,7 +41,7 @@ import { telegramFormatter } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
-import { CONFIG_PATH, getBackendUrl } from '../../config/userConfig.js';
+import { CONFIG_PATH, getBackendUrl, getTuningConfig } from '../../config/userConfig.js';
 import { buildChannelReply } from './bot/channelReply.js';
 import { startBackoffCleanup, reset429Backoff } from './bot/rateLimiter.js';
 
@@ -310,8 +310,34 @@ async function downloadTelegramFile(
         `${crypto.randomUUID()}${ext}`,
       );
 
-      const arrayBuffer = await response.arrayBuffer();
-      await fs.writeFile(localFilePath, Buffer.from(arrayBuffer));
+      const maxBytes = getTuningConfig().maxDownloadBytes;
+      const contentLength = Number(response.headers?.get?.('content-length') || 0);
+      if (contentLength > maxBytes) {
+        throw new Error(`Telegram file is too large (${contentLength} bytes, limit ${maxBytes})`);
+      }
+      if (!response.body) {
+        const arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength > maxBytes) throw new Error(`Telegram file exceeded the ${maxBytes}-byte download limit`);
+        await fs.writeFile(localFilePath, Buffer.from(arrayBuffer));
+        return localFilePath;
+      }
+      const fileHandle = await fs.open(localFilePath, 'wx');
+      let received = 0;
+      try {
+        for await (const chunk of response.body) {
+          const buffer = Buffer.from(chunk);
+          received += buffer.length;
+          if (received > maxBytes) {
+            throw new Error(`Telegram file exceeded the ${maxBytes}-byte download limit`);
+          }
+          await fileHandle.write(buffer);
+        }
+      } catch (error) {
+        await fileHandle.close().catch(() => {});
+        await fs.unlink(localFilePath).catch(() => {});
+        throw error;
+      }
+      await fileHandle.close();
 
       return localFilePath;
     } catch (e) {
@@ -1193,17 +1219,6 @@ export class TelegramBot {
       return;
     }
 
-    // In group chats, only respond if the bot is mentioned or replied to
-    if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
-      const botUsername = ctx.me.username;
-      const captionText = info.caption ?? '';
-      const isMentioned = captionText.includes(`@${botUsername}`);
-      const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
-      if (!isMentioned && !isReplyToBot) {
-        return;
-      }
-    }
-
     const existing = this.albumBuffer.get(groupId);
     if (existing) {
       clearTimeout(existing.timer);
@@ -1228,6 +1243,14 @@ export class TelegramBot {
     if (!entry || entry.items.length === 0) return;
 
     const firstCtx = entry.items[0].ctx;
+
+    if (firstCtx.chat?.type === 'group' || firstCtx.chat?.type === 'supergroup') {
+      const botUsername = firstCtx.me.username;
+      const targetsBot = entry.items.some(({ info, ctx }) =>
+        (info.caption ?? '').includes(`@${botUsername}`) || ctx.message?.reply_to_message?.from?.id === ctx.me.id,
+      );
+      if (!targetsBot) return;
+    }
 
     // Telegram puts the album caption on the last media item; pick the last non-empty one.
     let captionText = '';

@@ -61,9 +61,10 @@ export function registerAutomationHandlers(
 
     // Add one-time schedule
     if (subcommand === 'add') {
-      const scheduleParts = arg.substring(4).trim().split(' ');
-      const timeExpr = scheduleParts[0];
-      const message = scheduleParts.slice(1).join(' ');
+      const addArgs = arg.substring(4).trim();
+      const scheduleMatch = addArgs.match(/^(in\s+\d+\s*(?:m|min|mins|minute|minutes|h|hr|hrs|hour|hours)|tomorrow(?:\s+at\s+\d{1,2}:\d{2})?|tonight|morning|evening|now|\d{1,2}:\d{2}|\S+)\s+([\s\S]+)$/i);
+      const timeExpr = scheduleMatch?.[1] ?? '';
+      const message = scheduleMatch?.[2]?.trim() ?? '';
 
       if (!timeExpr || !message) {
         logger.info(`[schedule] add usage error: chatId=${chatId} timeExpr="${timeExpr}"`);
@@ -79,7 +80,7 @@ export function registerAutomationHandlers(
         logger.info(`[schedule] add success: chatId=${chatId} taskId=${task.id} nextRun=${task.nextRun}`);
         const nextRun = new Date(task.nextRun);
         await ctx.reply(
-          `${ICONS.success} <b>Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nNext run: <b>${nextRun.toLocaleString()}</b>\nMessage: <i>${message}</i>`,
+          `${ICONS.success} <b>Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nNext run: <b>${nextRun.toLocaleString()}</b>\nMessage: <i>${escapeHtml(message)}</i>`,
           {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
@@ -112,7 +113,7 @@ export function registerAutomationHandlers(
         const task = await scheduler.addTask(chatId, message, 'recurring', `every ${minutes}m`, minutes);
         logger.info(`[schedule] recurring success: chatId=${chatId} taskId=${task.id} interval=${minutes}m`);
         await ctx.reply(
-          `${ICONS.success} <b>Recurring Task Set</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nInterval: <b>Every ${minutes}m</b>\nMessage: <i>${message}</i>`,
+          `${ICONS.success} <b>Recurring Task Set</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nInterval: <b>Every ${minutes}m</b>\nMessage: <i>${escapeHtml(message)}</i>`,
           {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),

@@ -74,16 +74,19 @@ export async function detectAndSendNewArtifacts(
         }
       } else {
         logger.info(`[messageLoop] Automatically sending ${photos.length} generated photos as an album to Telegram`);
-        try {
-          await session.sendMediaGroup(
-            photos.map((p, i) => ({
+        for (let start = 0; start < photos.length; start += 10) {
+          const batch = photos.slice(start, start + 10);
+          try {
+            await session.sendMediaGroup(
+              batch.map((p, i) => ({
               filePath: p.filePath,
               type: 'photo' as const,
               caption: i === 0 ? `🎨 Generated: ${photos.length} photos` : undefined,
             })),
-          );
-        } catch (e) {
-          logger.error(`[messageLoop] Failed to send photo album: ${e}`);
+            );
+          } catch (e) {
+            logger.error(`[messageLoop] Failed to send photo album batch: ${e}`);
+          }
         }
       }
     }

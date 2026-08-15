@@ -58,7 +58,7 @@ export function persistChatMessage(msg: Message | undefined, now = new Date().to
     if (Math.random() < 0.01) {
       try {
         const config = getSummarizationConfig();
-        const keepCount = Math.max(500000, (config.maxCount || 200) * 2);
+        const keepCount = Math.max(500, (config.maxCount || 200) * 2);
         Promise.resolve().then(() => {
           trimChatMessages(msg.chat.id, keepCount);
         }).catch((e) => {

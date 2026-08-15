@@ -14,6 +14,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
@@ -253,6 +254,8 @@ const userConfigSchema = z.object({
      * Default: 1000 — handles ~1000 messages/day with room for burst traffic.
      */
     cacheMaxSize: z.number().optional(),
+    /** Maximum Telegram attachment size accepted for model input. Default: 50 MiB. */
+    maxDownloadBytes: z.number().positive().optional(),
     /**
      * Auto-approve ALL tool permissions for backend model runs in the regular
      * chat path (not just /invest): opencode gets `--auto`, agy native gets
@@ -284,7 +287,8 @@ type DefaultModels = z.infer<typeof defaultModelsSchema>;
 // All paths resolve from config.json `paths.*` fields, falling back to CONFIG_DIR.
 
 function resolvePath(configPath: string | undefined, fallbackName: string): string {
-  return configPath || path.join(CONFIG_DIR, fallbackName);
+  const value = configPath ?? (path.isAbsolute(fallbackName) ? fallbackName : path.join(CONFIG_DIR, fallbackName));
+  return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : path.resolve(value);
 }
 
 export function getDbPath(config?: UserConfig | null): string {
@@ -316,6 +320,7 @@ export const TUNING_DEFAULTS = {
   maxHistoryMessages: 40,
   cacheTtlMs: 24 * 60 * 60 * 1000,
   cacheMaxSize: 1000,
+  maxDownloadBytes: 50 * 1024 * 1024,
   autoApproveTools: true,
   inlineThinkingStreaming: true,
 };
@@ -331,6 +336,7 @@ type TuningConfig = {
   maxHistoryMessages: number;
   cacheTtlMs: number;
   cacheMaxSize: number;
+  maxDownloadBytes: number;
   autoApproveTools: boolean;
   inlineThinkingStreaming: boolean;
 };
@@ -364,7 +370,7 @@ const AGY_DATA_DIR_DEFAULT = path.join(os.homedir(), '.gemini', 'antigravity-cli
 export function getAgyDataDir(): string {
   if (process.env['ANTIGRAVITY_USER_DIR']) return process.env['ANTIGRAVITY_USER_DIR'];
   const cfg = loadUserConfig();
-  return cfg?.paths?.agyDataDir || AGY_DATA_DIR_DEFAULT;
+  return resolvePath(cfg?.paths?.agyDataDir, AGY_DATA_DIR_DEFAULT);
 }
 
 /**
@@ -383,6 +389,12 @@ export function getStockMarketApiKey(): string | null {
 /** Returns the configured RapidAPI Key for Yahoo Finance API (config.json "rapidApiKey"). Null when unset. */
 export function getRapidApiKey(): string | null {
   return loadUserConfig()?.rapidApiKey ?? null;
+}
+
+/** Local-only token for the stock/watchlist HTTP API, derived without exposing the bot token. */
+export function getStockApiToken(): string {
+  const token = loadUserConfig()?.telegramBotToken || process.env['TELEGRAM_BOT_TOKEN'] || 'unset';
+  return createHash('sha256').update(`stock-api:${token}`).digest('hex');
 }
 
 /**
@@ -440,7 +452,7 @@ const OPENCODE_DB_DEFAULT = path.join(OPENCODE_DATA_DIR_DEFAULT, 'opencode.db');
 export function getOpenCodeDbPath(): string {
   if (process.env['OPENCODE_DB']) return process.env['OPENCODE_DB'];
   const cfg = loadUserConfig();
-  if (cfg?.paths?.opencodeDb) return cfg.paths.opencodeDb;
+  if (cfg?.paths?.opencodeDb) return resolvePath(cfg.paths.opencodeDb, OPENCODE_DB_DEFAULT);
   if (process.env['XDG_DATA_HOME']) {
     return path.join(process.env['XDG_DATA_HOME'], 'opencode', 'opencode.db');
   }
@@ -452,7 +464,7 @@ export function getAnswerSaveDir(): string {
   if (!answerSaveDir) {
     throw new Error('paths.answerSaveDir is not configured. Set it in config.json (e.g. "~/Documents/Obsidian/Inbox").');
   }
-  return answerSaveDir;
+  return resolvePath(answerSaveDir, answerSaveDir);
 }
 
 /**

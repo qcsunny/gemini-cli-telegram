@@ -57,9 +57,28 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
   let inThoughts = false;
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (result: AgyRunResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const req = http.request(reqOptions, (res) => {
       const decoder = new StringDecoder('utf-8');
       let buf = '';
+
+      if (res.statusCode !== undefined && (res.statusCode < 200 || res.statusCode >= 300)) {
+        let errorBody = '';
+        res.on('data', (chunk) => { errorBody += Buffer.from(chunk).toString('utf8'); });
+        res.on('end', () => finish({
+          conversationId: convId,
+          output: '',
+          exitCode: 1,
+          stderr: `DeepSeek HTTP ${res.statusCode}: ${errorBody.slice(0, 1000)}`,
+        }));
+        return;
+      }
 
       res.on('data', (chunk: Buffer) => {
         buf += decoder.write(chunk);
@@ -109,6 +128,31 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
       });
 
       res.on('end', () => {
+        buf += decoder.end();
+        if (buf.trim()) {
+          const line = buf.trim();
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data !== '[DONE]') {
+              try {
+                const parsed = JSON.parse(data);
+                const delta = parsed?.choices?.[0]?.delta?.content ?? '';
+                const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? '';
+                if (reasoning) {
+                  if (!thoughtStartTime) thoughtStartTime = Date.now();
+                  thoughtBuf += reasoning;
+                  onChunk?.(reasoning);
+                  opts.onEvent?.({ type: 'thought', content: reasoning });
+                }
+                if (delta) {
+                  contentBuf += delta;
+                  onChunk?.(delta);
+                  opts.onEvent?.({ type: 'text', content: delta });
+                }
+              } catch { /* ignore malformed final SSE line */ }
+            }
+          }
+        }
         if (inThoughts) {
           inThoughts = false;
           if (onChunk) onChunk('</thinking>');
@@ -137,13 +181,17 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
           }
         }
         saveMessageTurn(convId, 'deepseek', prompt, finalOutput);
-        resolve({ conversationId: convId, output: finalOutput, exitCode: 0, stderr: '' });
+        finish({ conversationId: convId, output: finalOutput, exitCode: 0, stderr: '' });
       });
 
-      res.on('error', reject);
+      res.on('error', (err) => {
+        if (!settled) reject(err);
+      });
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (!settled) reject(err);
+    });
 
     // BUG-03: Add Socket-level read timeout so TCP half-open connections
     // (server connected but never sends data back) don't hang indefinitely.
@@ -163,7 +211,7 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
       } else {
         finalOutput = contentBuf;
       }
-      resolve({ conversationId: convId, output: finalOutput, exitCode: 1, stderr: 'Aborted' });
+      finish({ conversationId: convId, output: finalOutput, exitCode: 1, stderr: 'Aborted' });
     }, { once: true });
 
     req.write(body);

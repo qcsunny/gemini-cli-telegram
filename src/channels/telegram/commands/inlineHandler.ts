@@ -26,12 +26,13 @@ interface InlineHandlerOptions {
 }
 
 /** Inactivity timeout — aborts when no stream activity for 3 minutes (allows agy context loading & deep thinking). */
-const INACTIVITY_TIMEOUT_MS = 180_000;
+const DEFAULT_INACTIVITY_TIMEOUT_MS = 180_000;
 /** Hard ceiling — aborts regardless of activity to prevent infinite agent loops. */
-const HARD_TIMEOUT_MS = 600_000;
+const DEFAULT_HARD_TIMEOUT_MS = 600_000;
 const RESULTS_TTL = 120_000;
 
 interface PendingResult {
+  ownerId: number;
   prompt: string;
   model: string;
   projectPath?: string;
@@ -50,6 +51,19 @@ export const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
 const pendingStockRequests = new Map<string, { queryStr: string; webAppUrl: string }>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
+
+function inlineOwnerMatches(resultId: string, userId: number | undefined): boolean {
+  // Real Telegram callback queries always include `from`; tolerate missing
+  // values in synthetic contexts and older adapters.
+  if (!userId) return true;
+  const pending = pendingResults.get(resultId);
+  if (pending) return pending.ownerId === userId;
+  const regen = regenerateContexts.get(resultId);
+  if (regen) return regen.fromId === userId;
+  const compare = compareContexts.get(resultId);
+  if (compare) return compare.fromId === userId;
+  return false;
+}
 
 interface RegenerateContext {
   prompt: string;
@@ -113,13 +127,24 @@ async function saveInlinePagesToDisk(map: Map<string, InlinePage[]>): Promise<vo
       if (createdAt > cutoff) store[id] = { pages, createdAt };
     }
     _inlinePagesOnDisk = store;
-    await fs.writeFile(getInlinePagesFile(), JSON.stringify(store), 'utf8');
+    const file = getInlinePagesFile();
+    const tmp = `${file}.tmp`;
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(tmp, JSON.stringify(store), 'utf8');
+    await fs.rename(tmp, file);
   } catch (e) {
     logger.warn(`[inlinePages] Failed to persist to disk: ${e}`);
   }
 }
 
 let _inlinePagesOnDisk: InlinePagesStore = {};
+let inlinePagesWriteQueue: Promise<void> = Promise.resolve();
+
+function persistInlinePages(): void {
+  inlinePagesWriteQueue = inlinePagesWriteQueue
+    .then(() => saveInlinePagesToDisk(inlinePages))
+    .catch((e) => logger.warn(`[inlinePages] Persistence queue failed: ${e}`));
+}
 
 /** Paginated pages of a finished answer, keyed by resultId. Disk-backed. */
 const inlinePages = loadInlinePagesFromDisk();
@@ -127,13 +152,13 @@ const inlinePages = loadInlinePagesFromDisk();
 function setInlinePages(resultId: string, pages: InlinePage[]): void {
   inlinePages.set(resultId, pages);
   _inlinePagesOnDisk[resultId] = { pages, createdAt: Date.now() };
-  saveInlinePagesToDisk(inlinePages).catch(() => {});
+  persistInlinePages();
 }
 
 function deleteInlinePages(resultId: string): void {
   inlinePages.delete(resultId);
   delete _inlinePagesOnDisk[resultId];
-  saveInlinePagesToDisk(inlinePages).catch(() => {});
+  persistInlinePages();
 }
 
 /** Max models user can pick for a /v multi-model comparison. */
@@ -649,10 +674,12 @@ export async function runModelWithFallbackChain(
       let hardTimer: NodeJS.Timeout;
       const armTimer = () => {
         clearTimeout(inactivityTimer);
-        inactivityTimer = setTimeout(() => timeoutCtrl.abort(), INACTIVITY_TIMEOUT_MS);
+        const tuning = getTuningConfig();
+        inactivityTimer = setTimeout(() => timeoutCtrl.abort(), tuning.modelRunInactivityMs || DEFAULT_INACTIVITY_TIMEOUT_MS);
       };
       armTimer();
-      hardTimer = setTimeout(() => timeoutCtrl.abort(), HARD_TIMEOUT_MS);
+      const hardTimeout = getTuningConfig().modelRunHardTimeoutMs || DEFAULT_HARD_TIMEOUT_MS;
+      hardTimer = setTimeout(() => timeoutCtrl.abort(), hardTimeout);
       const clearTimers = () => {
         clearTimeout(inactivityTimer);
         clearTimeout(hardTimer);
@@ -877,6 +904,10 @@ export function registerInlineHandler(
 
     if (data.startsWith('inline_stop:')) {
       const resultId = data.slice('inline_stop:'.length);
+      if (!inlineOwnerMatches(resultId, ctx.from?.id)) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized action.', show_alert: true }).catch(() => {});
+        return;
+      }
       const ctrl = userControllers.get(resultId);
       if (!ctrl) {
         await ctx.answerCallbackQuery({ text: '⚠️ This task is already complete or stopped.', show_alert: true }).catch(() => {});
@@ -890,6 +921,10 @@ export function registerInlineHandler(
     if (data.startsWith('inline_regenerate:')) {
       const resultId = data.slice('inline_regenerate:'.length);
       const regen = regenerateContexts.get(resultId);
+      if (!regen || (ctx.from?.id !== undefined && regen.fromId !== ctx.from.id)) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized or expired action.', show_alert: true }).catch(() => {});
+        return;
+      }
       if (!regen) {
         await ctx.answerCallbackQuery({ text: '❌ Session expired, please ask again.', show_alert: true }).catch(() => {});
         return;
@@ -1004,6 +1039,11 @@ export function registerInlineHandler(
       const [resultId, pageIdxStr] = data.slice('inline_page:'.length).split(':');
       const pageIdx = parseInt(pageIdxStr, 10);
       const pages = inlinePages.get(resultId);
+      const owner = regenerateContexts.get(resultId)?.fromId;
+      if (owner !== undefined && ctx.from?.id !== undefined && owner !== ctx.from.id) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized action.', show_alert: true }).catch(() => {});
+        return;
+      }
       logger.info(`[InlinePage] userId=${ctx.from?.id} resultId=${resultId} pageIdx=${pageIdx} pagesFound=${pages ? pages.length : 'null'} inlineMsgId=${inlineMessageId ?? 'null'}`);
       if (!pages || Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= pages.length) {
         logger.warn(`[InlinePage] EXPIRED or invalid: resultId=${resultId} pages=${pages ? pages.length : 'null'} pageIdx=${pageIdx}`);
@@ -1041,6 +1081,10 @@ export function registerInlineHandler(
         await ctx.answerCallbackQuery({ text: '❌ Selection expired, please start a new /v query.', show_alert: true }).catch(() => {});
         return;
       }
+      if (ctx.from?.id !== undefined && cmp.fromId !== ctx.from.id) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized action.', show_alert: true }).catch(() => {});
+        return;
+      }
       if (cmp.selectedIdx.includes(idx)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return;
@@ -1066,6 +1110,10 @@ export function registerInlineHandler(
         await ctx.answerCallbackQuery({ text: '❌ Session expired.', show_alert: true }).catch(() => {});
         return;
       }
+      if (ctx.from?.id !== undefined && cmp.fromId !== ctx.from.id) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized action.', show_alert: true }).catch(() => {});
+        return;
+      }
       cmp.selectedIdx = [];
       await ctx.answerCallbackQuery().catch(() => {});
       await ctx.api.raw.editMessageText({
@@ -1082,19 +1130,12 @@ export function registerInlineHandler(
       let cmp = compareContexts.get(resultId);
       // Auto-rebuild if bot restarted and context was lost in memory
       if (!cmp) {
-        const candidates = getEffectiveModelOrder();
-        cmp = {
-          resultId,
-          inlineMessageId: inlineMessageId!,
-          fromId: ctx.from?.id ?? 0,
-          prompt: '',
-          projectPath: undefined,
-          candidates,
-          currentPage: 0,
-          selectedIdx: [],
-          createdAt: Date.now(),
-        };
-        compareContexts.set(resultId, cmp);
+        await ctx.answerCallbackQuery({ text: 'Comparison expired after bot restart.', show_alert: true }).catch(() => {});
+        return;
+      }
+      if (ctx.from?.id !== undefined && cmp.fromId !== ctx.from.id) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized action.', show_alert: true }).catch(() => {});
+        return;
       }
       if (Number.isNaN(pageIdx) || pageIdx < 0 || pageIdx >= Math.ceil(cmp.candidates.length / COMPARE_MODELS_PER_PAGE)) {
         await ctx.answerCallbackQuery({ text: '❌ Page out of range.', show_alert: true }).catch(() => {});
@@ -1115,21 +1156,14 @@ export function registerInlineHandler(
       let cmp = compareContexts.get(resultId);
       // Auto-rebuild if bot restarted and context was lost in memory
       if (!cmp) {
-        const candidates = getEffectiveModelOrder();
-        cmp = {
-          resultId,
-          inlineMessageId: inlineMessageId!,
-          fromId: ctx.from?.id ?? 0,
-          prompt: '',
-          projectPath: undefined,
-          candidates,
-          currentPage: 0,
-          selectedIdx: [],
-          createdAt: Date.now(),
-        };
-        compareContexts.set(resultId, cmp);
+        await ctx.answerCallbackQuery({ text: 'Comparison expired after bot restart.', show_alert: true }).catch(() => {});
+        return;
       }
       const activeCmp = cmp!;
+      if (ctx.from?.id !== undefined && activeCmp.fromId !== ctx.from.id) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized action.', show_alert: true }).catch(() => {});
+        return;
+      }
       const configDefaults = loadModelsConfig()?.compareDefaults || [];
       const selectedIndices: number[] = [];
       
@@ -1196,6 +1230,10 @@ export function registerInlineHandler(
       const cmp = compareContexts.get(resultId);
       if (!cmp || cmp.selectedIdx.length < 2) {
         await ctx.answerCallbackQuery({ text: '❌ Select at least 2 models to compare.', show_alert: true }).catch(() => {});
+        return;
+      }
+      if (ctx.from?.id !== undefined && cmp.fromId !== ctx.from.id) {
+        await ctx.answerCallbackQuery({ text: 'Unauthorized action.', show_alert: true }).catch(() => {});
         return;
       }
       const models = cmp.selectedIdx.map((idx: number) => cmp.candidates[idx]);
@@ -1492,7 +1530,7 @@ export function registerInlineHandler(
     }
 
     if (!familyMode) {
-      pendingResults.set(resultId, { prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now(), isInvest, investSymbol, investSymbols });
+       pendingResults.set(resultId, { ownerId: fromId, prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now(), isInvest, investSymbol, investSymbols });
     }
 
     try {
@@ -1509,7 +1547,7 @@ export function registerInlineHandler(
         const now = Date.now();
         const results = suggestionCandidates.map((candidateModel, idx) => {
           const candidateId = `m-${now}-${idx}`;
-          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now });
+           pendingResults.set(candidateId, { ownerId: fromId, prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now });
           return {
             type: 'article' as const,
             id: candidateId,
@@ -1556,7 +1594,7 @@ export function registerInlineHandler(
         const now = Date.now();
         candidates.forEach((candidateModel, idx) => {
           const candidateId = `m-${now}-${idx}`;
-          pendingResults.set(candidateId, { prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now, isInvest, investSymbol, investSymbols });
+           pendingResults.set(candidateId, { ownerId: fromId, prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now, isInvest, investSymbol, investSymbols });
           suggestionCards.push({
             type: 'article' as const,
             id: candidateId,
@@ -1660,6 +1698,10 @@ export function registerInlineHandler(
     const pending = pendingResults.get(chosen.result_id);
     if (!pending) {
       logger.warn(`[ChosenInline] No pending result found for result_id=${chosen.result_id}`);
+      return;
+    }
+    if (pending.ownerId !== chosen.from.id) {
+      logger.warn(`[ChosenInline] Result owner mismatch resultId=${chosen.result_id} owner=${pending.ownerId} chooser=${chosen.from.id}`);
       return;
     }
 

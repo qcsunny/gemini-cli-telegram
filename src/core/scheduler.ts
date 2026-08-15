@@ -180,7 +180,7 @@ export class ChatScheduler {
 
   private parseScheduleTime(schedule: string): number {
     const now = new Date();
-    const lower = schedule.toLowerCase().trim();
+    const lower = schedule.toLowerCase().trim().replace(/\s+/g, ' ');
 
     // Handle relative times
     if (lower === 'now') return Date.now() + 5000; // 5 seconds from now
@@ -190,6 +190,12 @@ export class ChatScheduler {
     if (lower === 'in 30 minutes' || lower === 'in 30m') return Date.now() + 30 * 60000;
     if (lower === 'in 1 hour' || lower === 'in 1h') return Date.now() + 60 * 60000;
     if (lower === 'in 2 hours' || lower === 'in 2h') return Date.now() + 2 * 60 * 60000;
+    const relativeMatch = lower.match(/^in (\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)$/);
+    if (relativeMatch) {
+      const amount = Number(relativeMatch[1]);
+      const unit = relativeMatch[2];
+      return Date.now() + amount * (unit.startsWith('h') ? 60 : 1) * 60000;
+    }
     if (lower === 'tomorrow') {
       const tomorrow = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -198,6 +204,7 @@ export class ChatScheduler {
     }
     if (lower.startsWith('tomorrow at ')) {
       const timeStr = lower.replace('tomorrow at ', '');
+      if (!/^\d{1,2}:\d{2}$/.test(timeStr)) return Date.now() + 5 * 60000;
       const tomorrow = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
       const [hours, minutes] = timeStr.split(':').map(Number);
@@ -240,6 +247,7 @@ export class ChatScheduler {
     if (timeMatch) {
       const hours = parseInt(timeMatch[1]!, 10);
       const minutes = parseInt(timeMatch[2]!, 10);
+      if (hours > 23 || minutes > 59) return Date.now() + 5 * 60000;
       const target = new Date(now);
       target.setHours(hours, minutes, 0, 0);
       if (target.getTime() <= Date.now()) {
