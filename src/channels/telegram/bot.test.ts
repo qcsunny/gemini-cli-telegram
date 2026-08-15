@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TelegramBot, buildChannelReply, record429Backoff, reset429Backoff, is429Error, get429RetryAfter } from './bot.js';
+import { buildPrivateStreamingBlocks } from './bot/channelReply.js';
 import { processMessage } from '../../core/messageLoop.js';
 import * as fs from 'fs/promises';
 
@@ -215,12 +216,12 @@ describe('TelegramBot', () => {
       }));
 
       await reply.sendRichDraft!('Hello Draft!');
-      // Streaming draft is sent as markdown (fast typewriter path); blocks are
-      // rendered only at finalize.
+      // Streaming draft is sent as native blocks (fast typewriter path); the
+      // lightweight per-frame builder is used, not the finalize pipeline.
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenLastCalledWith(expect.objectContaining({
         chat_id: chatId,
         message_thread_id: 42,
-        rich_message: { markdown: expect.any(String) }
+        rich_message: { blocks: expect.any(Array) }
       }));
     });
 
@@ -283,31 +284,65 @@ describe('TelegramBot', () => {
         rich_message: expect.any(Object),
       });
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
-      // Streaming phase sends markdown directly for a smooth typewriter effect.
-      expect(parsed).toHaveProperty('markdown');
+      // Streaming phase sends native blocks for a smooth typewriter effect.
+      expect(parsed).toHaveProperty('blocks');
       // The returned id is the real message id from Telegram.
       expect(firstId).toBe(888);
     });
 
-    it('should send streaming draft as markdown (no block parse during streaming)', async () => {
+    it('should send streaming draft as native blocks (no heavy finalize parse)', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       await reply.sendRichDraft!('draft text');
 
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
-      expect(parsed).toHaveProperty('markdown');
-      expect(parsed).not.toHaveProperty('blocks');
+      expect(parsed).toHaveProperty('blocks');
+      expect(parsed).not.toHaveProperty('markdown');
     });
 
-    it('should never send an empty markdown payload during streaming (RICH_MESSAGE_EMPTY guard)', async () => {
+    it('should never send an empty blocks payload during streaming (RICH_MESSAGE_EMPTY guard)', async () => {
       const reply = buildChannelReply(mockCtx, chatId, 'RichText');
       await reply.sendRichDraft!({ content: '', thought: '' });
 
       expect(mockCtx.api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
       const parsed = mockCtx.api.raw.sendRichMessage.mock.calls[0][0].rich_message;
-      expect(parsed).toHaveProperty('markdown');
-      const md = parsed.markdown as string;
-      expect(md.trim().length).toBeGreaterThan(0);
+      expect(parsed).toHaveProperty('blocks');
+      const blocks = parsed.blocks as unknown[];
+      expect(blocks.length).toBeGreaterThan(0);
+    });
+
+    it('should build Phase 1 streaming blocks (thought only) with a bold thinking header', () => {
+      const blocks = buildPrivateStreamingBlocks({ content: '', thought: 'Step 1 reasoning' });
+      const json = JSON.stringify(blocks);
+      expect(json).toContain('🧠 Thinking...');
+      expect(json).toContain('Step 1 reasoning');
+    });
+
+    it('should build Phase 2 streaming blocks with a native details block for thinking', () => {
+      const blocks = buildPrivateStreamingBlocks({ content: 'Body answer.', thought: 'Done thinking.' });
+      expect(blocks.some((b) => b.type === 'details' && b.summary === '🧠 Thinking Process')).toBe(true);
+      const json = JSON.stringify(blocks);
+      expect(json).toContain('Done thinking.');
+      expect(json).toContain('Body answer.');
+    });
+
+    it('should never emit empty streaming blocks (RICH_MESSAGE_EMPTY guard)', () => {
+      const blocks = buildPrivateStreamingBlocks({ content: '', thought: '' });
+      expect(blocks.length).toBeGreaterThan(0);
+    });
+
+    it('should stream body-only content without a thinking header', () => {
+      const blocks = buildPrivateStreamingBlocks({ content: 'Just the answer', thought: '' });
+      expect(JSON.stringify(blocks)).toContain('Just the answer');
+      expect(JSON.stringify(blocks)).not.toContain('Thinking');
+    });
+
+    it('should send native blocks via editRichDraft streaming edits', async () => {
+      const reply = buildChannelReply(mockCtx, chatId, 'RichText', undefined, undefined, { draftThrottleMs: 0 });
+      await reply.editRichDraft!(100, { content: 'body', thought: 'thinking' });
+      const parsed = mockCtx.api.editMessageText.mock.calls[0][2];
+      expect(parsed).toHaveProperty('blocks');
+      expect(parsed.blocks.length).toBeGreaterThan(0);
     });
 
     it('should successfully edit Rich blocks (Option A)', async () => {
