@@ -144,7 +144,9 @@ describe('investHandler', () => {
       })
     );
     expect(mockCtx.api.sendRichMessage).toHaveBeenCalledWith(123456, {
-      markdown: '深度投资分析报告内容',
+      blocks: expect.arrayContaining([
+        expect.objectContaining({ type: 'paragraph', text: '深度投资分析报告内容' }),
+      ]),
     });
     expect(messageStore.saveMessage).toHaveBeenCalledWith(
       'test-conv-uuid',
@@ -180,7 +182,9 @@ describe('investHandler', () => {
       })
     );
     expect(mockCtx.api.sendRichMessage).toHaveBeenCalledWith(123456, {
-      markdown: '深度投资分析报告内容',
+      blocks: expect.arrayContaining([
+        expect.objectContaining({ type: 'paragraph', text: '深度投资分析报告内容' }),
+      ]),
     });
     expect(messageStore.saveMessage).toHaveBeenCalledWith(
       'test-conv-uuid',
