@@ -355,6 +355,30 @@ Thanks for reading! 🚀
     expect(detailsBlock.blocks[0].text[0].type).toBe('bold');
   });
 
+  it('should place inline thinking after the Answer label and fold the answer body after it', () => {
+    const blocks = buildFinalBlocks(
+      '**💬 Question:** Question\n\n**🤖 Answer (Model):**\n\nBody content',
+      'Thinking content',
+      { bodySummary: 'Full answer' },
+    ) as any[];
+    expect(blocks.map(block => block.type)).toEqual(['paragraph', 'paragraph', 'details', 'details']);
+    expect(blocks[1].text[0].type).toBe('bold');
+    expect(blocks[2].summary).toBe('🧠 Thinking Process');
+    expect(blocks[3].summary).toBe('Full answer');
+    expect(blocks[3].blocks[0].text).toBe('Body content');
+  });
+
+  it('should fold an inline answer even when the model returns no thinking', () => {
+    const blocks = buildFinalBlocks(
+      '**💬 Question:** Question\n\n**🤖 Answer (Model):**\n\nBody content',
+      '',
+      { bodySummary: 'Full answer' },
+    ) as any[];
+    expect(blocks.map(block => block.type)).toEqual(['paragraph', 'paragraph', 'details']);
+    expect(blocks[2].summary).toBe('Full answer');
+    expect(blocks[2].blocks[0].text).toBe('Body content');
+  });
+
   it('should preserve body details blocks with formatted folded content in blocks path', () => {
     const blocks = markdownToRichBlocks('> [details] 点击展开\n> 内容有 **粗体** 和 `代码` 还有 *斜体*\n\n后续正文');
     const detailsBlock = blocks.find(b => b.type === 'details') as any;
@@ -707,6 +731,23 @@ Thanks for reading! 🚀
       expect(html).toContain('段落二');
       expect(html).toContain('───');
     });
+
+    it('should NOT treat markdown syntax quoted inside inline backticks as real structure', () => {
+      // `## 小节名` and `---` inside backticks must stay literal inline code,
+      // not become a heading / horizontal rule (regression: reasoning traces
+      // quoting markdown syntax used to get mangled).
+      const html = markdownToHtml('Use `## 小节名` for sections');
+      expect(html).not.toContain('<b>');
+      expect(html).toContain('<code>## 小节名</code>');
+
+      const html2 = markdownToHtml('Use `---` dividers between major sections');
+      expect(html2).not.toContain('───');
+      expect(html2).toContain('<code>---</code>');
+
+      const html3 = markdownToHtml('1. First line must be `# 标题` (<=20 chars)');
+      expect(html3).toContain('<code># 标题</code>');
+      expect(html3).toContain('1. First line');
+    });
   });
 
   describe('findSafeCutPoint', () => {
@@ -876,9 +917,9 @@ Thanks for reading! 🚀
       });
       expect(blocks.length).toBeGreaterThanOrEqual(2);
       const first = blocks[0] as any;
-      expect(first.type).toBe('thinking');
-      expect(first.text).toBe('Let me analyze this step by step.');
-      expect(first.collapsed).toBe(true);
+      expect(first.type).toBe('details');
+      expect(first.summary).toBe('🧠 Thinking Process');
+      expect(first.is_open).toBeUndefined();
       const bodyStart = blocks[1] as any;
       expect(bodyStart.type).toBe('heading');
     });
@@ -1079,4 +1120,3 @@ function extractAllTexts(blk: any): string[] {
 }
 
 });
-

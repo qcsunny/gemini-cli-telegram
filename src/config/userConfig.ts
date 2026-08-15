@@ -265,6 +265,8 @@ const userConfigSchema = z.object({
      * Default: true — this is a personal bot; the owner wants full tool access.
      */
     autoApproveTools: z.boolean().optional(),
+    /** Stream reasoning/tool events into the inline details block. */
+    inlineThinkingStreaming: z.boolean().optional(),
   }).optional(),
 });
 
@@ -315,6 +317,7 @@ export const TUNING_DEFAULTS = {
   cacheTtlMs: 24 * 60 * 60 * 1000,
   cacheMaxSize: 1000,
   autoApproveTools: true,
+  inlineThinkingStreaming: true,
 };
 
 /**
@@ -329,6 +332,7 @@ type TuningConfig = {
   cacheTtlMs: number;
   cacheMaxSize: number;
   autoApproveTools: boolean;
+  inlineThinkingStreaming: boolean;
 };
 
 let _cachedTuning: TuningConfig | undefined;
@@ -524,4 +528,3 @@ export function saveUserConfig(config: UserConfig): void {
   // concurrent writers don't clobber each other within the previous TTL window.
   _configCache = undefined;
 }
-

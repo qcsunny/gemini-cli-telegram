@@ -1060,6 +1060,17 @@ export function normalizeMarkdownStructure(markdown: string): string {
 
   let text = resultLines.join('\n');
 
+  // Protect inline code spans (`...`) with placeholders so the line-level
+  // normalizations below (heading spacing, HR isolation, bullet splitting)
+  // never mangle markdown syntax quoted inside backticks — e.g. a reasoning
+  // trace saying "use `# 标题`" or "use `---`" must stay literal inline code,
+  // not become a real heading / horizontal rule.
+  const inlineCodeSpans: string[] = [];
+  text = text.replace(/`([^`\n]+)`/g, (match) => {
+    inlineCodeSpans.push(match);
+    return `__INLINE_CODE_PLACEHOLDER_${inlineCodeSpans.length - 1}__`;
+  });
+
   // Detect table headers where the model prepended a caption as the first cell
   // without a leading pipe (e.g. `1.人员信息表|员工编号|姓名|...`) causing a
   // column-count mismatch (header has 1 more cell than separator). Split the
@@ -1151,6 +1162,9 @@ export function normalizeMarkdownStructure(markdown: string): string {
 
   // Restore protected code blocks
   text = text.replace(/__CODE_BLOCK_PLACEHOLDER_(\d+)__/g, (_, idx) => codeBlocks[parseInt(idx, 10)]);
+  // Restore protected inline code spans (after code blocks so their content
+  // can never be mistaken for a code-block placeholder).
+  text = text.replace(/__INLINE_CODE_PLACEHOLDER_(\d+)__/g, (_, idx) => inlineCodeSpans[parseInt(idx, 10)]);
 
   return text;
 }

@@ -1107,9 +1107,48 @@ function preprocessFootnotes(markdown: string): { body: string; defs: Array<{ id
 export function buildFinalBlocks(
   content: string,
   thought?: string,
-  opts?: { time?: string; tokens?: string; isClosed?: boolean; footerText?: string },
+  opts?: { time?: string; tokens?: string; isClosed?: boolean; footerText?: string; bodySummary?: string },
 ): RichBlock[] {
   const blocks: RichBlock[] = [];
+
+  // Inline final messages place thinking after the Answer label and can fold
+  // the answer body into a separate details block.
+  const answerMarker = /\n\n(?=\*\*🤖 Answer(?: \([^\n]*\))?:\*\*)/;
+  const answerParts = content.split(answerMarker, 2);
+  if (answerParts.length === 2 && (thought?.trim() || opts?.bodySummary)) {
+    const question = markdownToRichBlocks(answerParts[0]);
+    const answer = answerParts[1];
+    const answerHeader = answer.match(/^(\*\*🤖 Answer(?: \([^\n]*\))?:\*\*)\n\n?([\s\S]*)$/);
+    if (answerHeader) {
+      blocks.push(...question, ...markdownToRichBlocks(answerHeader[1]));
+      const thoughtText = (thought ?? '').trim();
+      if (thoughtText) {
+        let summary = '🧠 Thinking Process';
+        const infoLines: string[] = [];
+        if (opts?.time && Number(opts.time) > 0) infoLines.push(`Thinking Time: ${opts.time} s`);
+        if (opts?.tokens && Number(opts.tokens) > 0) infoLines.push(`Thinking Tokens: ${opts.tokens}`);
+        if (infoLines.length > 0) summary = `${summary} · ${infoLines.join(' · ')}`;
+        const thoughtBlocks = markdownToRichBlocks(thoughtText);
+        blocks.push({
+          type: 'details',
+          summary,
+          blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thoughtText }],
+        });
+      }
+      const answerBody = markdownToRichBlocks(answerHeader[2]);
+      if (opts?.bodySummary) {
+        blocks.push({
+          type: 'details',
+          summary: opts.bodySummary,
+          blocks: answerBody.length > 0 ? answerBody : [{ type: 'paragraph', text: answerHeader[2] }],
+        });
+      } else {
+        blocks.push(...answerBody);
+      }
+      if (opts?.footerText) blocks.push({ type: 'footer', text: opts.footerText });
+      return blocks;
+    }
+  }
 
   // Pre-process footnote references before markdown parsing
   const { body: footnoteBody, defs: footnoteDefs } = preprocessFootnotes(content);
@@ -1193,8 +1232,13 @@ export function buildStreamingBlocks(input: {
 
   if (thought && content) {
     const body = markdownToRichBlocks(content);
+    const thoughtBlocks = markdownToRichBlocks(thought);
     return [
-      { type: 'thinking', text: thought, collapsed: true } as RichBlock,
+      {
+        type: 'details',
+        summary: '🧠 Thinking Process',
+        blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thought }],
+      },
       ...body,
     ];
   }
