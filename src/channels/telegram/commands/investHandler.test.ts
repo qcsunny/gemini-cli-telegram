@@ -99,13 +99,21 @@ describe('investHandler', () => {
       data: '{"grade":"A","totalScore":88}',
     });
 
-    await callbackHandler!({
-      ...mockCtx,
+    const answerCallbackQuery = vi.fn().mockResolvedValue(true);
+    const callbackCtx = Object.assign(Object.create({
+      get chat() { return mockCtx.chat; },
+      get message() { return mockCtx.message; },
+      get api() { return mockCtx.api; },
+      reply: mockCtx.reply,
+      answerCallbackQuery,
+    }), {
       callbackQuery: { data: 'stock_invest:NVDA' },
-    }, vi.fn());
+    });
+
+    await callbackHandler!(callbackCtx, vi.fn());
 
     expect(investDataFetcher.fetchInvestAnalysis).toHaveBeenCalledWith('NVDA', '/test/invest-path');
-    expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith('正在启动价值分析…');
+    expect(answerCallbackQuery).toHaveBeenCalledWith('正在启动价值分析…');
   });
 
   it('should show usage when no symbol is provided', async () => {
