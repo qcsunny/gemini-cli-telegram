@@ -53,6 +53,14 @@ export class ChatScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private callback?: TaskCallback;
   private readonly CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
+  /**
+   * Task ids whose callback is currently in flight. The check loop runs on a
+   * fixed 30s interval that does NOT wait for a previous invocation to finish,
+   * and nextRun is only advanced after the callback completes. Without this
+   * guard a slow task (e.g. a model run) would be re-collected as "due" by the
+   * next tick and fired a second time.
+   */
+  private runningTasks: Set<string> = new Set();
 
   constructor() {
     this.tasksFile = getScheduledTasksPath();
@@ -85,13 +93,14 @@ export class ChatScheduler {
     const tasksToRun: ScheduledTask[] = [];
 
     for (const task of this.tasks.values()) {
-      if (task.active && task.nextRun <= now) {
+      if (task.active && task.nextRun <= now && !this.runningTasks.has(task.id)) {
         tasksToRun.push(task);
       }
     }
 
     for (const task of tasksToRun) {
       logger.info(`Running scheduled task ${task.id} for chat ${task.chatId}`);
+      this.runningTasks.add(task.id);
       try {
         await this.callback?.(task);
         task.runCount++;
@@ -121,6 +130,8 @@ export class ChatScheduler {
         } else {
           task.active = false;
         }
+      } finally {
+        this.runningTasks.delete(task.id);
       }
     }
 

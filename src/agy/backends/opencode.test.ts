@@ -219,4 +219,47 @@ describe('opencode session reuse', () => {
     const result = await p;
     expect(result.output).toBe('plain answer');
   });
+
+  it('runOpenCode streams growing reasoning and text parts from the database', async () => {
+    const db = new Database(path.join(tmpDir, 'opencode.db'));
+    db.exec(`
+      CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, time_updated INTEGER);
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+      CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+    `);
+    db.prepare('INSERT INTO session VALUES (?, ?, ?)').run('ses_live', 'gemini-cli-telegram:conv-live', Date.now());
+    db.close();
+
+    const { runOpenCode } = await import('./opencode.js');
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+    const thoughts: string[] = [];
+    const chunks: string[] = [];
+    const p = runOpenCode({
+      prompt: 'hello', cwd: '/tmp', conversationId: 'conv-live', model: 'OpenCode: DeepSeek V4 Flash Free',
+      onChunk: chunk => chunks.push(chunk),
+      onEvent: event => { if (event.type === 'thought') thoughts.push(event.content || ''); },
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 180));
+    const writeDb = new Database(path.join(tmpDir, 'opencode.db'));
+    const now = Date.now();
+    writeDb.prepare('INSERT INTO message VALUES (?, ?, ?, ?, ?)').run('msg_live', 'ses_live', now, now, JSON.stringify({ role: 'assistant' }));
+    writeDb.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)').run('part_reason', 'msg_live', 'ses_live', now, now, JSON.stringify({ type: 'reasoning', text: 'think' }));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    writeDb.prepare('UPDATE part SET data = ?, time_updated = ? WHERE id = ?').run(JSON.stringify({ type: 'reasoning', text: 'thinking' }), Date.now(), 'part_reason');
+    writeDb.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)').run('part_text', 'msg_live', 'ses_live', now + 1, now + 1, JSON.stringify({ type: 'text', text: 'ans' }));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    writeDb.prepare('UPDATE part SET data = ?, time_updated = ? WHERE id = ?').run(JSON.stringify({ type: 'text', text: 'answer' }), Date.now(), 'part_text');
+    writeDb.close();
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    child.stdout.emit('data', JSON.stringify({ type: 'step_finish', part: { reason: 'stop' } }) + '\n');
+    child.emit('close', 0);
+    const result = await p;
+    expect(thoughts).toEqual(['think', 'ing']);
+    expect(chunks).toEqual(['ans', 'wer']);
+    expect(result.output).toContain('thinking');
+    expect(result.output).toContain('answer');
+  });
 });

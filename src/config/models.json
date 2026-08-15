@@ -16,6 +16,7 @@
       "priority": 1,
       "models": [
         "Gemini 3.7 Flash (High)",
+        "OpenCode: Big Pickle",
         "OpenCode: DeepSeek V4 Flash",
         "OpenCode: Kimi K2.7 Code",
         "Gemini 3.1 Pro (Low)",
@@ -72,6 +73,7 @@
     "Claude Sonnet 4.6 (Thinking)",
     "OpenCode: GLM 5.2",
     "Gemini 3.7 Flash (High)",
+    "OpenCode: Big Pickle",
     "OpenCode: DeepSeek V4 Flash",
     "OpenCode: Kimi K2.7 Code",
     "Gemini 3.1 Pro (Low)",
@@ -130,6 +132,7 @@
     "OpenCode: GLM 5.2":                     "hetzner/GLM-5.2-NVFP4",
     "OpenCode: GLM 4.7 Flash":                "zhipuai/glm-4.7-flash",
     "OpenCode: Kimi K2.7 Code":              "hetzner/Kimi-K2.7-Code",
+    "OpenCode: Big Pickle":                  "opencode/big-pickle",
     "OpenCode: Qwen 3.6 35B A3B":            "hetzner/Qwen/Qwen3.6-35B-A3B-FP8",
     "OpenCode: DeepSeek V4 Flash":           "hetzner/DeepSeek-V4-Flash-0731"
   },
@@ -140,6 +143,7 @@
     "OpenCode: Nemotron 3.5 Lightning Free": "NVIDIA Nemotron 3.5 Lightning 闪电极速模型 · 适用：极速首字输出、低延迟代码编写、日常轻量问答",
     "OpenCode: OpenRouter Free":             "OpenRouter 自动免费路由模型 · 适用：免费兜底、基础问答、零成本对话",
     "OpenCode: DeepSeek V4 Flash":           "DeepSeek V4 Flash 旗舰强力模型 (512k 上下文) · 适用：复杂代码分析、长文本理解、高精度推理",
+    "OpenCode: Big Pickle":                  "Big Pickle 全栈编程强模型 · 适用：多轮项目开发、复杂架构设计与重构",
     "OpenCode: Kimi K2.7 Code":              "Kimi K2.7 代码专精模型 · 适用：代码重构、算法实现、复杂代码审查与调试",
     "OpenCode: Qwen 3.6 35B A3B":            "通义千问 3.6 35B 极速轻量模型 (3B激活) · 适用：快速代码片段生成、日常快答、极速响应",
     "OpenCode: Nemotron 3 Ultra Free":       "综合推理最强，代码能力顶级 · 适用：复杂算法设计、架构决策、高难度调试",

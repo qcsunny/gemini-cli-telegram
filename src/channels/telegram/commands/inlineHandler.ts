@@ -6,9 +6,9 @@ import type { SessionManager } from '../../../core/session.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint, extractThoughtAndContent } from '../../../agy/agyCli.js';
-import { getAgyDataDir, getDefaultModel, getDefaultModels, loadUserConfig } from '../../../config/userConfig.js';
+import { getAgyDataDir, getDefaultModel, getDefaultModels, getTuningConfig, loadUserConfig } from '../../../config/userConfig.js';
 import { formatTokenCount } from '../formatter/core.js';
-import { markdownToRichBlocks } from '../formatter/blocks.js';
+import { buildFinalBlocks, markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder, loadModelsConfig, displayModelName } from '../../../core/modelRegistry.js';
@@ -233,6 +233,13 @@ export class InlineStreamQueue {
     this.scheduleProcess();
   }
 
+  /** Push a streaming frame as native Bot API 10.2 blocks. */
+  public enqueueBlocks(markdown: string, blocks: RichBlock[]): void {
+    this.pendingMarkdown = markdown;
+    this.pendingBlocks = blocks.length > 0 ? blocks : null;
+    this.scheduleProcess();
+  }
+
   /**
    * Attach an inline keyboard to the upcoming edit(s), e.g. the Stop button.
    * Cleared after the next successful edit unless re-set.
@@ -431,6 +438,51 @@ function buildInputRichMessage(markdown: string): { blocks: RichBlock[] } | { ma
   return blocks.length > 0 ? { blocks } : { markdown };
 }
 
+/**
+ * Build an editable inline frame using only persistent Bot API 10.2 blocks.
+ * `thinking` blocks are draft-only, so inline messages use an open `details`
+ * block while reasoning and the same details block closed once body text starts.
+ */
+export function buildInlineStreamingBlocks(input: {
+  prompt: string;
+  model: string;
+  thought?: string;
+  content?: string;
+}): RichBlock[] {
+  const prompt = input.prompt.length > 300 ? input.prompt.slice(0, 300) + '...' : input.prompt;
+  const thought = (input.thought ?? '').trim();
+  const content = (input.content ?? '').trim();
+  const blocks = markdownToRichBlocks(`**💬 Question:** ${prompt}`);
+
+  if (thought) {
+    const thoughtBlocks = markdownToRichBlocks(thought);
+    if (content) {
+      blocks.push(...markdownToRichBlocks(`**🤖 Answer (${displayModelName(input.model)}):**`));
+    }
+    blocks.push({
+      type: 'details',
+      summary: content ? '🧠 Thinking Process' : '🧠 Thinking...',
+      blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thought }],
+      ...(content ? {} : { is_open: true as const }),
+    });
+  } else if (!content) {
+    blocks.push({
+      type: 'details',
+      summary: '🧠 Thinking...',
+      blocks: [{ type: 'paragraph', text: 'Waiting for model output...' }],
+      is_open: true,
+    });
+  }
+
+  if (content) {
+    if (!thought) {
+      blocks.push(...markdownToRichBlocks(`**🤖 Answer (${displayModelName(input.model)}):**`));
+    }
+    blocks.push(...markdownToRichBlocks(content));
+  }
+  return blocks;
+}
+
 const CHANNEL_PREFIX_RE = /^(Web2API|DeepSeek|OpenCode)\s*:\s*/i;
 
 /** Strips the channel prefix so "Web2API: Gemini 3.1 Pro" matches "gemini 3.1 pro". */
@@ -611,6 +663,7 @@ export async function runModelWithFallbackChain(
   onChunk?: (chunk: string) => void,
   onModelStart?: (modelName: string) => void,
   allowTools?: boolean,
+  onEvent?: (event: { type: 'thought' | 'text' | 'done'; content?: string }) => void,
 ): Promise<FallbackRunResult> {
   const skipModels = new Set<string>();
   const chain = buildTierAwareChain(initialModel, skipModels);
@@ -652,6 +705,7 @@ export async function runModelWithFallbackChain(
           model: modelToUse,
           proxy: defaultOptions.proxy || loadUserConfig()?.proxy || process.env['HTTP_PROXY'] || process.env['http_proxy'],
           onChunk: wrappedChunk,
+          onEvent,
           // Any backend stream activity (text, reasoning, tool calls) resets the
           // inactivity timer. Without this, long opencode runs — which stream
           // events but never call onChunk — get killed by the 180s inactivity
@@ -913,8 +967,14 @@ export function registerInlineHandler(
       userControllers.set(resultId, ctrl);
       const streamQueue = new InlineStreamQueue(ctx.api, inlineMessageId);
       let accumulatedText = '';
+      let accumulatedThought = '';
       let activeModelName = regen.model;
-      const onModelStart = (modelName: string) => { accumulatedText = ''; activeModelName = modelName; };
+      const inlineThinkingStreaming = getTuningConfig().inlineThinkingStreaming;
+      const onModelStart = (modelName: string) => {
+        accumulatedText = '';
+        accumulatedThought = '';
+        activeModelName = modelName;
+      };
       const onChunk = (chunk: string) => {
         accumulatedText += chunk;
         touchPendingResult(resultId);
@@ -925,6 +985,19 @@ export function registerInlineHandler(
           const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
           const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(activeModelName)}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
           streamQueue.enqueueStream(streamMarkdown);
+        }
+      };
+      const onEvent = (event: { type: 'thought' | 'text' | 'done'; content?: string }) => {
+        touchPendingResult(resultId);
+        if (inlineThinkingStreaming && event.type === 'thought' && event.content) accumulatedThought += event.content;
+        if (regen.task !== 'image' && (event.type === 'thought' || event.type === 'text')) {
+          const frameMarkdown = `${accumulatedThought}\n\n${accumulatedText}`.trim() || 'Thinking...';
+          streamQueue.enqueueBlocks(frameMarkdown, buildInlineStreamingBlocks({
+            prompt: regen.prompt,
+            model: activeModelName,
+            thought: accumulatedThought,
+            content: accumulatedText,
+          }));
         }
       };
       try {
@@ -940,7 +1013,9 @@ export function registerInlineHandler(
           streamQueue,
           onModelStart,
           onChunk,
+          onEvent,
           getPartialOutput: () => accumulatedText,
+          inlineThinkingStreaming,
         });
       } catch (e) {
         logger.warn(`[InlineResult] Regenerate failed: ${e}`);
@@ -1704,10 +1779,13 @@ export function registerInlineHandler(
     logger.info('[ChosenInline] Enqueued rich placeholder (blocks) through streamQueue path');
 
     let accumulatedText = '';
+    let accumulatedThought = '';
     let activeModelName = pending.model;
+    const inlineThinkingStreaming = getTuningConfig().inlineThinkingStreaming;
 
     const onModelStart = (modelName: string) => {
       accumulatedText = '';
+      accumulatedThought = '';
       activeModelName = modelName;
     };
 
@@ -1720,6 +1798,19 @@ export function registerInlineHandler(
         const displayPrompt = pending.prompt.length > 300 ? pending.prompt.slice(0, 300) + '...' : pending.prompt;
         const streamMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(activeModelName)}):**\n\n${accumulatedText}\n\n_✍️ Streaming live update..._`;
         streamQueue.enqueueStream(streamMarkdown);
+      }
+    };
+    const onEvent = (event: { type: 'thought' | 'text' | 'done'; content?: string }) => {
+      touchPendingResult(chosen.result_id);
+      if (inlineThinkingStreaming && event.type === 'thought' && event.content) accumulatedThought += event.content;
+      if (event.type === 'thought' || event.type === 'text') {
+        const frameMarkdown = `${accumulatedThought}\n\n${accumulatedText}`.trim() || placeholderMarkdown;
+        streamQueue.enqueueBlocks(frameMarkdown, buildInlineStreamingBlocks({
+          prompt: pending.prompt,
+          model: activeModelName,
+          thought: accumulatedThought,
+          content: accumulatedText,
+        }));
       }
     };
 
@@ -1736,8 +1827,10 @@ export function registerInlineHandler(
         streamQueue,
         onModelStart,
         onChunk,
+        onEvent,
         allowTools: !!pending.isInvest,
         getPartialOutput: () => accumulatedText,
+        inlineThinkingStreaming,
       });
     } catch (e) {
       logger.warn(`[InlineResult] Failed to edit message: ${e}`);
@@ -1760,6 +1853,8 @@ interface InlineGenerationContext {
   streamQueue: InlineStreamQueue;
   onModelStart: (modelName: string) => void;
   onChunk: (chunk: string) => void;
+  onEvent?: (event: { type: 'thought' | 'text' | 'done'; content?: string }) => void;
+  inlineThinkingStreaming: boolean;
   /** Allow the model to auto-approve tools (web fetch / file read). Only set for /invest. */
   allowTools?: boolean;
   /** Returns the text streamed so far; used to preserve partial output on manual stop. */
@@ -1774,7 +1869,7 @@ async function runInlineGeneration(
 ): Promise<void> {
   const {
     resultId, inlineMessageId, fromId, prompt, model, projectPath,
-    task, ctrl, streamQueue, onModelStart, onChunk, allowTools, getPartialOutput,
+    task, ctrl, streamQueue, onModelStart, onChunk, onEvent, allowTools, getPartialOutput, inlineThinkingStreaming,
   } = gctx;
 
   // Keep regenerate context alive so the 🔄 button can re-run this prompt.
@@ -1797,6 +1892,7 @@ async function runInlineGeneration(
     onChunk,
     onModelStart,
     allowTools,
+    onEvent,
   );
 
   if (task === 'image') {
@@ -1807,7 +1903,9 @@ async function runInlineGeneration(
   if (result?.output) {
     const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
 
-    const cleanOutput = stripInlineImages(inlineThinkingToDetails(stripWholeMessageCodeFence(result.output)), 'invalid-only');
+    const parsedOutput = extractThoughtAndContent(stripWholeMessageCodeFence(result.output));
+    const finalThought = inlineThinkingStreaming ? parsedOutput.thought.trim() : '';
+    const cleanOutput = stripInlineImages(parsedOutput.content, 'invalid-only');
     const rawOutputLen = cleanOutput.length;
 
     let footerParts: string[] = [];
@@ -1834,22 +1932,27 @@ async function runInlineGeneration(
     }
     const footerText = footerParts.join(' · ');
 
-    // Fold every answer (short or long) into a single native `<details>` block
-    // so the inline card stays compact. Rich messages support up to 32768
-    // chars, so no pagination is needed. The fold is expressed in rich
-    // Markdown (`<details>`) and flushed via `rich_message: { markdown }` so
-    // Telegram's server builds the collapsible block (pre-built `blocks` with
-    // a `details` type render as an uncollapsible blockquote via inline edit).
+    // Keep the Markdown payload as a fallback, but finalize through native 10.2
+    // blocks below: details for thinking, body blocks for the answer, and the
+    // official footer block for usage/cost metadata.
     const summaryTitle = `💡 Click to expand full answer (${rawOutputLen} chars)`;
     const foldedBody = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
-    const fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${foldedBody}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
+    const fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${finalThought ? `<details><summary>🧠 Thinking Process</summary>\n\n${finalThought}\n\n</details>\n\n` : ''}${foldedBody}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
     const replyMarkup = {
       inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
     };
 
     logger.info(`[InlineResult] Submitting final flush edit: userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length}`);
 
-    const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup);
+    const finalBlocks = buildFinalBlocks(
+      `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${cleanOutput}`,
+      finalThought,
+      {
+        bodySummary: summaryTitle,
+        footerText: footerText ? `${footerText}${isFallback ? ' (auto-downgraded)' : ''}` : undefined,
+      },
+    );
+    const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup, finalBlocks);
     if (success) {
       logger.info(`[InlineResult] Successfully flushed final inline message: inline_message_id=${inlineMessageId} userId=${fromId}`);
     }

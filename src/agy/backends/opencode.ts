@@ -29,6 +29,8 @@ const SESSION_TITLE_PREFIX = 'gemini-cli-telegram:';
 
 /** Grace period (ms) between SIGINT and SIGKILL escalation on abort. */
 const ABORT_SIGKILL_GRACE_MS = 5000;
+/** OpenCode persists live part text before its JSON CLI emits the completed part. */
+const PART_POLL_MS = 150;
 
 /**
  * Look up an existing opencode session id by the bot's conversation marker.
@@ -61,6 +63,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
   const convId = existingConvId || makeOpenCodeConvId();
   const opencode = getOpenCodePath();
   const cwd = opts.cwd || process.cwd();
+  const runStartedAt = Date.now();
 
   logger.info(`[opencode] Running: ${opencode} run with model=${model}, cwd=${cwd}`);
 
@@ -113,9 +116,102 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
     let errBuf = '';
     let thoughtBuf = '';
     let contentBuf = '';
+    let stdoutThoughtBuf = '';
+    let stdoutContentBuf = '';
     let thoughtStartTime = 0;
     let stepFinished = false;
     let usageTokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } | undefined;
+    let partPollTimer: NodeJS.Timeout | undefined;
+    let partPollDb: Database.Database | undefined;
+    let polledSessionId: string | null = existingSessionId;
+    let sawPolledReasoning = false;
+    let sawPolledText = false;
+    let sawPolledTool = false;
+    let livePartPollingReady = false;
+    const emittedPartLengths = new Map<string, number>();
+    const emittedToolParts = new Set<string>();
+
+    const emitReasoning = (partId: string, text: string): void => {
+      const previousLength = emittedPartLengths.get(partId) ?? 0;
+      if (text.length <= previousLength) return;
+      const delta = text.slice(previousLength);
+      emittedPartLengths.set(partId, text.length);
+      if (!thoughtStartTime) thoughtStartTime = Date.now();
+      if (previousLength === 0 && thoughtBuf && !thoughtBuf.endsWith('\n')) thoughtBuf += '\n';
+      thoughtBuf += delta;
+      opts.onActivity?.();
+      opts.onEvent?.({ type: 'thought', content: delta });
+    };
+
+    const emitText = (partId: string, text: string): void => {
+      const previousLength = emittedPartLengths.get(partId) ?? 0;
+      if (text.length <= previousLength) return;
+      const delta = text.slice(previousLength);
+      emittedPartLengths.set(partId, text.length);
+      contentBuf += delta;
+      opts.onActivity?.();
+      opts.onChunk?.(delta);
+      opts.onEvent?.({ type: 'text', content: delta });
+    };
+
+    const emitTool = (partId: string, data: Record<string, any>): void => {
+      if (emittedToolParts.has(partId)) return;
+      emittedToolParts.add(partId);
+      const state = data['state'] as Record<string, any> | undefined;
+      const input = state?.['input'] as Record<string, any> | undefined;
+      const toolName = String(data['tool'] ?? 'tool');
+      const description = state?.['title'] ?? input?.['command'] ?? input?.['filePath'] ?? input?.['url'] ?? '';
+      const note = `[${toolName}]${description ? ` ${description}` : ''}`;
+      if (!thoughtStartTime) thoughtStartTime = Date.now();
+      if (thoughtBuf && !thoughtBuf.endsWith('\n')) thoughtBuf += '\n';
+      thoughtBuf += note + '\n';
+      opts.onActivity?.();
+      opts.onEvent?.({ type: 'thought', content: note + '\n' });
+    };
+
+    const pollLiveParts = (): void => {
+      if (!opts.onEvent && !opts.onChunk) return;
+      try {
+        if (!partPollDb) {
+          partPollDb = new Database(getOpenCodeDbPath(), { readonly: true, fileMustExist: true });
+        }
+        if (!polledSessionId) {
+          const session = partPollDb.prepare(
+            'SELECT id FROM session WHERE title = ? ORDER BY time_updated DESC LIMIT 1',
+          ).get(`${SESSION_TITLE_PREFIX}${convId}`) as { id: string } | undefined;
+          polledSessionId = session?.id ?? null;
+        }
+        if (!polledSessionId) return;
+        const rows = partPollDb.prepare(
+          `SELECT p.id, p.data
+             FROM part p
+             JOIN message m ON m.id = p.message_id
+            WHERE p.session_id = ?
+              AND json_extract(m.data, '$.role') = 'assistant'
+              AND p.time_created >= ?
+            ORDER BY p.time_created, p.id`,
+        ).all(polledSessionId, runStartedAt - 2000) as Array<{ id: string; data: string }>;
+        livePartPollingReady = true;
+
+        for (const row of rows) {
+          let data: Record<string, any>;
+          try { data = JSON.parse(row.data); } catch { continue; }
+          const type = data['type'];
+          if (type === 'reasoning' && typeof data['text'] === 'string') {
+            sawPolledReasoning = true;
+            emitReasoning(row.id, data['text']);
+          } else if (type === 'text' && typeof data['text'] === 'string') {
+            sawPolledText = true;
+            emitText(row.id, data['text']);
+          } else if (type === 'tool') {
+            sawPolledTool = true;
+            emitTool(row.id, data);
+          }
+        }
+      } catch (error) {
+        logger.debug(`[opencode] live part polling unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
 
     let leftover = '';
     // Assemble the final output with the thinking chain embedded (mirrors the
@@ -127,6 +223,10 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       const durationSec = thoughtStartTime ? ((Date.now() - thoughtStartTime) / 1000).toFixed(1) : '0.0';
       return `<thinking time="${durationSec}">${thought}</thinking>\n\n${content}`;
     };
+    if (opts.onEvent || opts.onChunk) {
+      partPollTimer = setInterval(pollLiveParts, PART_POLL_MS);
+      partPollTimer.unref?.();
+    }
     child.stdout.on('data', (chunk: Buffer) => {
       const text = stdoutDecoder.write(chunk);
       const fullText = leftover + text;
@@ -139,23 +239,14 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
           const part = event.part || {};
           if (part.type === 'reasoning' && part.text) {
             logger.debug(`[TRACE opencode] reasoning event: text.length=${part.text.length} preview="${part.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
-            if (!thoughtStartTime) thoughtStartTime = Date.now();
-            thoughtBuf += part.text + '\n';
-            opts.onActivity?.();
-            opts.onEvent?.({ type: 'thought', content: part.text });
+            stdoutThoughtBuf += part.text + '\n';
+            if (!livePartPollingReady && !sawPolledReasoning) emitReasoning(`stdout-reasoning-${thoughtBuf.length}`, part.text);
           } else if (part.type === 'text' && part.text) {
-            contentBuf += part.text + '\n';
-            opts.onActivity?.();
-            opts.onChunk?.(part.text);
-            opts.onEvent?.({ type: 'text', content: part.text });
+            stdoutContentBuf += part.text;
+            if (!livePartPollingReady && !sawPolledText) emitText(`stdout-text-${contentBuf.length}`, part.text);
           } else if (part.type === 'tool') {
             const toolName = part.tool || 'tool';
-            const toolDesc = part.state?.title || part.state?.input?.command || part.state?.input?.filePath || '';
-            const note = `[${toolName}] ${toolDesc}`;
-            if (!thoughtStartTime) thoughtStartTime = Date.now();
-            thoughtBuf += note + '\n';
-            opts.onActivity?.();
-            opts.onEvent?.({ type: 'thought', content: note + '\n' });
+            if (!livePartPollingReady && !sawPolledTool) emitTool(`stdout-tool-${thoughtBuf.length}`, { tool: toolName, state: part.state });
           } else if (event.type === 'step_finish') {
             stepFinished = part.reason === 'stop';
             opts.onActivity?.();
@@ -205,6 +296,11 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
     });
 
     child.on('close', (code) => {
+      if (partPollTimer) clearInterval(partPollTimer);
+      pollLiveParts();
+      try { partPollDb?.close(); } catch { /* ignore */ }
+      if (!thoughtBuf.trim() && stdoutThoughtBuf.trim()) thoughtBuf = stdoutThoughtBuf;
+      if (!contentBuf.trim() && stdoutContentBuf.trim()) contentBuf = stdoutContentBuf;
       const finalStderr = stderrDecoder.end();
       if (finalStderr) errBuf += finalStderr;
 

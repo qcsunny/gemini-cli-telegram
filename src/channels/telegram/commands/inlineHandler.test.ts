@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
-import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName, stripInlineImages, inlineThinkingToDetails } from './inlineHandler.js';
+import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName, stripInlineImages, inlineThinkingToDetails, buildInlineStreamingBlocks } from './inlineHandler.js';
 import { displayModelName } from '../../../core/modelRegistry.js';
 import { runAgyPrint } from '../../../agy/agyCli.js';
 import type { SessionManager } from '../../../core/session.js';
@@ -147,6 +147,22 @@ describe('inlineThinkingToDetails', () => {
   it('should return the input unchanged when no thinking block is present', () => {
     const md = 'just plain answer';
     expect(inlineThinkingToDetails(md)).toBe(md);
+  });
+});
+
+describe('buildInlineStreamingBlocks', () => {
+  it('uses an open details block while thinking and closes it when body starts', () => {
+    const thinking = buildInlineStreamingBlocks({ prompt: 'Q', model: 'M', thought: 'step one' }) as any[];
+    const openDetails = thinking.find(block => block.type === 'details');
+    expect(openDetails.is_open).toBe(true);
+
+    const body = buildInlineStreamingBlocks({ prompt: 'Q', model: 'M', thought: 'step one', content: 'answer' }) as any[];
+    const detailsIndex = body.findIndex(block => block.type === 'details');
+    const closedDetails = body[detailsIndex];
+    expect(closedDetails.is_open).toBeUndefined();
+    expect(detailsIndex).toBeGreaterThan(0);
+    expect(JSON.stringify(body[detailsIndex - 1])).toContain('Answer');
+    expect(body.some(block => block.type === 'paragraph')).toBe(true);
   });
 });
 
@@ -744,7 +760,7 @@ describe('registerInlineHandler', () => {
         expect.objectContaining({
           inline_message_id: 'test_inline_msg_id_123',
           rich_message: expect.objectContaining({
-            markdown: expect.any(String),
+            blocks: expect.any(Array),
           }),
         }),
       );

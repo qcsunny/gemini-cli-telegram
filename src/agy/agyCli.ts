@@ -182,7 +182,16 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   }
 
   // Build arg list
+  // The default print format buffers the response and writes plain text only
+  // at process exit. Inline replies need incremental deltas for their
+  // typewriter updates, so request agy's machine-readable streaming format
+  // only when the caller supplied a stream callback.
+  const streamJson = Boolean(onChunk);
   const args: string[] = ['--print', prompt];
+
+  if (streamJson) {
+    args.push('--output-format', 'stream-json');
+  }
 
   if (printTimeout) {
     args.push('--print-timeout', printTimeout);
@@ -281,6 +290,8 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     }
 
     let outputBuf = '';
+    let streamJsonText = '';
+    let streamJsonResult = '';
     let errBuf = '';
 
     const stdoutDecoder = new StringDecoder('utf-8');
@@ -288,10 +299,44 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
     let accumulatedText = '';
 
+    const handleStreamJsonLine = (line: string): void => {
+      if (!line.trim()) return;
+      try {
+        const event = JSON.parse(line) as Record<string, any>;
+        const update = event['step_update'] as Record<string, any> | undefined;
+        const delta = typeof update?.['text_delta'] === 'string' ? update['text_delta'] : '';
+        if (delta) {
+          streamJsonText += delta;
+          accumulatedText += delta;
+          onChunk?.(delta);
+          opts.onEvent?.({ type: 'text', content: delta });
+        }
+
+        const result = event['result'] as Record<string, any> | undefined;
+        if (typeof result?.['response'] === 'string') {
+          streamJsonResult = result['response'];
+        }
+        if (event['event'] === 'step_update' || event['event'] === 'result') {
+          opts.onActivity?.();
+        }
+      } catch {
+        // Ignore incomplete/non-JSON diagnostic lines from the CLI.
+      }
+    };
+
     let chunkIndex = 0;
     child.stdout.on('data', (chunk: Buffer) => {
       const text = stdoutDecoder.write(chunk);
       if (!text) return;
+
+      if (streamJson) {
+        outputBuf += text;
+        const lines = outputBuf.split('\n');
+        outputBuf = lines.pop() || '';
+        for (const line of lines) handleStreamJsonLine(line);
+        return;
+      }
+
       accumulatedText += text;
       outputBuf += text;
       chunkIndex++;
@@ -299,12 +344,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       const containsT = text.includes('<thought') || text.includes('</thought>') || text.includes('<thinking') || text.includes('</thinking>');
       logger.debug(`[STDOUT] chunk=${chunkIndex} len=${text.length} containsThought=${containsT} preview="${text.slice(0, 200).replace(/\n/g, '\\n')}"`);
 
-      if (onChunk) onChunk(text);
+      onChunk?.(text);
       // Emit incremental streaming event per chunk so the UI updates in real time
-      if (opts.onEvent) {
-        opts.onEvent({ type: 'text', content: text });
-      }
-      if (opts.onActivity) opts.onActivity();
+      opts.onEvent?.({ type: 'text', content: text });
+      opts.onActivity?.();
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
@@ -337,10 +380,14 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       const durationMs = Date.now() - startTime;
       // Flush decoders
       const finalStdout = stdoutDecoder.end();
-      if (finalStdout) {
+      if (streamJson) {
+        outputBuf += finalStdout;
+        if (outputBuf.trim()) handleStreamJsonLine(outputBuf);
+        outputBuf = streamJsonResult || streamJsonText;
+      } else if (finalStdout) {
         accumulatedText += finalStdout;
         outputBuf += finalStdout;
-        if (onChunk) onChunk(finalStdout);
+        onChunk?.(finalStdout);
       }
 
       opts.onEvent?.({ type: 'done' });
