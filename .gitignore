@@ -43,3 +43,6 @@ telegramBotAPI/
 notebook/
 documents/
 docs/telegram-bot-api.md
+
+# 本地个人对比文档(不推送远程)
+docs/global_top10_llm_comparison.md
