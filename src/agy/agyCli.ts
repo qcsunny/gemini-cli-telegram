@@ -19,7 +19,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
-import { getStockMarketApiKey, loadUserConfig } from '../config/userConfig.js';
+import { getAgyDataDir, getStockMarketApiKey, loadUserConfig } from '../config/userConfig.js';
 
 import { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel } from './modelDetection.js';
 import { runWeb2Api } from './backends/web2api.js';
@@ -28,6 +28,7 @@ import { runDeepSeek } from './backends/deepseek.js';
 import { runOpenCode } from './backends/opencode.js';
 import { readUsageFromDatabase, getMaxStepIdx, getConversationsDir } from './protobuf.js';
 import type { AgyRunOptions, AgyRunResult } from './types.js';
+import { parseAgyTranscriptThoughtUpdates } from './transcriptStream.js';
 
 // Re-export all types and functions for backward compatibility
 export type { AgyRunOptions, AgyRunResult } from './types.js';
@@ -41,6 +42,7 @@ let _agyPath: string | undefined;
 
 /** Grace period (ms) between SIGINT and SIGKILL escalation on abort. */
 const ABORT_SIGKILL_GRACE_MS = 5000;
+const TRANSCRIPT_POLL_MS = 250;
 
 /** Path to the agy binary — prefer explicit env var, then search PATH, then common fallbacks. Cached after first resolution. */
 function getAgyPath(): string {
@@ -292,17 +294,61 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     let outputBuf = '';
     let streamJsonText = '';
     let streamJsonResult = '';
+    let thoughtBuf = '';
     let errBuf = '';
+    let transcriptConversationId: string | undefined = validConversationId;
+    let transcriptPollTimer: NodeJS.Timeout | undefined;
+    const processedTranscriptSteps = new Set<number>();
 
     const stdoutDecoder = new StringDecoder('utf-8');
     const stderrDecoder = new StringDecoder('utf-8');
 
     let accumulatedText = '';
 
+    const emitThought = (content: string): void => {
+      if (!content) return;
+      thoughtBuf += content;
+      opts.onActivity?.();
+      opts.onEvent?.({ type: 'thought', content });
+    };
+
+    const formatToolNote = (update: Record<string, any>): string => {
+      const name = String(update['tool_name'] || 'tool');
+      const info = update['tool_info'] as Record<string, any> | undefined;
+      const parameters = info?.['parameters'] as Record<string, any> | undefined;
+      const detail = parameters
+        ? Object.values(parameters).find((value) => typeof value === 'string' && value.trim())
+        : undefined;
+      return `[${name}]${detail ? ` ${String(detail).slice(0, 240)}` : ''}`;
+    };
+
+    const processTranscript = async (): Promise<void> => {
+      const id = transcriptConversationId;
+      if (!id || (!opts.onEvent && !opts.onChunk)) return;
+      const logsDir = path.join(getAgyDataDir(), 'brain', id, '.system_generated', 'logs');
+      let raw: string;
+      try {
+        raw = await fs.readFile(path.join(logsDir, 'transcript_full.jsonl'), 'utf8');
+      } catch {
+        try {
+          raw = await fs.readFile(path.join(logsDir, 'transcript.jsonl'), 'utf8');
+        } catch {
+          return;
+        }
+      }
+
+      for (const update of parseAgyTranscriptThoughtUpdates(raw, processedTranscriptSteps, startTime)) {
+        emitThought(update.content);
+      }
+    };
+
     const handleStreamJsonLine = (line: string): void => {
       if (!line.trim()) return;
       try {
         const event = JSON.parse(line) as Record<string, any>;
+        if (event['event'] === 'init' && typeof event['conversation_id'] === 'string') {
+          transcriptConversationId = event['conversation_id'];
+        }
         const update = event['step_update'] as Record<string, any> | undefined;
         const delta = typeof update?.['text_delta'] === 'string' ? update['text_delta'] : '';
         if (delta) {
@@ -310,6 +356,9 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
           accumulatedText += delta;
           onChunk?.(delta);
           opts.onEvent?.({ type: 'text', content: delta });
+        }
+        if (update?.['step_type'] === 'tool' && update['state'] === 'ACTIVE') {
+          emitThought(`${formatToolNote(update)}\n`);
         }
 
         const result = event['result'] as Record<string, any> | undefined;
@@ -350,6 +399,11 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       opts.onActivity?.();
     });
 
+    if (streamJson) {
+      transcriptPollTimer = setInterval(() => { void processTranscript(); }, TRANSCRIPT_POLL_MS);
+      transcriptPollTimer.unref?.();
+    }
+
     child.stderr.on('data', (chunk: Buffer) => {
       errBuf += stderrDecoder.write(chunk);
     });
@@ -377,6 +431,8 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     });
 
     child.on('close', async (code, signal) => {
+      if (transcriptPollTimer) clearInterval(transcriptPollTimer);
+      await processTranscript();
       const durationMs = Date.now() - startTime;
       // Flush decoders
       const finalStdout = stdoutDecoder.end();
@@ -399,7 +455,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
       // If abort already settled the promise, skip expensive DB side-effects
       if (settled) {
-        resolve({ conversationId: validConversationId ?? '', output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage: undefined });
+        const abortedOutput = thoughtBuf.trim()
+          ? `<thinking>${thoughtBuf.trim()}</thinking>\n\n${outputBuf}`
+          : outputBuf;
+        resolve({ conversationId: validConversationId ?? transcriptConversationId ?? '', output: abortedOutput, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage: undefined });
         return;
       }
       settled = true;
@@ -444,7 +503,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         }
       }
 
-      resolve({ conversationId: resolvedConvId, output: outputBuf, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage });
+      const finalOutput = thoughtBuf.trim()
+        ? `<thinking>${thoughtBuf.trim()}</thinking>\n\n${outputBuf}`
+        : outputBuf;
+      resolve({ conversationId: resolvedConvId || transcriptConversationId || '', output: finalOutput, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage });
     });
   });
 }

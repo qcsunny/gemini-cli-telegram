@@ -7,9 +7,9 @@
     "type": "recurring",
     "schedule": "05:15",
     "intervalMinutes": 1440,
-    "nextRun": 1786828500000,
+    "nextRun": 1786914900000,
     "active": true,
     "createdAt": 1786679026835,
-    "runCount": 2
+    "runCount": 3
   }
 ]
