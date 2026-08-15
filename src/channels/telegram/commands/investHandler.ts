@@ -50,6 +50,7 @@ import { getFundDataset, type FundDataset } from '../../../stock/provider/fund.j
 import { analyzeFund, type FundAnalysisResult } from '../../../stock/analyzer/fundAnalyzer.js';
 import { saveMessage } from '../../../agy/messageStore.js';
 import { getChannelModel } from '../../../core/modelRegistry.js';
+import { markdownToRichBlocks, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
 
 // ── Dimension types ──
 
@@ -698,9 +699,12 @@ function buildFundBlocks(result: FundAnalysisResult, ds: FundDataset): Array<Rec
   const info = ds.info;
   const blocks: Array<Record<string, any>> = [];
 
-  const dimText = result.dimensions
-    .map((d) => `• **${d.name}** (${d.score}分 - 权重${(d.weight * 100).toFixed(0)}%)\n  ${d.notes.join('；')}`)
-    .join('\n\n');
+  const dimText: Array<Record<string, any> | string> = result.dimensions.flatMap((d, i) => [
+    ...(i > 0 ? ['\n\n'] : []),
+    '• ',
+    { type: 'bold', text: [`${d.name}`] },
+    ` (${d.score}分 - 权重${(d.weight * 100).toFixed(0)}%)\n  ${d.notes.join('；')}`,
+  ]);
 
   blocks.push({
     type: 'paragraph',
@@ -711,14 +715,16 @@ function buildFundBlocks(result: FundAnalysisResult, ds: FundDataset): Array<Rec
       ` | 综合得分：`,
       { type: 'bold', text: [`${result.totalScore.toFixed(1)}/100`] },
       `\n\n成立日期：${info?.establishedDate || '未知'} | 规模：${info?.scaleB ? info.scaleB.toFixed(2) + ' 亿元' : '未知'}\n基金经理：${info?.manager || '未知'}${info?.managerTenure ? ` (任期 ${info.managerTenure.days} 天，任职回报 ${info.managerTenure.returnPct != null ? (info.managerTenure.returnPct >= 0 ? '+' : '') + info.managerTenure.returnPct.toFixed(2) + '%' : '--'})` : ''}\n费率：管理费 ${info?.managementFeePct != null ? info.managementFeePct + '%' : '--'} / 托管费 ${info?.custodyFeePct != null ? info.custodyFeePct + '%' : '--'}`,
-      result.redFlags.length ? `\n\n⚠️ **关注风险**：${result.redFlags.join('；')}` : '',
+      ...(result.redFlags.length
+        ? ['\n\n⚠️ ', { type: 'bold', text: ['关注风险'] }, `：${result.redFlags.join('；')}`]
+        : []),
     ],
   });
 
   blocks.push({
     type: 'details',
     summary: { type: 'bold', text: ['📊 七维规则引擎量化打分明细'] },
-    blocks: [{ type: 'paragraph', text: [dimText] }],
+    blocks: [{ type: 'paragraph', text: dimText }],
   });
 
   if (ds.topHoldings?.length) {
@@ -811,6 +817,28 @@ async function runInvestModel(opts: {
   return res;
 }
 
+/**
+ * Send the model-generated deep report as native rich blocks (Option A),
+ * falling back to raw rich markdown (Option C) when block conversion or the
+ * blocks send fails — mirroring the channelReply rich-message pipeline so
+ * `**bold**` and tables render instead of showing literal asterisks.
+ */
+async function sendInvestDeepReport(ctx: any, chatId: number, markdown: string): Promise<void> {
+  try {
+    const blocks = markdownToRichBlocks(markdown);
+    if (blocks.length > 0) {
+      const parts = splitRichBlocks(blocks, TELEGRAM_RICH_MAX_LENGTH);
+      for (const part of parts) {
+        await ctx.api.sendRichMessage(chatId, { blocks: part as any });
+      }
+      return;
+    }
+  } catch (err: any) {
+    logger.warn(`sendInvestDeepReport blocks failed: ${err.message || err}. Falling back to rich markdown`);
+  }
+  await ctx.api.sendRichMessage(chatId, { markdown });
+}
+
 export function registerInvestHandler(
   bot: Bot,
   sessionManager: SessionManager,
@@ -872,7 +900,7 @@ export function registerInvestHandler(
             conversationId,
           });
           if (res.exitCode === 0 && res.output) {
-            await ctx.api.sendRichMessage(ctx.chat.id, { markdown: res.output });
+            await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
           } else {
             await ctx.reply(`${ICONS.warning} 多标的对比报告生成失败（exit ${res.exitCode}）`);
           }
@@ -908,9 +936,7 @@ export function registerInvestHandler(
             conversationId,
           });
           if (res.exitCode === 0 && res.output) {
-            await ctx.api.sendRichMessage(ctx.chat.id, {
-              markdown: res.output,
-            });
+            await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
           } else {
             await ctx.reply(`${ICONS.warning} 基金深度报告生成失败（exit ${res.exitCode}）`);
           }
@@ -946,7 +972,7 @@ export function registerInvestHandler(
               conversationId,
             });
             if (res.exitCode === 0 && res.output) {
-              await ctx.api.sendRichMessage(ctx.chat.id, { markdown: res.output });
+              await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
             } else {
               await ctx.reply(`${ICONS.warning} 深度报告生成失败（exit ${res.exitCode}）`);
             }
@@ -1009,9 +1035,7 @@ export function registerInvestHandler(
           conversationId,
         });
         if (res.exitCode === 0 && res.output) {
-          await ctx.api.sendRichMessage(ctx.chat.id, {
-            markdown: res.output,
-          });
+          await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
         } else {
           await ctx.reply(`${ICONS.warning} 深度报告生成失败（exit ${res.exitCode}）`);
         }
