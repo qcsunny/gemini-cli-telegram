@@ -748,6 +748,47 @@ Thanks for reading! 🚀
       expect(html3).toContain('<code># 标题</code>');
       expect(html3).toContain('1. First line');
     });
+
+    it('should render unclosed triple-backticks quoted in prose as literal text instead of swallowing the rest', () => {
+      // Regression: a reasoning trace mentioning "I'll use ``` fences for code."
+      // used to open a real fence and swallow the remaining thinking content into
+      // one giant code block.
+      const md = "I'll use ``` fences for code.\n\nLet me write the final answer in Chinese.\n\nLet me write the content now.";
+      const blocks = markdownToRichBlocks(md);
+      const flat = JSON.stringify(blocks);
+      expect(flat).not.toContain('"type":"pre"');
+      expect(flat).not.toContain('"type":"code_block"');
+      expect(flat).toContain('fences for code');
+      expect(flat).toContain('Let me write the final answer in Chinese.');
+      expect(flat).toContain('Let me write the content now.');
+
+      const html = markdownToHtml(md);
+      expect(html).not.toContain('<pre>');
+      expect(html).toContain('Let me write the content now.');
+    });
+
+    it('should keep a properly closed fence glued to inline text working as a real code block', () => {
+      const input = '代码如下```python\nprint(1)\n```\n\n继续正文';
+      const blocks = markdownToRichBlocks(input);
+      const flat = JSON.stringify(blocks);
+      expect(flat).toContain('"type":"pre"');
+      expect(flat).toContain('print(1)');
+      expect(flat).toContain('继续正文');
+    });
+
+    it('should auto-close a standalone unclosed fence so it stays a code block', () => {
+      const normalized = normalizeMarkdownFences('```python\ndef foo():\n    pass\n### 下一章节');
+      const opens = (normalized.match(/```/g) || []).length;
+      expect(opens % 2).toBe(0);
+      expect(normalized).toMatch(/```$/);
+    });
+
+    it('should keep a literal <details> tag mentioned in prose as visible text in blocks', () => {
+      const blocks = markdownToRichBlocks('Fold >500 char sections with <details>, max 5 total');
+      const flat = JSON.stringify(blocks);
+      expect(flat).toContain('<details>');
+      expect(flat).toContain('max 5 total');
+    });
   });
 
   describe('findSafeCutPoint', () => {
