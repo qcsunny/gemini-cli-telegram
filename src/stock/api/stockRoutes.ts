@@ -241,9 +241,10 @@ export async function handleStockRoutes(req: IncomingMessage, res: ServerRespons
   }
 
   // 2. REST API: GET /api/stocks/{symbol} or /api/stocks/{symbol}/quote
+  //    (must not swallow /api/stocks/search — that is route 4 below)
   const decodedUrl = decodeURIComponent(url);
   const stockMatch = decodedUrl.match(/^\/api\/stocks\/([^/]+)(\/quote)?$/);
-  if (stockMatch && method === 'GET' && !url.includes('/candles')) {
+  if (stockMatch && method === 'GET' && !url.includes('/candles') && !url.includes('/search')) {
     const symbol = stockMatch[1].trim();
     const quote = await marketService.getQuote(symbol);
     if (!quote) {
