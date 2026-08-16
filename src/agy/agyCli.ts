@@ -362,10 +362,19 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (!line.trim()) return;
       // Opt-in contract discovery: log each distinct event *shape* once per run.
       if (dumpEventShapes) {
+        let name = '?';
+        try { name = String((JSON.parse(line) as any)['event'] ?? '<none>'); } catch { /* non-JSON line */ }
         const shape = describeAgyStreamEvent(line);
         if (shape && !seenEventShapes.has(shape.signature)) {
           seenEventShapes.add(shape.signature);
-          logger.info(`[agyCli] stream-json shape #${seenEventShapes.size}: ${shape.detail}`);
+          logger.info(`[agyCli] stream-json shape #${seenEventShapes.size} [event=${name}]: ${shape.detail}`);
+        } else if (!shape) {
+          // Unknown shape: still surface it so nothing is silently dropped.
+          const key = `raw:${name}`;
+          if (!seenEventShapes.has(key)) {
+            seenEventShapes.add(key);
+            logger.info(`[agyCli] stream-json shape #${seenEventShapes.size} [event=${name}] (unrecognized layout) raw="${line.slice(0, 200)}"`);
+          }
         }
       }
       try {

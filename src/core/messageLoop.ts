@@ -245,6 +245,15 @@ export async function processMessage(
 
       const turnStartTime = Date.now();
 
+      // Whether this run used agy's stream-json format. In that mode the live
+      // body is assembled from `text_delta`, which agy slices on byte boundaries
+      // and can SPLIT multi-byte characters (e.g. CJK) across deltas — producing
+      // replacement boxes (□). agy's final `result.response` (carried in
+      // result.output) is the complete, correctly-encoded answer, so the final
+      // body must come from there, not from the buffered deltas. Declared here
+      // (outside the retry loop) so finalize can read it after the loop ends.
+      const usedStreamJson = Boolean(getTuningConfig().streamJsonForChat);
+
       while (attempts < maxAttempts && !success && !signal.aborted) {
         attempts++;
         // Reset per-attempt buffers so a new attempt starts from a clean
@@ -303,6 +312,14 @@ export async function processMessage(
               // bash, file ops) unless explicitly disabled in tuning config.
               // /invest already passes allowTools: true on its own path.
               allowTools: getTuningConfig().autoApproveTools,
+              // When tuning.streamJsonForChat is on, request agy's stream-json
+              // format. We don't need the chunk payload ourselves — agyCli already
+              // re-emits each text_delta as an `onEvent({type:'text'})` — we only
+              // pass onChunk to flip the run into stream-json mode. The final body
+              // is taken from result.output (result.response), never from the
+              // buffered deltas, because of the multi-byte splitting described
+              // above.
+              onChunk: usedStreamJson ? () => resetInactivity() : undefined,
               onActivity: () => resetInactivity(),
               onSpawn: (pid) => { session.childPid = pid; },
               onEvent: (event) => {
@@ -455,6 +472,18 @@ export async function processMessage(
       }
 
       const finalResult = lastResult || { conversationId: '', output: answerBuffer, exitCode: 1 };
+
+      // In stream-json mode the live body was assembled from agy's incremental
+      // `text_delta`, which agy slices on byte boundaries and can split a
+      // multi-byte character (e.g. a CJK glyph) across two deltas — those halves
+      // surface as replacement boxes (□) once each delta is JSON-decoded on its
+      // own. agy's final `result.response` (carried in result.output) is the
+      // complete, correctly-encoded answer, so substitute it for the buffered
+      // deltas as the authoritative body. Text mode never hits this path
+      // (answerBuffer already equals the clean accumulated stdout).
+      if (usedStreamJson && finalResult.exitCode === 0 && finalResult.output) {
+        answerBuffer = finalResult.output;
+      }
 
       // 4. Save and persist the updated conversation ID
       if (finalResult.conversationId && finalResult.exitCode === 0) {
