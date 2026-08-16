@@ -122,13 +122,19 @@ export interface TurnTranscript {
 /**
  * Assemble one turn's complete non-body output from raw transcript lines.
  *
- * Interleaving is chronological (reasoning → call → result → reasoning …) because
- * the transcript is append-ordered; `created_at` only has second resolution and
- * would scramble same-second steps, so file order is authoritative.
+ * The turn's steps are stable-sorted by `step_index` before assembly: agy
+ * appends steps asynchronously, so the physical line order is NOT guaranteed to
+ * match step_index (measurements: ~23% of transcript files contain adjacent
+ * out-of-order steps, and the final answer step can land last). `created_at` is
+ * only used to cut the turn at `turnStartTime` — it has second resolution and
+ * would scramble same-second steps, so it can't order them. In multi-turn files
+ * `step_index` resets per turn, so the time filter MUST run before the sort.
+ * Steps are not deduplicated: agy can re-emit a planner step with the same
+ * index, but the re-emitted copy is usually the more complete one, and
+ * MAX_TRANSCRIPT_CHARS bounds any rare duplication.
  */
 export function buildTurnTranscript(lines: string[], turnStartTime: number): TurnTranscript {
   const parts: { kind: 'thinking' | 'tool'; text: string }[] = [];
-  const seenPlannerSteps = new Set<number>();
   let hasThinking = false;
   let used = 0;
   let truncated = false;
@@ -143,20 +149,18 @@ export function buildTurnTranscript(lines: string[], turnStartTime: number): Tur
     used += text.length;
   };
 
-  for (const line of lines) {
-    const parsed = safeParse(line);
-    if (!parsed) continue;
-    const createdAtTime = new Date(parsed.created_at).getTime();
-    if (isNaN(createdAtTime) || createdAtTime < turnStartTime) continue;
+  // Filter to this turn first, then stable-sort by step_index (see the JSDoc
+  // above: file order is not authoritative, and step_index resets per turn).
+  const turnSteps: { parsed: any; createdAt: number }[] = lines
+    .map(safeParse)
+    .filter((parsed): parsed is any => parsed !== null)
+    .map((parsed) => ({ parsed, createdAt: new Date(parsed.created_at).getTime() }))
+    .filter(({ createdAt }) => !isNaN(createdAt) && createdAt >= turnStartTime)
+    .sort((a, b) => (a.parsed.step_index ?? 0) - (b.parsed.step_index ?? 0));
 
+  for (const { parsed } of turnSteps) {
     if (parsed.type === 'PLANNER_RESPONSE') {
       if (parsed.status !== 'DONE') continue;
-      // agy can re-emit a planner step; keep the first copy so reasoning is not doubled.
-      const stepIndex = Number(parsed.step_index);
-      if (Number.isFinite(stepIndex)) {
-        if (seenPlannerSteps.has(stepIndex)) continue;
-        seenPlannerSteps.add(stepIndex);
-      }
       if (typeof parsed.thinking === 'string' && parsed.thinking.trim()) {
         hasThinking = true;
         push('thinking', parsed.thinking.trim());

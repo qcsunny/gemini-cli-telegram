@@ -132,7 +132,7 @@ describe('buildTurnTranscript', () => {
     JSON.stringify({ type: 'USER_INPUT', status: 'DONE', step_index: 12, created_at: '2026-08-15T01:38:11+08:00', content: 'the user prompt' }),
   ];
 
-  it('emits every non-body output of the turn in transcript order', () => {
+  it('emits every non-body output of the turn in step order', () => {
     const { markdown, hasThinking } = buildTurnTranscript(lines, TURN);
     expect(hasThinking).toBe(true);
 
@@ -174,11 +174,38 @@ describe('buildTurnTranscript', () => {
     expect(markdown).not.toContain('the answer body');
   });
 
-  it('does not double a planner step that agy re-emitted', () => {
+  it('keeps a re-emitted planner step (deliberately no dedup)', () => {
     const repeated = [lines[0], lines[0], lines[6]];
     const { markdown } = buildTurnTranscript(repeated, TURN);
-    expect(markdown.match(/first thought/g)).toHaveLength(1);
-    expect(markdown.match(/工具调用/g)).toHaveLength(1);
+    // agy's re-emitted copy is usually the more complete one, so the step is
+    // kept twice rather than collapsed — MAX_TRANSCRIPT_CHARS bounds the cost.
+    expect(markdown.match(/first thought/g)).toHaveLength(2);
+    expect(markdown.match(/工具调用/g)).toHaveLength(2);
+  });
+
+  it('reorders physically misordered lines into step order', () => {
+    // Physical line order is not authoritative (~23% of files misorder steps,
+    // e.g. the final answer can land last). Feed a scrambled order and require
+    // the assembly to follow step_index instead.
+    const scrambled = [lines[6], lines[2], lines[0], lines[3], lines[4], lines[5], lines[1]];
+    const { markdown } = buildTurnTranscript(scrambled, TURN);
+    const order = [
+      'first thought',
+      '**🔧 工具调用**',
+      '- `search_web` — Searching scientific papers：`Nature EBV Long COVID`',
+      TOOL_RESULT_LABELS.SEARCH_WEB,
+      TOOL_RESULT_LABELS.VIEW_FILE,
+      TOOL_RESULT_LABELS.GREP_SEARCH,
+      TOOL_RESULT_LABELS.LIST_DIRECTORY,
+      TOOL_RESULT_LABELS.RUN_COMMAND,
+      'second thought',
+    ];
+    let cursor = -1;
+    for (const needle of order) {
+      const at = markdown.indexOf(needle);
+      expect(at, `missing or out of order: ${needle}`).toBeGreaterThan(cursor);
+      cursor = at;
+    }
   });
 
   it('caps a single oversized tool result', () => {
