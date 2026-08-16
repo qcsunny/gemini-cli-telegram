@@ -270,6 +270,18 @@ const userConfigSchema = z.object({
     autoApproveTools: z.boolean().optional(),
     /** Stream reasoning/tool events into the inline details block. */
     inlineThinkingStreaming: z.boolean().optional(),
+    /**
+     * Dump the shape of every agy `--output-format stream-json` event to the log
+     * (event name + field names + truncated values, never full content).
+     *
+     * Diagnostic only: agy's event contract is undocumented, so this is how we
+     * find out which event actually carries `conversation_id` etc. Leave off in
+     * normal operation — it logs one line per event. config.json is re-read
+     * every few seconds, so toggling this needs no restart.
+     *
+     * Default: false.
+     */
+    debugAgyStreamEvents: z.boolean().optional(),
   }).optional(),
 });
 
@@ -323,6 +335,7 @@ export const TUNING_DEFAULTS = {
   maxDownloadBytes: 50 * 1024 * 1024,
   autoApproveTools: true,
   inlineThinkingStreaming: true,
+  debugAgyStreamEvents: false,
 };
 
 /**
@@ -339,6 +352,7 @@ type TuningConfig = {
   maxDownloadBytes: number;
   autoApproveTools: boolean;
   inlineThinkingStreaming: boolean;
+  debugAgyStreamEvents: boolean;
 };
 
 let _cachedTuning: TuningConfig | undefined;
