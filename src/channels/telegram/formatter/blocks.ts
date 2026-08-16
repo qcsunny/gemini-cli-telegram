@@ -199,8 +199,15 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
           if (token.children) walk(token.children, depth + 1);
           break;
         case 'text':
-        case 'code_inline':
           pushPlain(token.content ?? '');
+          break;
+        // markdown-it emits inline code as ONE self-closing token, so it has to be
+        // wrapped here — the code_open/code_close pair below never fires for it.
+        // Without this, every `backticked` span silently degrades to plain text.
+        case 'code_inline':
+          open('code');
+          pushPlain(token.content ?? '');
+          close('code');
           break;
         case 'softbreak':
         case 'hardbreak':

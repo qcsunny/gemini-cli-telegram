@@ -4,8 +4,7 @@ import {
   stripControlCharacters,
   sanitizeToolResultContent,
   formatToolCall,
-  collectTurnThinking,
-  buildToolChainSection,
+  buildTurnTranscript,
   TOOL_RESULT_LABELS,
 } from './transcript.js';
 
@@ -63,105 +62,142 @@ describe('formatToolCall', () => {
     expect(formatToolCall(tc)).toBe('- `run_command`：`node dist/bin/json.js ORCL`');
   });
 
+  it('surfaces agy PascalCase target arguments', () => {
+    expect(formatToolCall({ name: 'view_file', args: { AbsolutePath: '/tmp/a.jpg', toolAction: 'Viewing image' } }))
+      .toBe('- `view_file` — Viewing image：`/tmp/a.jpg`');
+    expect(formatToolCall({ name: 'grep_search', args: { Query: 'runAgyPrint', SearchPath: '/src' } }))
+      .toBe('- `grep_search`：`runAgyPrint`');
+    expect(formatToolCall({ name: 'list_dir', args: { DirectoryPath: '/src/agy' } }))
+      .toBe('- `list_dir`：`/src/agy`');
+    expect(formatToolCall({ name: 'read_url_content', args: { Url: 'https://example.com' } }))
+      .toBe('- `read_url_content`：`https://example.com`');
+    expect(formatToolCall({ name: 'write_to_file', args: { TargetFile: '/src/a.ts' } }))
+      .toBe('- `write_to_file`：`/src/a.ts`');
+  });
+
+  it('flattens multi-line details and neutralizes backticks so inline code stays intact', () => {
+    expect(formatToolCall({ name: 'run_command', args: { CommandLine: 'echo `date`\n  && ls' } }))
+      .toBe("- `run_command`：`echo 'date' && ls`");
+  });
+
   it('returns null for malformed calls', () => {
     expect(formatToolCall(null)).toBeNull();
     expect(formatToolCall({})).toBeNull();
   });
 });
 
-describe('collectTurnThinking', () => {
+describe('buildTurnTranscript', () => {
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
       status: 'DONE',
+      step_index: 1,
       created_at: '2026-08-15T01:38:13+08:00',
       thinking: '**Examining the Article**\n\nfirst thought',
-    }),
-    JSON.stringify({
-      type: 'PLANNER_RESPONSE',
-      status: 'DONE',
-      created_at: '2026-08-15T01:38:26+08:00',
-      thinking: '**Reviewing Rule Set**\n\nsecond thought',
-    }),
-    JSON.stringify({
-      type: 'PLANNER_RESPONSE',
-      status: 'DONE',
-      created_at: '2026-08-15T01:37:00+08:00',
-      thinking: 'stale pre-turn thought',
-    }),
-    JSON.stringify({ type: 'USER_INPUT', status: 'DONE', created_at: '2026-08-15T01:38:11+08:00', content: 'x' }),
-  ];
-
-  it('merges this-turn planner thinking chronologically and skips pre-turn entries', () => {
-    const merged = collectTurnThinking(lines, TURN);
-    expect(merged).toBe('**Examining the Article**\n\nfirst thought\n\n**Reviewing Rule Set**\n\nsecond thought');
-    expect(merged).not.toContain('stale pre-turn thought');
-  });
-
-  it('returns empty when nothing is in this turn', () => {
-    expect(collectTurnThinking(lines, new Date('2026-08-15T02:00:00+08:00').getTime())).toBe('');
-  });
-});
-
-describe('buildToolChainSection', () => {
-  const lines = [
-    JSON.stringify({
-      type: 'PLANNER_RESPONSE',
-      status: 'DONE',
-      created_at: '2026-08-15T01:38:13+08:00',
-      thinking: 't',
       tool_calls: [
-        {
-          name: 'search_web',
-          args: { query: '"Nature EBV Long COVID"', toolAction: '"Searching scientific papers"' },
-        },
+        { name: 'search_web', args: { query: '"Nature EBV Long COVID"', toolAction: '"Searching scientific papers"' } },
       ],
     }),
     JSON.stringify({
       type: 'SEARCH_WEB',
       status: 'DONE',
+      step_index: 2,
       created_at: '2026-08-15T01:38:17+08:00',
       content:
         'Created At: 2026-08-15T01:38:17+08:00\nCompleted At: 2026-08-15T01:38:26+08:00\nThe search for "Nature EBV Long COVID" returned the following summary:\nResearch published in *Nature* indicates a connection[1][2].',
     }),
+    JSON.stringify({ type: 'VIEW_FILE', status: 'DONE', step_index: 3, created_at: '2026-08-15T01:38:22+08:00', content: 'File Path: `file:///tmp/a.ts`' }),
+    JSON.stringify({ type: 'GREP_SEARCH', status: 'DONE', step_index: 4, created_at: '2026-08-15T01:38:23+08:00', content: '{"File":"/src/a.ts","LineNumber":1}' }),
+    JSON.stringify({ type: 'LIST_DIRECTORY', status: 'DONE', step_index: 5, created_at: '2026-08-15T01:38:24+08:00', content: '{"name":"a.ts"}' }),
     JSON.stringify({
       type: 'RUN_COMMAND',
-      status: 'DONE',
-      created_at: '2026-08-15T01:38:20+08:00',
-      content: 'Created At: 2026-08-15T01:38:20+08:00\nCompleted At: 2026-08-15T01:38:21+08:00\n\n\t\t\t\tThe command exited with code 0.\n\t\t\t\tOutput:\n\t\t\t\tok',
+      status: 'RUNNING',
+      step_index: 6,
+      created_at: '2026-08-15T01:38:25+08:00',
+      content: 'Created At: 2026-08-15T01:38:25+08:00\nTool is running as a background task with task id: t-1',
     }),
     JSON.stringify({
-      type: 'SEARCH_WEB',
+      type: 'PLANNER_RESPONSE',
       status: 'DONE',
-      created_at: '2026-08-15T01:37:00+08:00',
-      content: 'stale pre-turn result',
+      step_index: 7,
+      created_at: '2026-08-15T01:38:26+08:00',
+      thinking: '**Reviewing Rule Set**\n\nsecond thought',
+      content: 'the answer body',
     }),
-    JSON.stringify({ type: 'VIEW_FILE', status: 'DONE', created_at: '2026-08-15T01:38:22+08:00', content: 'File Path: `file:///tmp/a.ts`' }),
+    // Pre-turn noise plus prompt-side context that must never leak into the thought
+    JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', step_index: 8, created_at: '2026-08-15T01:37:00+08:00', thinking: 'stale pre-turn thought' }),
+    JSON.stringify({ type: 'SEARCH_WEB', status: 'DONE', step_index: 9, created_at: '2026-08-15T01:37:00+08:00', content: 'stale pre-turn result' }),
+    JSON.stringify({ type: 'EPHEMERAL_MESSAGE', status: 'DONE', step_index: 10, created_at: '2026-08-15T01:38:27+08:00', content: 'CRITICAL INSTRUCTION 1: reminder noise' }),
+    JSON.stringify({ type: 'CHECKPOINT', status: 'DONE', step_index: 11, created_at: '2026-08-15T01:38:27+08:00', content: '{{ CHECKPOINT 0 }} truncated context' }),
+    JSON.stringify({ type: 'USER_INPUT', status: 'DONE', step_index: 12, created_at: '2026-08-15T01:38:11+08:00', content: 'the user prompt' }),
   ];
 
-  it('emits tool calls and result sections, skipping pre-turn and unlisted types', () => {
-    const section = buildToolChainSection(lines, TURN);
-    expect(section).toContain('**🔧 工具调用**');
-    expect(section).toContain('- `search_web` — Searching scientific papers：`Nature EBV Long COVID`');
-    expect(section).toContain(`**${TOOL_RESULT_LABELS.SEARCH_WEB}**`);
-    expect(section).toContain('Research published in *Nature* indicates a connection[1][2].');
-    expect(section).not.toContain('Created At:');
-    expect(section).toContain(`**${TOOL_RESULT_LABELS.RUN_COMMAND}**`);
-    expect(section).toContain('The command exited with code 0.\n\t\t\t\tOutput:\n\t\t\t\tok');
-    expect(section).not.toContain('stale pre-turn result');
-    expect(section).not.toContain('VIEW_FILE');
+  it('emits every non-body output of the turn in transcript order', () => {
+    const { markdown, hasThinking } = buildTurnTranscript(lines, TURN);
+    expect(hasThinking).toBe(true);
+
+    const order = [
+      'first thought',
+      '**🔧 工具调用**',
+      '- `search_web` — Searching scientific papers：`Nature EBV Long COVID`',
+      TOOL_RESULT_LABELS.SEARCH_WEB,
+      TOOL_RESULT_LABELS.VIEW_FILE,
+      TOOL_RESULT_LABELS.GREP_SEARCH,
+      TOOL_RESULT_LABELS.LIST_DIRECTORY,
+      TOOL_RESULT_LABELS.RUN_COMMAND,
+      'second thought',
+    ];
+    let cursor = -1;
+    for (const needle of order) {
+      const at = markdown.indexOf(needle);
+      expect(at, `missing or out of order: ${needle}`).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+    expect(markdown).toContain('Research published in *Nature* indicates a connection[1][2].');
+    expect(markdown).not.toContain('Created At:');
   });
 
-  it('returns empty when no tools were used in this turn', () => {
-    const noTools = [
-      JSON.stringify({
-        type: 'PLANNER_RESPONSE',
-        status: 'DONE',
-        created_at: '2026-08-15T01:38:13+08:00',
-        thinking: 't',
-      }),
-      JSON.stringify({ type: 'SEARCH_WEB', status: 'DONE', created_at: '2026-08-15T01:37:00+08:00', content: 'stale pre-turn result' }),
+  it('keeps the status of a tool that has not finished yet', () => {
+    const { markdown } = buildTurnTranscript(lines, TURN);
+    expect(markdown).toContain(`**${TOOL_RESULT_LABELS.RUN_COMMAND} · RUNNING**`);
+    expect(markdown).toContain(`**${TOOL_RESULT_LABELS.SEARCH_WEB}**`);
+  });
+
+  it('excludes pre-turn entries and prompt-side context injections', () => {
+    const { markdown } = buildTurnTranscript(lines, TURN);
+    expect(markdown).not.toContain('stale pre-turn thought');
+    expect(markdown).not.toContain('stale pre-turn result');
+    expect(markdown).not.toContain('reminder noise');
+    expect(markdown).not.toContain('CHECKPOINT');
+    expect(markdown).not.toContain('the user prompt');
+    // The answer body itself stays out of the thought block
+    expect(markdown).not.toContain('the answer body');
+  });
+
+  it('does not double a planner step that agy re-emitted', () => {
+    const repeated = [lines[0], lines[0], lines[6]];
+    const { markdown } = buildTurnTranscript(repeated, TURN);
+    expect(markdown.match(/first thought/g)).toHaveLength(1);
+    expect(markdown.match(/工具调用/g)).toHaveLength(1);
+  });
+
+  it('caps a single oversized tool result', () => {
+    const huge = [
+      JSON.stringify({ type: 'RUN_COMMAND', status: 'DONE', step_index: 1, created_at: '2026-08-15T01:38:20+08:00', content: 'x'.repeat(5000) }),
     ];
-    expect(buildToolChainSection(noTools, TURN)).toBe('');
+    const { markdown, hasThinking } = buildTurnTranscript(huge, TURN);
+    expect(hasThinking).toBe(false);
+    expect(markdown).toContain('已截断');
+    expect(markdown.length).toBeLessThan(2000);
+  });
+
+  it('returns empty when the turn produced nothing outside the body', () => {
+    const bodyOnly = [
+      JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', step_index: 1, created_at: '2026-08-15T01:38:13+08:00', content: 'answer only' }),
+      JSON.stringify({ type: 'SEARCH_WEB', status: 'DONE', step_index: 2, created_at: '2026-08-15T01:37:00+08:00', content: 'stale pre-turn result' }),
+    ];
+    const { markdown, hasThinking } = buildTurnTranscript(bodyOnly, TURN);
+    expect(markdown).toBe('');
+    expect(hasThinking).toBe(false);
   });
 });
