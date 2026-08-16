@@ -23,6 +23,7 @@ import {
   getLogPath,
 } from './config/userConfig.js';
 import { startTelegramDaemon } from './index.js';
+import { systemdOwnerForPid, systemdRefusalMessage } from './utils/systemdUnit.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -106,6 +107,14 @@ program
           console.error(`[PID CHECK] Removing invalid pid file and continuing...`);
           try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
         } else if (pidIsAlive(existingPid) && isOurDaemonPid(existingPid)) {
+          // A systemd-owned instance is already serving. Starting a second one
+          // races for the same Telegram token (409 Conflict); in --live mode the
+          // PID-lock handover below would also stall for 60s before failing.
+          const owner = systemdOwnerForPid(existingPid);
+          if (owner) {
+            console.error(systemdRefusalMessage(existingPid, owner, 'restart'));
+            process.exit(1);
+          }
           if (!isLive) {
             console.error(`Daemon is already running (pid ${existingPid}). Use 'gemini-cli-telegram stop' first.`);
             process.exit(1);
@@ -292,6 +301,13 @@ program
       console.error(`[stop] pid ${pid} is alive but not this daemon. Removing stale pid file without killing it.`);
       fs.unlinkSync(pidPath);
       process.exit(0);
+    }
+    // Never SIGTERM a systemd-owned daemon: the unit would exit 0/SUCCESS, which
+    // Restart=on-failure does not restart, leaving the bot silently offline.
+    const stopOwner = systemdOwnerForPid(pid);
+    if (stopOwner) {
+      console.error(systemdRefusalMessage(pid, stopOwner, 'stop'));
+      process.exit(1);
     }
     try {
       process.kill(pid, 'SIGTERM');
