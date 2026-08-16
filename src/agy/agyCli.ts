@@ -184,10 +184,13 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   }
 
   // Build arg list
-  // The default print format buffers the response and writes plain text only
-  // at process exit. Inline replies need incremental deltas for their
-  // typewriter updates, so request agy's machine-readable streaming format
-  // only when the caller supplied a stream callback.
+  // The default print format streams the answer live in small chunks (measured
+  // ~20-180 bytes every ~0.2s), then dumps a large buffered remainder in one
+  // final write at process exit (the last chunk can hold ~50-80% of the whole
+  // answer). It is NOT a true incremental feed, so UIs that want smooth
+  // typewriter updates should re-chunk that final burst on their side. agy's
+  // machine-readable streaming format (`stream-json`) is only requested when
+  // the caller supplied a stream callback.
   const streamJson = Boolean(onChunk);
   const args: string[] = ['--print', prompt];
 
@@ -308,6 +311,19 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
     let accumulatedText = '';
 
+    // Serialize async onEvent handlers so that messageLoop's tail re-chunker
+    // (which awaits each oversized text event) finishes before 'done' fires and
+    // before this run resolves. Without this, the final edit would jump straight
+    // to the full answer, defeating the re-chunking.
+    let eventChain: Promise<unknown> = Promise.resolve();
+    const emitEvent = (event: { type: 'thought' | 'text' | 'done'; content?: string }): void => {
+      eventChain = eventChain
+        .then(() => opts.onEvent?.(event))
+        .catch((err) => {
+          logger.warn(`[agyCli] onEvent handler failed (continuing stream): ${err}`);
+        });
+    };
+
     const emitThought = (content: string): void => {
       if (!content) return;
       thoughtBuf += content;
@@ -388,7 +404,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
           streamJsonText += delta;
           accumulatedText += delta;
           onChunk?.(delta);
-          opts.onEvent?.({ type: 'text', content: delta });
+          emitEvent({ type: 'text', content: delta });
         }
         if (update?.['step_type'] === 'tool' && update['state'] === 'ACTIVE') {
           emitThought(`${formatToolNote(update)}\n`);
@@ -428,7 +444,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
       onChunk?.(text);
       // Emit incremental streaming event per chunk so the UI updates in real time
-      opts.onEvent?.({ type: 'text', content: text });
+      emitEvent({ type: 'text', content: text });
       opts.onActivity?.();
     });
 
@@ -483,7 +499,11 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         onChunk?.(finalStdout);
       }
 
-      opts.onEvent?.({ type: 'done' });
+      // Wait for the tail re-chunker (if any) to drain before signalling done,
+      // so the last edits happen while streaming rather than being skipped by
+      // finalize's isFinished guard.
+      emitEvent({ type: 'done' });
+      await eventChain;
       errBuf += stderrDecoder.end();
 
       const exitCode = code ?? 1;

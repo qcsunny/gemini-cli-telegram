@@ -36,6 +36,26 @@ const sleep = (ms: number) => {
   return new Promise(r => setTimeout(r, ms));
 };
 
+// agy's text mode streams small chunks while generating but dumps the remaining
+// ~50-80% of the answer in one final stdout write at process exit. Any single
+// text event above STREAM_RECHUNK_THRESHOLD is split into STREAM_SLICE_SIZE
+// slices paced STREAM_SLICE_GAP_MS apart so the tail renders as a sequence of
+// small draft edits instead of one giant jump. The gap must stay >= the debounce
+// window (userConfig debounceIntervalMs, default 350) or the debounce gate would
+// collapse the slices back into a single edit.
+const STREAM_RECHUNK_THRESHOLD = 800;
+const STREAM_SLICE_SIZE = 600;
+const STREAM_SLICE_GAP_MS = 400;
+
+// Ephemeral draft previews (sendRichMessageDraft) expire server-side after ~30s
+// without an update. While a draft-mode reply is streaming, this heartbeat
+// re-sends the current buffer so the preview stays alive even when agy's
+// thought/text events stall (thoughts flush at step boundaries, leaving long
+// silent gaps). Drafts can't be created until the first sendRichDraft, so the
+// tick checks reply.usesEphemeralDraft each time.
+const DRAFT_HEARTBEAT_MS = 20_000;
+
+
 // Callers use getTuningConfig() at runtime so SIGHUP-triggered cache clears take effect.
 
 /**
@@ -298,7 +318,56 @@ export async function processMessage(
           // so they never pollute the next attempt's shared stream buffers.
           let attemptStale = false;
           let result: AgyRunResult;
+          // Declared outside the try so the finally (which may run after a
+          // synchronous throw from setInterval) can clear it safely.
+          let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
           try {
+            // Tail re-chunking helpers (attempt-scoped because they close over
+            // the attempt's rawStreamBuffer).
+            const appendTextToStream = (text: string): void => {
+              rawStreamBuffer += text;
+              const parsed = extractThoughtAndContent(rawStreamBuffer);
+              if (parsed.thought) {
+                thoughtBuffer = parsed.thought;
+                // Use rawStreamBuffer for answerBuffer during streaming to avoid content loss
+                answerBuffer = rawStreamBuffer;
+              } else {
+                answerBuffer = rawStreamBuffer;
+              }
+              // Transition between thinking ↔ body phases based on buffer content
+              if (phase === 'thinking' && answerBuffer.trim()) {
+                phase = 'body';
+              } else if (phase === 'body' && !answerBuffer.trim()) {
+                phase = 'thinking';
+              }
+            };
+
+            const feedSlicedTail = async (text: string): Promise<void> => {
+              for (let i = 0; i < text.length; i += STREAM_SLICE_SIZE) {
+                appendTextToStream(text.slice(i, i + STREAM_SLICE_SIZE));
+                // Each slice becomes its own draft edit through the same
+                // debounce + adaptive-throttle pipeline; awaiting serializes
+                // them. The gap below prevents the debounce gate from collapsing
+                // consecutive slices.
+                await updateMessageStream(false).catch(err => {
+                  logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
+                });
+                await sleep(STREAM_SLICE_GAP_MS);
+              }
+            };
+
+            // Ephemeral-draft heartbeat: the ~30s preview must be re-sent even
+            // across long silent gaps (thoughts flush at agy step boundaries, so
+            // streaming can stall for tens of seconds). Cleared in the finally
+            // below. `unref()` keeps it from holding the event loop in tests.
+            heartbeatTimer = setInterval(() => {
+              if (isFinished || !reply.usesEphemeralDraft) return;
+              updateMessageStream(false).catch(err => {
+                logger.warn(`[messageLoop] Error in draft heartbeat updateMessageStream: ${err}`);
+              });
+            }, DRAFT_HEARTBEAT_MS);
+            (heartbeatTimer as unknown as { unref?: () => void }).unref?.();
+
             result = await withTimeout((resetInactivity, runSignal) => runAgyPrint({
               prompt: finalPrompt,
               cwd,
@@ -322,7 +391,7 @@ export async function processMessage(
               onChunk: usedStreamJson ? () => resetInactivity() : undefined,
               onActivity: () => resetInactivity(),
               onSpawn: (pid) => { session.childPid = pid; },
-              onEvent: (event) => {
+              onEvent: async (event) => {
                 if (attemptStale) return;
               // Any streamed event counts as progress: reset both the model-run
               // inactivity timer and the bot's stuck-session watchdog (_busySince)
@@ -341,20 +410,15 @@ export async function processMessage(
                 thoughtBuffer += event.content || '';
                 logger.info(`[TRACE] thought event → thoughtBuffer.len=${thoughtBuffer.length} preview="${(event.content || '').slice(0, 80).replace(/\n/g, '\\n')}"`);
               } else if (event.type === 'text') {
-                rawStreamBuffer += event.content || '';
-                const parsed = extractThoughtAndContent(rawStreamBuffer);
-                if (parsed.thought) {
-                  thoughtBuffer = parsed.thought;
-                  // Use rawStreamBuffer for answerBuffer during streaming to avoid content loss
-                  answerBuffer = rawStreamBuffer;
+                const text = event.content || '';
+                // Oversized chunks (agy's final gush) are split and each slice is
+                // flushed as its own edit so the tail doesn't jump in one go.
+                // The 'done' event only fires after this loop drains (agyCli
+                // serializes events), so finalize never outruns the tail.
+                if (text.length > STREAM_RECHUNK_THRESHOLD) {
+                  await feedSlicedTail(text);
                 } else {
-                  answerBuffer = rawStreamBuffer;
-                }
-                // Transition between thinking ↔ body phases based on buffer content
-                if (phase === 'thinking' && answerBuffer.trim()) {
-                  phase = 'body';
-                } else if (phase === 'body' && !answerBuffer.trim()) {
-                  phase = 'thinking';
+                  appendTextToStream(text);
                 }
               } else if (event.type === 'done') {
                 isDone = true;
@@ -373,6 +437,7 @@ export async function processMessage(
             // by the close-handler of a child we just SIGINT-killed on timeout)
             // must be ignored so they can't touch the next attempt's buffers.
             attemptStale = true;
+            if (heartbeatTimer) clearInterval(heartbeatTimer);
           }
 
           lastResult = result;
@@ -593,7 +658,8 @@ export async function processMessage(
             // Only send a brand-new message if no edit primitive is available
             // (e.g. plain-text fallback or a legacy non-rich reply object).
             if (reply.editRich) {
-              await reply.editRich!(currentMessageId, finalContent);
+              const persistedId = await reply.editRich!(currentMessageId, finalContent);
+              if (typeof persistedId === 'number' && persistedId > 0) currentMessageId = persistedId;
             } else if (reply.sendRich) {
               currentMessageId = await reply.sendRich!(finalContent);
             } else {
@@ -613,7 +679,8 @@ export async function processMessage(
               if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
               if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
               if (reply.editRich) {
-                await reply.editRich!(currentMessageId, finalContent);
+                const persistedId = await reply.editRich!(currentMessageId, finalContent);
+                if (typeof persistedId === 'number' && persistedId > 0) currentMessageId = persistedId;
               } else {
                 currentMessageId = await reply.sendRich!(finalContent);
               }

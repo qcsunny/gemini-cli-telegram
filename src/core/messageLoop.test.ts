@@ -23,6 +23,19 @@ vi.mock('../agy/conversationStore.js', () => ({
   setConversation: vi.fn(),
 }));
 
+// Mock messageCache so tests can observe which message id the finalize path
+// associates content with (draft id → real id handoff).
+const { mockMessageCache } = vi.hoisted(() => ({
+  mockMessageCache: {
+    set: vi.fn(),
+    get: vi.fn(),
+    getReplyContext: vi.fn(),
+    getLastReplyContextForChat: vi.fn(),
+    getLastReplyContext: vi.fn(),
+  },
+}));
+vi.mock('../utils/messageCache.js', () => ({ messageCache: mockMessageCache }));
+
 import { runAgyPrint } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
 
@@ -97,6 +110,64 @@ describe('processMessage', () => {
     expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('Hi there!'));
     expect(mockSession.conversationId).toBe('updated-conv-id');
     expect(setConversation).toHaveBeenCalledWith(123456, 'updated-conv-id', '/test/project/path', 'test-model', undefined);
+  });
+
+  it('splits oversized tail chunks (agy final gush) without losing content', async () => {
+    const longAnswer = 'A'.repeat(50) + '\n' + 'chunk content '.repeat(300);
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      if (options.onEvent) {
+        await options.onEvent({ type: 'text', content: 'start ' });
+        await options.onEvent({ type: 'text', content: longAnswer });
+        await options.onEvent({ type: 'done' });
+      }
+      return {
+        output: longAnswer,
+        conversationId: 'updated-conv-id',
+        exitCode: 0,
+      };
+    });
+
+    await processMessage(mockSession, { text: 'hello' }, mockReply, mockFormatter);
+
+    const editCalls = vi.mocked(mockReply.edit).mock.calls;
+    expect(editCalls.length).toBeGreaterThan(0);
+    const finalText = String(editCalls[editCalls.length - 1][1]);
+    expect(finalText).toContain('start');
+    expect(finalText).toContain('chunk content');
+    expect(finalText.length).toBeGreaterThan(4000);
+  });
+
+  it('captures the real message id returned by editRich when finalizing an ephemeral draft', async () => {
+    const input: MultimodalInput = { text: 'draft finalize' };
+
+    vi.mocked(runAgyPrint).mockImplementation(async (options) => {
+      if (options.onEvent) {
+        options.onEvent({ type: 'text', content: 'draft body' });
+        options.onEvent({ type: 'done' });
+      }
+      return { output: 'draft body', conversationId: 'conv-draft', exitCode: 0 };
+    });
+
+    // editRich resolves with the real persisted message id (channelReply's
+    // draft→sendRichMessage finalize path) — messageLoop must adopt it.
+    const richReply = {
+      ...mockReply,
+      sendRich: vi.fn().mockResolvedValue(100),
+      sendRichDraft: vi.fn().mockResolvedValue(42),
+      editRich: vi.fn().mockResolvedValue(9001),
+      editRichDraft: vi.fn(),
+    };
+
+    await processMessage(mockSession, input, richReply, mockFormatter);
+
+    // Streaming went through the ephemeral draft (id 42)...
+    expect(richReply.sendRichDraft).toHaveBeenCalled();
+    // ...finalize edited the draft id and adopted the returned real id 9001,
+    // which becomes the cache key (draft id → real message id handoff).
+    expect(richReply.editRich).toHaveBeenCalledWith(42, expect.objectContaining({ content: 'draft body' }));
+    expect(mockMessageCache.set).toHaveBeenCalledWith(9001, 'draft body', expect.anything(), 123456, 'test-model', 'conv-draft');
+    // No duplicate real message was sent by messageLoop itself.
+    expect(richReply.sendRich).not.toHaveBeenCalled();
   });
 
   it('should retry the same model 3x then downgrade to a lower model when rate limit (429) is hit', async () => {

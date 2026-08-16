@@ -20,6 +20,7 @@ import { markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks, buildFinalB
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
 import { draftBackoffUntil, record429Backoff, is429Error, get429RetryAfter } from './rateLimiter.js';
+import { getTuningConfig } from '../../../config/userConfig.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
 
 function buildRichMessagePayload(blocks: RichBlock[]): InputRichMessage<never> {
@@ -178,6 +179,23 @@ export function buildPrivateStreamingBlocks(text: string | StructuredMessage): R
     return bodyBlocks(content);
   }
   return markdownToRichBlocks('🧠 Thinking...');
+}
+
+/**
+ * Draft-mode variant of buildPrivateStreamingBlocks: while the thinking phase is
+ * streaming (thought growing, body not yet started) it emits a native `thinking`
+ * block — the official "Thinking…" placeholder — which is valid ONLY inside
+ * sendRichMessageDraft. Once the body starts, phase 2/3 render exactly like the
+ * real-message path (shared via buildPrivateStreamingBlocks).
+ */
+export function buildDraftStreamingBlocks(text: string | StructuredMessage): RichBlock[] {
+  if (typeof text === 'string') return buildPrivateStreamingBlocks(text);
+  const thought = stripThoughtTags(text.thought || '');
+  const content = stripThoughtTags(text.content || '');
+  if (thought && !content) {
+    return [{ type: 'thinking', text: thought }];
+  }
+  return buildPrivateStreamingBlocks(text);
 }
 
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
@@ -496,6 +514,13 @@ export function buildChannelReply(
 ): ChannelReply {
   const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
   const draftDisabled = options?.draftThrottleMs === 0;
+  // Official Bot API draft mode (sendRichMessageDraft): opt-in via tuning and
+  // private chats only (the API rejects non-private chats). The preview is
+  // ephemeral (~30s) — messageLoop keeps it alive with periodic heartbeat
+  // re-sends. Failures degrade to the real-message + editMessageText path.
+  const draftCapable = ctx.chat?.type === 'private' && getTuningConfig().useRichDraftPrivate;
+  let usingDraft = false;
+  const ephemeralDraftId = (Date.now() % 2_000_000_000) + 1;
   let localDraftsDisabled = false;
   let localConsecutiveDraftFailures = 0;
 
@@ -565,6 +590,11 @@ export function buildChannelReply(
   };
 
   const replyObj: ChannelReply = {
+    // Live flag messageLoop consults to decide whether the ephemeral-draft
+    // heartbeat should run (draft previews expire after ~30s without updates).
+    get usesEphemeralDraft(): boolean {
+      return usingDraft;
+    },
     sendRich: async (originalText: string | StructuredMessage): Promise<number> => {
       const textLen = typeof originalText === 'string'
         ? originalText.length
@@ -728,6 +758,26 @@ export function buildChannelReply(
       // Pace to avoid 429 on rapid stream updates (adaptive throttle).
       await throttleDraft(chatId, cacheMarkdown.length, draftDisabled);
 
+      // Draft mode: official sendRichMessageDraft — ephemeral animated preview
+      // that finalize later persists via sendRichMessage. On any failure fall
+      // through to the real-message path below.
+      if (draftCapable) {
+        const draftBlocks = buildDraftStreamingBlocks(originalText);
+        if (draftBlocks.length > 0 && validateBlocksPayload(draftBlocks)) {
+          try {
+            logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (draft mode): draftId=${ephemeralDraftId}, blocks=${draftBlocks.length}`);
+            await ctx.api.sendRichMessageDraft(chatId, ephemeralDraftId, buildRichMessagePayload(draftBlocks));
+            usingDraft = true;
+            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft ok: draftId=${ephemeralDraftId}`);
+            return ephemeralDraftId;
+          } catch (err: any) {
+            usingDraft = false;
+            if (is429Error(err)) markDraft429(chatId, get429RetryAfter(err));
+            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft failed, falling back to real message: ${err.message || err}`);
+          }
+        }
+      }
+
       // Visible streaming: send a REAL persisted message via sendRichMessage so the
       // user's client renders the bubble, then editMessageText updates it in place.
       //
@@ -785,6 +835,33 @@ export function buildChannelReply(
       logger.info(`[TRACE-EVIDENCE] editRichDraft called: messageId=${draftId}, isStreaming=${isStreaming}, originalTextLen=${logTextLen}, first100="${logFirst100.replace(/\n/g, '\\n')}"`);
 
       const cacheMarkdown = getCacheMarkdown(originalText);
+
+      // Draft mode: update the ephemeral preview via sendRichMessageDraft with
+      // the same draft_id — the client animates changes. Failures are soft
+      // (retry next frame); finalize always persists via sendRichMessage, so the
+      // final answer is never lost even if the preview stops updating.
+      if (usingDraft && draftCapable && draftId === ephemeralDraftId) {
+        const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
+        const shouldEdit = await throttleDraft(chatId, safeMarkdown.length, draftDisabled);
+        if (!shouldEdit) {
+          messageCache.set(draftId, cacheMarkdown);
+          return;
+        }
+        const draftBlocks = buildDraftStreamingBlocks(originalText);
+        if (draftBlocks.length > 0 && validateBlocksPayload(draftBlocks)) {
+          try {
+            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (draft update): draftId=${draftId}, blocks=${draftBlocks.length}`);
+            await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessagePayload(draftBlocks));
+            markDraftEditSuccess(chatId, safeMarkdown.length);
+            messageCache.set(draftId, cacheMarkdown);
+            return;
+          } catch (err: any) {
+            if (is429Error(err)) markDraft429(chatId, get429RetryAfter(err));
+            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft update failed (staying on draft, will retry): ${err.message || err}`);
+            return;
+          }
+        }
+      }
 
       // The draft is now a REAL persisted message (created by sendRichDraft via
       // sendRichMessage), so we update it in place with editMessageText for a
@@ -975,6 +1052,32 @@ export function buildChannelReply(
       logger.debug(`[DEBUG] editRich called: messageId=${messageId}, originalTextLen=${textLen}`);
 
       const cacheMarkdown = getCacheMarkdown(originalText);
+
+      // Draft mode finalize: persist the ephemeral preview as a REAL message via
+      // sendRichMessage and return its id so messageLoop stops tracking the
+      // draft. If persistence fails, fall through to in-place edit (the preview
+      // is not a real message, so that fails too — messageLoop's fallback then
+      // sends the final content as a fresh message).
+      if (usingDraft && draftCapable && messageId === ephemeralDraftId) {
+        try {
+          const blocks = getBlocksPayload(originalText);
+          if (blocks.length > 0 && validateBlocksPayload(blocks)) {
+            logger.info(`[FINALIZE] persisting ephemeral draft via sendRichMessage (draftId=${messageId})`);
+            const res = await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(blocks), {
+              message_thread_id: messageThreadId,
+            });
+            const realId = res.message_id;
+            usingDraft = false;
+            messageCache.set(realId, cacheMarkdown);
+            logger.info(`[FINALIZE] ephemeral draft persisted as real message id=${realId}`);
+            return realId;
+          }
+          throw new Error('final blocks empty or invalid');
+        } catch (err: any) {
+          usingDraft = false;
+          logger.warn(`[FINALIZE] draft persist via sendRichMessage failed: ${err.message || err}. Falling through to in-place edit.`);
+        }
+      }
 
       // The "draft" is now a REAL persisted message (created by sendRichDraft via
       // sendRichMessage), so finalization edits it in place — no second message.
