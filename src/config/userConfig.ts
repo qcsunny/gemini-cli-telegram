@@ -282,6 +282,24 @@ const userConfigSchema = z.object({
      * Default: false.
      */
     debugAgyStreamEvents: z.boolean().optional(),
+    /**
+     * Make the regular chat path (messageLoop) request agy's machine-readable
+     * `--output-format stream-json` stream, exactly like the inline path already
+     * does. agy's stream-json stdout is the only source that carries reasoning
+     * as it is generated; the transcript file is flushed by agy in one late batch
+     * at process exit, so polling it can never stream thinking in real time.
+     *
+     * The reason this is a flag and not the default: agy's event contract is
+     * undocumented and we have not yet confirmed which field carries the planner
+     * reasoning in this mode. Enable it together with `debugAgyStreamEvents` to
+     * capture the real event shapes, wire the correct field, then flip the
+     * default. Body text still arrives via the same `onEvent` text events the
+     * poll-based path already uses, so the downgrade risk is limited to the
+     * thinking extraction.
+     *
+     * Default: false.
+     */
+    streamJsonForChat: z.boolean().optional(),
   }).optional(),
 });
 
@@ -336,6 +354,7 @@ export const TUNING_DEFAULTS = {
   autoApproveTools: true,
   inlineThinkingStreaming: true,
   debugAgyStreamEvents: false,
+  streamJsonForChat: false,
 };
 
 /**
@@ -353,6 +372,7 @@ type TuningConfig = {
   autoApproveTools: boolean;
   inlineThinkingStreaming: boolean;
   debugAgyStreamEvents: boolean;
+  streamJsonForChat: boolean;
 };
 
 let _cachedTuning: TuningConfig | undefined;
