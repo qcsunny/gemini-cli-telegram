@@ -496,16 +496,31 @@ export async function processMessage(
         .replace(/<\/?think[^>]*>/gi, '')
         .trim();
 
-      if (thoughtBuffer.length === 0 && session.conversationId) {
-        const result = await readThoughtFromTranscript(session.conversationId, answerBuffer, turnStartTime);
+      // Recover this turn's complete non-body output (planner reasoning + tool
+      // calls + tool results) from agy's transcript. The transcript is a strict
+      // superset of what the live stream carries — streaming only relays reasoning
+      // text plus bare tool names — so when it is available it REPLACES the
+      // streamed buffer rather than being skipped, otherwise tool calls and their
+      // results would never reach the Thinking Process block. Non-agy backends
+      // have no transcript, so their real-time thought is kept as-is.
+      if (session.conversationId) {
+        const hadRealtimeThought = thoughtBuffer.length > 0;
+        const result = await readThoughtFromTranscript(
+          session.conversationId,
+          answerBuffer,
+          turnStartTime,
+          // Already streaming a thought: the transcript is fully written by the
+          // time agy exits, so poll briefly instead of blocking the reply for 5 s.
+          hadRealtimeThought ? { maxAttempts: 5 } : undefined,
+        );
         if (result && result.thought) {
           thoughtBuffer = result.thought;
-          logger.info(`[messageLoop] Successfully recovered thought from transcript: source=${result.source}, length=${thoughtBuffer.length}`);
+          logger.info(`[messageLoop] Successfully recovered thought from transcript: source=${result.source}, length=${thoughtBuffer.length}, replacedRealtime=${hadRealtimeThought}`);
+        } else if (hadRealtimeThought) {
+          logger.info(`[messageLoop] Keeping real-time thought — no transcript for conversation ${session.conversationId}: length=${thoughtBuffer.length}`);
         } else {
           logger.info(`[messageLoop] No thought recovered from transcript for conversation ${session.conversationId}`);
         }
-      } else if (thoughtBuffer.length > 0) {
-        logger.info(`[messageLoop] Skipping transcript thought recovery since thoughtBuffer already contains real-time thought: length=${thoughtBuffer.length}`);
       }
 
       // 5. Finalize: send the complete content as a real persisted message.

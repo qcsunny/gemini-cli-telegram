@@ -388,7 +388,9 @@ Thanks for reading! 🚀
     expect(content).toEqual([
       '内容有 ',
       { type: 'bold', text: ['粗体'] },
-      ' 和 代码 还有 ',
+      ' 和 ',
+      { type: 'code', text: ['代码'] },
+      ' 还有 ',
       { type: 'italic', text: ['斜体'] },
     ]);
     // The body paragraph after the details block is still present.

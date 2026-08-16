@@ -6,16 +6,54 @@ import { extractThoughtAndContent } from '../../agy/agyCli.js';
 import { normalizeText } from './textUtils.js';
 import { getAgyDataDir } from '../../config/userConfig.js';
 
+/**
+ * agy transcript step types that carry TOOL OUTPUT (what a tool returned to the
+ * model). Everything a turn produced outside the answer body belongs in the
+ * Thinking Process block, so every tool-result type MUST be listed here — an
+ * unlisted type is silently dropped from the rendered thought.
+ *
+ * Deliberately absent, because they are prompt-side context injected INTO the
+ * model rather than output produced BY it: USER_INPUT, CONVERSATION_HISTORY,
+ * CHECKPOINT, SYSTEM_MESSAGE, EPHEMERAL_MESSAGE, DIRECTORY_RULES.
+ */
 export const TOOL_RESULT_LABELS: Record<string, string> = {
   SEARCH_WEB: '🔍 联网搜索',
   READ_URL_CONTENT: '🔗 读取网页',
   RUN_COMMAND: '⚙️ 执行命令',
   CODE_ACTION: '💻 代码操作',
+  VIEW_FILE: '📄 读取文件',
+  GREP_SEARCH: '🔎 代码检索',
+  LIST_DIRECTORY: '📂 列出目录',
   MCP_TOOL: '🧩 MCP 工具',
+  INVOKE_SUBAGENT: '🤖 子代理',
+  ASK_QUESTION: '❓ 追问确认',
   GENERIC: '🛠 工具',
   GENERATE_IMAGE: '🎨 生成图片',
   ERROR_MESSAGE: '⚠️ 工具错误',
 };
+
+/**
+ * agy tool argument keys that identify WHAT a call operated on, most specific
+ * first. agy uses PascalCase for most tools (`AbsolutePath`, `CommandLine`,
+ * `Query`…) and lowercase only for a few (`query` on search_web), so both
+ * spellings must be probed or the call renders as a bare tool name.
+ */
+const TOOL_DETAIL_KEYS = [
+  'query', 'Query',
+  'CommandLine', 'command',
+  'AbsolutePath', 'TargetFile', 'path',
+  'DirectoryPath', 'SearchPath',
+  'Url', 'url',
+  'ToolName', 'ImageName', 'TaskId',
+  'Instruction', 'Prompt',
+];
+
+/** Inline-code detail cap for a single tool call. */
+const MAX_TOOL_DETAIL_CHARS = 240;
+/** Body cap for a single tool result, so one `cat` of a big file can't eat the block. */
+const MAX_TOOL_RESULT_CHARS = 1200;
+/** Overall cap for the assembled thought (reasoning + tool chain). */
+const MAX_TRANSCRIPT_CHARS = 8000;
 
 function safeParse(line: string): any {
   try {
@@ -26,7 +64,12 @@ function safeParse(line: string): any {
 }
 
 export function stripTimestampPrefix(content: string): string {
-  return content.replace(/^Created At:[\s\S]*?Completed At:.*?(?:\n+|$)/, '').trim();
+  return content
+    // Finished tools carry a Created At / Completed At pair …
+    .replace(/^Created At:[\s\S]*?Completed At:.*?(?:\n+|$)/, '')
+    // … while a still-running one only has Created At.
+    .replace(/^Created At:.*?(?:\n+|$)/, '')
+    .trim();
 }
 
 export function stripControlCharacters(text: string): string {
@@ -38,78 +81,164 @@ export function sanitizeToolResultContent(content: string): string {
   return cleaned.replace(/</g, '&lt;').replace(/>/g, '&gt;').trim();
 }
 
+/** Flatten a value into a single-line inline-code payload and cap its length. */
+function toInlineDetail(value: string): string {
+  const flat = value.replace(/\s+/g, ' ').replace(/`/g, "'").trim();
+  return flat.length > MAX_TOOL_DETAIL_CHARS ? `${flat.slice(0, MAX_TOOL_DETAIL_CHARS)}…` : flat;
+}
+
+function clampToolResult(body: string): string {
+  if (body.length <= MAX_TOOL_RESULT_CHARS) return body;
+  return `${body.slice(0, MAX_TOOL_RESULT_CHARS)}\n…（已截断 ${body.length - MAX_TOOL_RESULT_CHARS} 字符）`;
+}
+
 export function formatToolCall(tc: any): string | null {
   if (!tc || typeof tc.name !== 'string') return null;
   const args = tc.args && typeof tc.args === 'object' ? tc.args : {};
   const clean = (v: unknown): string =>
     typeof v === 'string' ? stripControlCharacters(v).replace(/^"|"$/g, '').replace(/^'|'$/g, '').trim() : '';
   const desc = clean(args.toolAction) || clean(args.toolSummary);
-  const detail = clean(args.query) || clean(args.CommandLine) || clean(args.command) || clean(args.path) || clean(args.url);
+  let detail = '';
+  for (const key of TOOL_DETAIL_KEYS) {
+    detail = clean(args[key]);
+    if (detail) break;
+  }
   let line = `- \`${tc.name}\``;
   if (desc) line += ` — ${desc}`;
-  if (detail) line += `：\`${detail}\``;
+  if (detail) line += `：\`${toInlineDetail(detail)}\``;
   return line;
 }
 
-export function collectTurnThinking(lines: string[], turnStartTime: number): string {
-  const parts: string[] = [];
-  for (const line of lines) {
-    const parsed = safeParse(line);
-    if (!parsed || parsed.type !== 'PLANNER_RESPONSE' || parsed.status !== 'DONE') continue;
-    const createdAtTime = new Date(parsed.created_at).getTime();
-    if (isNaN(createdAtTime) || createdAtTime < turnStartTime) continue;
-    if (typeof parsed.thinking === 'string' && parsed.thinking.trim()) parts.push(parsed.thinking.trim());
-  }
-  return parts.join('\n\n');
+export interface TurnTranscript {
+  /**
+   * Every non-body output of the turn, in transcript order: planner reasoning,
+   * the tool calls it issued, and what those tools returned.
+   */
+  markdown: string;
+  /** True when at least one planner step carried native reasoning text. */
+  hasThinking: boolean;
 }
 
-export function buildToolChainSection(lines: string[], turnStartTime: number): string {
-  const calls: string[] = [];
-  const results: { label: string; content: string }[] = [];
+/**
+ * Assemble one turn's complete non-body output from raw transcript lines.
+ *
+ * Interleaving is chronological (reasoning → call → result → reasoning …) because
+ * the transcript is append-ordered; `created_at` only has second resolution and
+ * would scramble same-second steps, so file order is authoritative.
+ */
+export function buildTurnTranscript(lines: string[], turnStartTime: number): TurnTranscript {
+  const parts: { kind: 'thinking' | 'tool'; text: string }[] = [];
+  const seenPlannerSteps = new Set<number>();
+  let hasThinking = false;
+  let used = 0;
+  let truncated = false;
+
+  const push = (kind: 'thinking' | 'tool', text: string): void => {
+    if (!text || truncated) return;
+    if (used + text.length > MAX_TRANSCRIPT_CHARS) {
+      truncated = true;
+      return;
+    }
+    parts.push({ kind, text });
+    used += text.length;
+  };
+
   for (const line of lines) {
     const parsed = safeParse(line);
     if (!parsed) continue;
     const createdAtTime = new Date(parsed.created_at).getTime();
     if (isNaN(createdAtTime) || createdAtTime < turnStartTime) continue;
-    if (parsed.type === 'PLANNER_RESPONSE' && parsed.status === 'DONE' && Array.isArray(parsed.tool_calls)) {
-      for (const tc of parsed.tool_calls) {
-        const formatted = formatToolCall(tc);
-        if (formatted) calls.push(formatted);
+
+    if (parsed.type === 'PLANNER_RESPONSE') {
+      if (parsed.status !== 'DONE') continue;
+      // agy can re-emit a planner step; keep the first copy so reasoning is not doubled.
+      const stepIndex = Number(parsed.step_index);
+      if (Number.isFinite(stepIndex)) {
+        if (seenPlannerSteps.has(stepIndex)) continue;
+        seenPlannerSteps.add(stepIndex);
       }
-    } else if (parsed.status === 'DONE' && TOOL_RESULT_LABELS[parsed.type] && typeof parsed.content === 'string') {
-      const body = sanitizeToolResultContent(stripTimestampPrefix(parsed.content));
-      if (body) results.push({ label: TOOL_RESULT_LABELS[parsed.type], content: body });
+      if (typeof parsed.thinking === 'string' && parsed.thinking.trim()) {
+        hasThinking = true;
+        push('thinking', parsed.thinking.trim());
+      }
+      const calls = (Array.isArray(parsed.tool_calls) ? parsed.tool_calls : [])
+        .map(formatToolCall)
+        .filter((l: string | null): l is string => Boolean(l));
+      if (calls.length) push('tool', `**🔧 工具调用**\n\n${calls.join('\n')}`);
+      continue;
+    }
+
+    const label = TOOL_RESULT_LABELS[parsed.type];
+    if (!label) continue;
+    const body = sanitizeToolResultContent(stripTimestampPrefix(String(parsed.content ?? '')));
+    if (!body) continue;
+    // Background tools report RUNNING first and finish in a later step; keep the
+    // status so a still-running task is not mistaken for a completed one.
+    const status = parsed.status === 'DONE' ? '' : ` · ${String(parsed.status ?? '')}`;
+    push('tool', `**${label}${status}**\n\n${clampToolResult(body)}`);
+  }
+
+  if (truncated) parts.push({ kind: 'tool', text: '…（本轮工具日志过长，已截断）' });
+
+  let markdown = '';
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) {
+      // A rule separates tool activity from prose; consecutive reasoning blocks
+      // just get a blank line so a plain thought stays readable.
+      markdown += parts[i].kind === 'tool' || parts[i - 1].kind === 'tool' ? '\n\n---\n\n' : '\n\n';
+    }
+    markdown += parts[i].text;
+  }
+
+  return { markdown: markdown.trim(), hasThinking };
+}
+
+/**
+ * Read one turn's transcript lines, preferring `transcript_full.jsonl`:
+ * `transcript.jsonl` truncates long `content` fields (marked by
+ * `truncated_fields`), which would clip tool results and break answer matching.
+ */
+async function readTranscriptLines(logsDir: string): Promise<{ lines: string[]; filePath: string } | null> {
+  for (const name of ['transcript_full.jsonl', 'transcript.jsonl']) {
+    const filePath = path.join(logsDir, name);
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8');
+      if (!raw.trim()) continue;
+      return { lines: raw.trim().split('\n'), filePath };
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        logger.debug(`[messageLoop] Error reading ${filePath}: ${err.message || err}`);
+      }
     }
   }
-  const sections: string[] = [];
-  if (calls.length) sections.push('**🔧 工具调用**\n\n' + calls.join('\n'));
-  for (const r of results) sections.push(`**${r.label}**\n\n${r.content}`);
-  if (!sections.length) return '';
-  return '\n\n---\n\n' + sections.join('\n\n');
+  return null;
 }
 
 export async function readThoughtFromTranscript(
   conversationId: string,
   answerBuffer: string,
-  turnStartTime: number
+  turnStartTime: number,
+  opts?: { maxAttempts?: number }
 ): Promise<{ thought: string; source: string } | null> {
   if (process.env['VITEST'] || process.env['NODE_ENV'] === 'test') {
     return null;
   }
   const startTime = Date.now();
   const baseDir = getAgyDataDir();
+  const brainDir = path.join(baseDir, 'brain', conversationId);
+  const logsDir = path.join(brainDir, '.system_generated', 'logs');
 
-  const filePath = path.join(
-    baseDir,
-    'brain',
-    conversationId,
-    '.system_generated',
-    'logs',
-    'transcript.jsonl'
-  );
+  // Only native agy runs have a brain/ directory. opencode/deepseek/web2api use
+  // synthetic conversation ids, so polling them for seconds is pure added latency.
+  try {
+    await fs.access(brainDir);
+  } catch {
+    logger.debug(`[messageLoop] [TRANSCRIPT] No brain dir for conversationId=${conversationId} — not an agy conversation`);
+    return null;
+  }
 
   let attempts = 0;
-  const maxAttempts = 50; // 50 * 100ms = 5 seconds total
+  const maxAttempts = opts?.maxAttempts ?? 50; // 50 * 100ms = 5 seconds total
 
   // Normalize the expected answer buffer for accurate validation
   const normAnswer = normalizeText(answerBuffer);
@@ -117,10 +246,9 @@ export async function readThoughtFromTranscript(
 
   while (attempts < maxAttempts) {
     attempts++;
-    try {
-      const raw = await fs.readFile(filePath, 'utf-8');
-      const lines = raw.trim().split('\n');
-      
+    const transcript = await readTranscriptLines(logsDir);
+    if (transcript) {
+      const { lines, filePath } = transcript;
       let foundStep: any = null;
       let matchedReason = '';
 
@@ -161,37 +289,41 @@ export async function readThoughtFromTranscript(
         const stats = await fs.stat(filePath);
         const latency = Date.now() - startTime;
 
-        // Merge this turn's full reasoning chain (all PLANNER_RESPONSE thinking,
-        // chronological), then append the tool-chain log (tool calls + results).
-        const mergedThinking = collectTurnThinking(lines, turnStartTime);
-        const toolChain = buildToolChainSection(lines, turnStartTime);
+        // The turn's full non-body output: reasoning + tool calls + tool results.
+        const turn = buildTurnTranscript(lines, turnStartTime);
 
         // Priority 1: native Gemini reasoning tokens
-        if (mergedThinking) {
-          const thought = (mergedThinking + toolChain).trim();
-          logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=thinking, length=${thought.length}, thoughtLen=${mergedThinking.length}, toolChainLen=${toolChain.length}, hasNewlines=${thought.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
-          return { thought, source: 'thinking' };
+        if (turn.hasThinking && turn.markdown) {
+          logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=thinking, length=${turn.markdown.length}, hasNewlines=${turn.markdown.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
+          return { thought: turn.markdown, source: 'thinking' };
         }
 
-        // Priority 2: parsed.content extracted thought
+        // Priority 2: parsed.content extracted thought, still carrying the tool chain
         if (foundStep.content && typeof foundStep.content === 'string') {
           const { thought } = extractThoughtAndContent(foundStep.content);
           if (thought.trim()) {
-            const recovered = (thought.trim() + toolChain).trim();
-            logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=content:extracted, length=${recovered.length}, thoughtLen=${thought.trim().length}, toolChainLen=${toolChain.length}, hasNewlines=${recovered.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
+            const recovered = turn.markdown
+              ? `${thought.trim()}\n\n---\n\n${turn.markdown}`
+              : thought.trim();
+            logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, fileSize=${stats.size}, mtime=${stats.mtime.toISOString()}, waitCount=${attempts}, source=content:extracted, length=${recovered.length}, hasNewlines=${recovered.includes('\n')}, latency=${latency}ms, matchedReason="${matchedReason}", normAnswerLen=${normAnswer.length}`);
             return { thought: recovered, source: 'content:extracted' };
           }
         }
-      }
-    } catch (err: any) {
-      if (err.code !== 'ENOENT') {
-        logger.debug(`[messageLoop] Error polling transcript: ${err.message || err}`);
+
+        // Priority 3: no reasoning at all, but tools ran — their log is still
+        // non-body output and must not be dropped.
+        if (turn.markdown) {
+          logger.info(`[messageLoop] [TRANSCRIPT] Success: conversationId=${conversationId}, filePath=${filePath}, waitCount=${attempts}, source=toolchain, length=${turn.markdown.length}, latency=${latency}ms, matchedReason="${matchedReason}"`);
+          return { thought: turn.markdown, source: 'toolchain' };
+        }
       }
     }
-    await new Promise(resolve => setTimeout(resolve, 100));
+    if (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
   }
 
   const latency = Date.now() - startTime;
-  logger.warn(`[messageLoop] [TRANSCRIPT] Timeout waiting for transcript: conversationId=${conversationId}, filePath=${filePath}, waitCount=${attempts}, latency=${latency}ms`);
+  logger.warn(`[messageLoop] [TRANSCRIPT] Timeout waiting for transcript: conversationId=${conversationId}, logsDir=${logsDir}, waitCount=${attempts}, latency=${latency}ms`);
   return null;
 }
