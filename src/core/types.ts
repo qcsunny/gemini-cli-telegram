@@ -63,6 +63,10 @@ export interface ChannelReply {
   editRichDraft?(draftId: number, text: string | StructuredMessage, isStreaming?: boolean): Promise<void>;
   sendRichDraftBlocks?(draftId: number, blocks: unknown[]): Promise<number>;
   editRichBlocks?(messageId: number, blocks: unknown[]): Promise<number | void>;
+  // True while a reply is rendering through an ephemeral official draft
+  // (sendRichMessageDraft): messageLoop runs a heartbeat to keep the ~30s
+  // preview alive until finalize persists it via sendRichMessage.
+  usesEphemeralDraft?: boolean;
 }
 
 /**

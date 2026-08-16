@@ -17,8 +17,10 @@ export interface AgyRunOptions {
   conversationId?: string;
   /** Called with each incremental chunk of output text. */
   onChunk?: (chunk: string) => void;
-  /** Called with structured streaming events */
-  onEvent?: (event: AgyStreamEvent) => void;
+  /** Called with structured streaming events. May return a Promise so the
+   *  caller can serialize long-running handlers (e.g. tail re-chunking) with
+   *  the subsequent 'done' event. */
+  onEvent?: (event: AgyStreamEvent) => void | Promise<void>;
   /** Called on any streamed progress; used by the caller to reset an inactivity timer. */
   onActivity?: () => void;
   /** Called when the agy child process is successfully spawned. */

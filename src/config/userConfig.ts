@@ -300,6 +300,18 @@ const userConfigSchema = z.object({
      * Default: false.
      */
     streamJsonForChat: z.boolean().optional(),
+    /**
+     * Stream private-chat replies through the official Bot API draft mechanism:
+     * `sendRichMessageDraft` for the animated ephemeral preview, then
+     * `sendRichMessage` at finalize to persist the real message. The draft is a
+     * temporary ~30s preview that must be kept alive with periodic re-sends
+     * (messageLoop heartbeat) and only works in private chats, so this is off by
+     * default. Groups/supergroups always keep the real-message + editMessageText
+     * path regardless of this flag.
+     *
+     * Default: false.
+     */
+    useRichDraftPrivate: z.boolean().optional(),
   }).optional(),
 });
 
@@ -355,6 +367,7 @@ export const TUNING_DEFAULTS = {
   inlineThinkingStreaming: true,
   debugAgyStreamEvents: false,
   streamJsonForChat: false,
+  useRichDraftPrivate: false,
 };
 
 /**
@@ -373,6 +386,7 @@ type TuningConfig = {
   inlineThinkingStreaming: boolean;
   debugAgyStreamEvents: boolean;
   streamJsonForChat: boolean;
+  useRichDraftPrivate: boolean;
 };
 
 let _cachedTuning: TuningConfig | undefined;
