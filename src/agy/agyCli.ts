@@ -19,7 +19,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
-import { getAgyDataDir, getStockMarketApiKey, loadUserConfig } from '../config/userConfig.js';
+import { getAgyDataDir, getStockMarketApiKey, loadUserConfig, getTuningConfig } from '../config/userConfig.js';
 
 import { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel } from './modelDetection.js';
 import { runWeb2Api } from './backends/web2api.js';
@@ -28,7 +28,7 @@ import { runDeepSeek } from './backends/deepseek.js';
 import { runOpenCode } from './backends/opencode.js';
 import { readUsageFromDatabase, getMaxStepIdx, getConversationsDir } from './protobuf.js';
 import type { AgyRunOptions, AgyRunResult } from './types.js';
-import { parseAgyTranscriptThoughtUpdates } from './transcriptStream.js';
+import { parseAgyTranscriptThoughtUpdates, describeAgyStreamEvent, pickNewConversationId } from './transcriptStream.js';
 
 // Re-export all types and functions for backward compatibility
 export type { AgyRunOptions, AgyRunResult } from './types.js';
@@ -299,6 +299,9 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     let transcriptConversationId: string | undefined = validConversationId;
     let transcriptPollTimer: NodeJS.Timeout | undefined;
     const processedTranscriptSteps = new Set<number>();
+    // Diagnostic: read once per run so a mid-run config edit can't split the dedupe set.
+    const dumpEventShapes = getTuningConfig().debugAgyStreamEvents;
+    const seenEventShapes = new Set<string>();
 
     const stdoutDecoder = new StringDecoder('utf-8');
     const stderrDecoder = new StringDecoder('utf-8');
@@ -323,8 +326,21 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     };
 
     const processTranscript = async (): Promise<void> => {
-      const id = transcriptConversationId;
-      if (!id || (!opts.onEvent && !opts.onChunk)) return;
+      if (!opts.onEvent && !opts.onChunk) return;
+
+      let id = transcriptConversationId;
+      if (!id) {
+        // A brand-new conversation has no id until agy creates its .db file.
+        // Without --output-format stream-json there is no `init` event either,
+        // so the filesystem diff the close handler uses is the only way to learn
+        // it while the run is still going.
+        if (validConversationId) return;
+        id = pickNewConversationId(before, await snapshotConversations());
+        if (!id) return;
+        transcriptConversationId = id;
+        logger.info(`[agyCli] Discovered conversation UUID mid-run: ${id}`);
+      }
+
       const logsDir = path.join(getAgyDataDir(), 'brain', id, '.system_generated', 'logs');
       let raw: string;
       try {
@@ -344,6 +360,14 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
 
     const handleStreamJsonLine = (line: string): void => {
       if (!line.trim()) return;
+      // Opt-in contract discovery: log each distinct event *shape* once per run.
+      if (dumpEventShapes) {
+        const shape = describeAgyStreamEvent(line);
+        if (shape && !seenEventShapes.has(shape.signature)) {
+          seenEventShapes.add(shape.signature);
+          logger.info(`[agyCli] stream-json shape #${seenEventShapes.size}: ${shape.detail}`);
+        }
+      }
       try {
         const event = JSON.parse(line) as Record<string, any>;
         if (event['event'] === 'init' && typeof event['conversation_id'] === 'string') {
@@ -399,7 +423,11 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       opts.onActivity?.();
     });
 
-    if (streamJson) {
+    // Poll whenever anything is listening — reading the transcript file has
+    // nothing to do with the stdout format. Gating this on `streamJson` meant
+    // regular chat (which passes onEvent but no onChunk) never streamed thinking
+    // at all; only the inline path did. Mirrors the guard in backends/opencode.ts.
+    if (opts.onEvent || opts.onChunk) {
       transcriptPollTimer = setInterval(() => { void processTranscript(); }, TRANSCRIPT_POLL_MS);
       transcriptPollTimer.unref?.();
     }
@@ -490,6 +518,13 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         } catch (e) {
           logger.warn(`[agyCli] Conversation UUID detection failed: ${e}`);
         }
+      }
+
+      // If the mid-run guess disagrees, thinking streamed during this turn came
+      // from the wrong conversation — worth knowing, since the final thought is
+      // re-read from the correct transcript and would silently paper over it.
+      if (transcriptConversationId && resolvedConvId && transcriptConversationId !== resolvedConvId) {
+        logger.warn(`[agyCli] Mid-run conversation guess ${transcriptConversationId} != resolved ${resolvedConvId}; streamed thinking may have come from another conversation`);
       }
 
       let usage: AgyRunResult['usage'] | undefined;
