@@ -21,11 +21,12 @@ import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
 import { getAgyDataDir, getStockMarketApiKey, loadUserConfig, getTuningConfig } from '../config/userConfig.js';
 
-import { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel } from './modelDetection.js';
+import { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel, isClaudeCliModel } from './modelDetection.js';
 import { runWeb2Api } from './backends/web2api.js';
 import { runDeepSeek } from './backends/deepseek.js';
 
 import { runOpenCode } from './backends/opencode.js';
+import { runClaudeCli } from './backends/claude.js';
 import { readUsageFromDatabase, getMaxStepIdx, getConversationsDir } from './protobuf.js';
 import { createEventQueue } from './eventQueue.js';
 import type { AgyRunOptions, AgyRunResult, AgyStreamEvent } from './types.js';
@@ -33,8 +34,8 @@ import { parseAgyTranscriptThoughtUpdates, describeAgyStreamEvent, pickNewConver
 
 // Re-export all types and functions for backward compatibility
 export type { AgyRunOptions, AgyRunResult } from './types.js';
-export { isWeb2ApiModel, isDeepSeekModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
-export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearOpenCodeHistory } from './conversationManager.js';
+export { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel, isClaudeCliModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
+export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearOpenCodeHistory, clearClaudeHistory } from './conversationManager.js';
 export { extractUsageFromProto, readUsageFromDatabase, readConversationHistory } from './protobuf.js';
 export { normalizeThinkingTags, extractThoughtBlocksAndSegments, extractThoughtAndContent } from './thoughtParser.js';
 export { getConversationsDir } from './protobuf.js';
@@ -164,6 +165,12 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   if (opts.model && isOpenCodeModel(opts.model)) {
     logger.info(`[agyCli] Routing to OpenCode: model=${opts.model}`);
     return runOpenCode(optsWithProxy);
+  }
+
+  // Route Claude CLI models to the local claude binary
+  if (opts.model && isClaudeCliModel(opts.model)) {
+    logger.info(`[agyCli] Routing to Claude CLI: model=${opts.model}`);
+    return runClaudeCli(optsWithProxy);
   }
 
   const { prompt, cwd, conversationId, onChunk, signal, extraDirs, model, printTimeout, allowTools } = optsWithProxy;

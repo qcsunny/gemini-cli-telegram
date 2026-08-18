@@ -27,6 +27,13 @@ export function isOpenCodeModel(model: string): boolean {
   return model in cfg.routing && model.startsWith('OpenCode:');
 }
 
+/** Returns true if the model name has a routing entry pointing to claude CLI */
+export function isClaudeCliModel(model: string): boolean {
+  const cfg = loadModelsConfig();
+  if (!cfg) return false;
+  return model in cfg.routing && (model.startsWith('Claude CLI:') || model.startsWith('ClaudeCode:'));
+}
+
 let _defaultModels: string[] | undefined;
 
 function getDefaultModels(): string[] {

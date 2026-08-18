@@ -9,6 +9,7 @@ import {
   readConversationHistory,
   isWeb2ApiModel,
   isDeepSeekModel,
+  isClaudeCliModel,
   getAvailableModels,
 } from '../agy/agyCli.js';
 
@@ -287,6 +288,13 @@ describe('isWeb2ApiModel / isDeepSeekModel', () => {
   it('should not identify non-DeepSeek models', async () => {
     expect(isDeepSeekModel('Gemini 3.6 Flash (High)')).toBe(false);
     expect(isDeepSeekModel('Web2API: Gemini Auto')).toBe(false);
+  });
+
+  it('should identify Claude CLI models', async () => {
+    expect(isClaudeCliModel('Claude CLI: Claude Opus 5')).toBe(true);
+    expect(isClaudeCliModel('Claude Opus 4.6 (Thinking)')).toBe(false);
+    expect(isClaudeCliModel('OpenCode: Claude Opus 5')).toBe(false);
+    expect(isClaudeCliModel('Web2API: Gemini Auto')).toBe(false);
   });
 });
 
