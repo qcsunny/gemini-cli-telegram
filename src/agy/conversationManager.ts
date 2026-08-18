@@ -18,6 +18,7 @@ export const deepseekHistories = new Map<string, Web2ApiMessage[]>();
 
 export const opencodeHistories = new Map<string, Web2ApiMessage[]>();
 export const claudeHistories = new Map<string, Web2ApiMessage[]>();
+export const codexHistories = new Map<string, Web2ApiMessage[]>();
 
 export function clearOpenCodeHistory(conversationId: string): void {
   opencodeHistories.delete(conversationId);
@@ -25,6 +26,10 @@ export function clearOpenCodeHistory(conversationId: string): void {
 
 export function clearClaudeHistory(conversationId: string): void {
   claudeHistories.delete(conversationId);
+}
+
+export function clearCodexHistory(conversationId: string): void {
+  codexHistories.delete(conversationId);
 }
 
 export function makeWeb2ApiConvId(): string {
@@ -41,6 +46,10 @@ export function makeOpenCodeConvId(): string {
 
 export function makeClaudeConvId(): string {
   return `claude-${globalThis.crypto.randomUUID()}`;
+}
+
+export function makeCodexConvId(): string {
+  return `codex-${globalThis.crypto.randomUUID()}`;
 }
 
 /** Register known conversation IDs from SQLite on startup (lazy loading). */

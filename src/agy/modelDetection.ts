@@ -34,6 +34,13 @@ export function isClaudeCliModel(model: string): boolean {
   return model in cfg.routing && (model.startsWith('Claude CLI:') || model.startsWith('ClaudeCode:'));
 }
 
+/** Returns true if the model name has a routing entry pointing to codex CLI */
+export function isCodexModel(model: string): boolean {
+  const cfg = loadModelsConfig();
+  if (!cfg) return false;
+  return model in cfg.routing && (model.startsWith('Codex:') || model.startsWith('Codex-CLI:'));
+}
+
 let _defaultModels: string[] | undefined;
 
 function getDefaultModels(): string[] {
