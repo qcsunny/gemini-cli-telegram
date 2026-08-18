@@ -18,10 +18,29 @@ import type { InputRichMessage } from '@grammyjs/types/rich.js';
 import type { RichBlock } from '../richMessage.js';
 import { markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks, buildFinalBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
 import { logger } from '../../../utils/logger.js';
+import { extractThoughtAndContent } from '../../../agy/thoughtParser.js';
 import { messageCache } from '../../../utils/messageCache.js';
 import { draftBackoffUntil, record429Backoff, is429Error, get429RetryAfter } from './rateLimiter.js';
 import { getTuningConfig } from '../../../config/userConfig.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
+
+export interface TelegramApiError {
+  error_code?: number;
+  description?: string;
+  message: string;
+}
+
+export function asApiError(err: unknown): TelegramApiError {
+  if (typeof err === 'object' && err !== null) {
+    const e = err as Record<string, unknown>;
+    return {
+      error_code: typeof e['error_code'] === 'number' ? e['error_code'] : undefined,
+      description: typeof e['description'] === 'string' ? e['description'] : undefined,
+      message: typeof e['message'] === 'string' ? e['message'] : String(err),
+    };
+  }
+  return { message: String(err) };
+}
 
 function buildRichMessagePayload(blocks: RichBlock[]): InputRichMessage<never> {
   return { blocks };
@@ -182,20 +201,78 @@ export function buildPrivateStreamingBlocks(text: string | StructuredMessage): R
 }
 
 /**
- * Draft-mode variant of buildPrivateStreamingBlocks: while the thinking phase is
- * streaming (thought growing, body not yet started) it emits a native `thinking`
- * block — the official "Thinking…" placeholder — which is valid ONLY inside
- * sendRichMessageDraft. Once the body starts, phase 2/3 render exactly like the
- * real-message path (shared via buildPrivateStreamingBlocks).
+ * Max characters of reasoning carried inside the native `thinking` pill. The
+ * pill is a status placeholder, not a document block, so a long chain is
+ * trimmed to its tail (the newest reasoning); the complete chain is restored at
+ * finalize inside the "🧠 Thinking Process" details block.
  */
-export function buildDraftStreamingBlocks(text: string | StructuredMessage): RichBlock[] {
-  if (typeof text === 'string') return buildPrivateStreamingBlocks(text);
-  const thought = stripThoughtTags(text.thought || '');
-  const content = stripThoughtTags(text.content || '');
+const THINKING_PILL_MAX_CHARS = 3500;
+
+/**
+ * Renders the streamed reasoning into the pill's single `text` field. Inline
+ * entities are dropped on purpose: `validateBlocksPayload` accepts only a plain
+ * string for `thinking`, and a shimmering status pill has no use for links or
+ * bold runs.
+ */
+function buildThinkingPillText(thought: string): string {
+  const flat = thought.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!flat) return '🧠 Thinking...';
+  return flat.length <= THINKING_PILL_MAX_CHARS
+    ? `🧠 ${flat}`
+    : `🧠 …${flat.slice(flat.length - THINKING_PILL_MAX_CHARS)}`;
+}
+
+/**
+ * Draft-mode variant of buildPrivateStreamingBlocks. During the thinking phase
+ * (thought growing, body not yet started) the reasoning is streamed INSIDE the
+ * native `thinking` block — the official pill animation, valid only inside
+ * sendRichMessageDraft — so the reasoning text itself gets the pill treatment
+ * instead of only the "🧠 Thinking..." label, which is all the pill used to
+ * carry (the reasoning was emitted as plain paragraphs beside it). The pill is
+ * also the very first frame, before any thought arrives, so the whole thinking
+ * phase is one block whose text grows: no per-frame block-type churn for the
+ * client to re-render. Once the body starts, phase 2/3 render exactly like the
+ * real-message path (shared via buildPrivateStreamingBlocks), dropping the pill
+ * — `thinking` is rejected outside drafts.
+ *
+ * `opts.pillOnly === false` (from `tuning.richDraftThinkingInPill: false`, or
+ * latched by the caller when Telegram rejects a pill-only payload) restores the
+ * previous split layout: a label-only pill with the reasoning as plain
+ * paragraphs below it, for clients that render the pill collapsed and hide its
+ * text.
+ */
+export function buildDraftStreamingBlocks(
+  text: string | StructuredMessage,
+  opts?: { pillOnly?: boolean },
+): RichBlock[] {
+  const thought = typeof text === 'string' ? '' : stripThoughtTags(text.thought || '');
+  const content = typeof text === 'string' ? '' : stripThoughtTags(text.content || '');
+  const pillOnly = opts?.pillOnly ?? (getTuningConfig().richDraftThinkingInPill !== false);
+
+  // Thinking phase: stream the reasoning inside the native pill.
   if (thought && !content) {
-    return [{ type: 'thinking', text: thought }];
+    if (!pillOnly) {
+      return [
+        { type: 'thinking', text: '🧠 Thinking...' },
+        ...markdownToRichBlocks(thought),
+      ];
+    }
+    return [{ type: 'thinking', text: buildThinkingPillText(thought) }];
   }
+
+  // Waiting for the first thought/text event: the pill is the native placeholder
+  // for exactly this state, so start it here and let its text grow.
+  if (pillOnly && !thought && !content && typeof text !== 'string') {
+    return [{ type: 'thinking', text: '🧠 Thinking...' }];
+  }
+
+  // Body phase or final: drop the pill, use shared builder
   return buildPrivateStreamingBlocks(text);
+}
+
+/** True when `blocks` is a single native pill (the payload shape Telegram may reject). */
+function isPillOnlyPayload(blocks: RichBlock[]): boolean {
+  return blocks.length === 1 && blocks[0]?.type === 'thinking';
 }
 
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
@@ -403,7 +480,8 @@ function getBlocksPayload(originalText: string | StructuredMessage): any[] {
     if (originalText.startsWith('___RAW_HTML___')) {
       return buildFooterBlocksFromHtml(originalText.substring('___RAW_HTML___'.length));
     }
-    const blocks = buildFinalBlocks(originalText);
+    const { thought, content } = extractThoughtAndContent(originalText);
+    const blocks = buildFinalBlocks(content, thought || undefined);
     return blocks;
   }
   const { content, thought, geminiTime, geminiTokens, footerText } = originalText;
@@ -454,9 +532,10 @@ async function setThinkingReaction(ctx: Context, chatId: number, messageId: numb
   try {
     const emoji = REACTION_THINKING_EMOJIS[Math.floor(Math.random() * REACTION_THINKING_EMOJIS.length)];
     await ctx.api.setMessageReaction(chatId, messageId, [{ type: 'emoji', emoji }]);
-  } catch (e: any) {
-    if (!e?.description?.includes('message is not modified')) {
-      logger.debug(`setMessageReaction (thinking) failed: ${e?.description || e}`);
+  } catch (e: unknown) {
+    const err = asApiError(e);
+    if (!err.description?.includes('message is not modified')) {
+      logger.debug(`setMessageReaction (thinking) failed: ${err.description || err.message}`);
     }
   }
 }
@@ -464,8 +543,9 @@ async function setThinkingReaction(ctx: Context, chatId: number, messageId: numb
 async function clearReaction(ctx: Context, chatId: number, messageId: number): Promise<void> {
   try {
     await ctx.api.setMessageReaction(chatId, messageId, []);
-  } catch (e: any) {
-    logger.debug(`setMessageReaction (clear) failed: ${e?.description || e}`);
+  } catch (e: unknown) {
+    const err = asApiError(e);
+    logger.debug(`setMessageReaction (clear) failed: ${err.description || err.message}`);
   }
 }
 
@@ -520,6 +600,12 @@ export function buildChannelReply(
   // re-sends. Failures degrade to the real-message + editMessageText path.
   const draftCapable = ctx.chat?.type === 'private' && getTuningConfig().useRichDraftPrivate;
   let usingDraft = false;
+  // Reply-scoped layout latch for the thinking pill. Starts from tuning and
+  // flips to false for the rest of this reply if Telegram rejects a pill-only
+  // payload (a non-429 error on a single `thinking` block), so the reasoning
+  // keeps streaming as paragraphs beside a label-only pill instead of losing the
+  // animated draft altogether.
+  let pillOnly = getTuningConfig().richDraftThinkingInPill !== false;
   const ephemeralDraftId = (Date.now() % 2_000_000_000) + 1;
   let localDraftsDisabled = false;
   let localConsecutiveDraftFailures = 0;
@@ -565,9 +651,10 @@ export function buildChannelReply(
         await ctx.api.editMessageText(chatId, messageId, finalPlain);
       }
       messageCache.set(messageId, cacheMarkdown);
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const err = asApiError(e);
       const cacheMarkdown = getCacheMarkdown(text);
-      if (e?.description?.includes('message is not modified')) {
+      if (err.description?.includes('message is not modified')) {
         messageCache.set(messageId, cacheMarkdown);
         return;
       }
@@ -576,15 +663,16 @@ export function buildChannelReply(
         try {
           await ctx.api.editMessageText(chatId, messageId, cacheMarkdown);
           messageCache.set(messageId, cacheMarkdown);
-        } catch (e2: any) {
-          if (!e2?.description?.includes('message is not modified')) {
-            logger.warn(`Failed to edit message ${messageId}: ${e2}`);
+        } catch (e2: unknown) {
+          const err2 = asApiError(e2);
+          if (!err2.description?.includes('message is not modified')) {
+            logger.warn(`Failed to edit message ${messageId}: ${err2.message}`);
           } else {
             messageCache.set(messageId, cacheMarkdown);
           }
         }
       } else {
-        logger.warn(`Failed to edit message ${messageId}: ${e}`);
+        logger.warn(`Failed to edit message ${messageId}: ${err.message}`);
       }
     }
   };
@@ -690,8 +778,9 @@ export function buildChannelReply(
           } else {
             logger.debug(`[SENDRICH] Option A skipped: empty blocks, falling through`);
           }
-        } catch (err: any) {
-          logger.warn(`sendRich Option A (blocks) failed: ${err.message || err}. Trying Option B...`);
+        } catch (e: unknown) {
+          const err = asApiError(e);
+          logger.warn(`sendRich Option A (blocks) failed: ${err.message}. Trying Option B...`);
         }
 
         // Option B: Rich HTML via sendRichMessage (native server-side HTML→blocks parsing)
@@ -704,8 +793,9 @@ export function buildChannelReply(
           });
           messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
-        } catch (err: any) {
-          logger.warn(`sendRich Option B (HTML) failed: ${err.message || err}. Trying Option C...`);
+        } catch (e: unknown) {
+          const err = asApiError(e);
+          logger.warn(`sendRich Option B (HTML) failed: ${err.message}. Trying Option C...`);
         }
 
         // Option C: Rich Markdown
@@ -718,8 +808,9 @@ export function buildChannelReply(
           });
           messageCache.set(res.message_id, safeMarkdown);
           return res.message_id;
-        } catch (err: any) {
-          logger.warn(`sendRich Option C failed: ${err.message || err}. Trying Option D...`);
+        } catch (e: unknown) {
+          const err = asApiError(e);
+          logger.warn(`sendRich Option C failed: ${err.message}. Trying Option D...`);
         }
 
         // Option D: HTML Fallback via standard ctx.reply
@@ -731,17 +822,19 @@ export function buildChannelReply(
           });
           messageCache.set(msg.message_id, safeMarkdown);
           return msg.message_id;
-        } catch (err: any) {
-          logger.warn(`sendRich Option D failed: ${err.message || err}. Falling back to plain text.`);
+        } catch (e: unknown) {
+          const err = asApiError(e);
+          logger.warn(`sendRich Option D failed: ${err.message}. Falling back to plain text.`);
           const msg = await ctx.reply(safeMarkdown, {
             message_thread_id: messageThreadId,
           });
           messageCache.set(msg.message_id, safeMarkdown);
           return msg.message_id;
         }
-      } catch (err: any) {
-        logger.error(`sendRich failed entirely: ${err}`);
-        throw err;
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        logger.error(`sendRich failed entirely: ${err.message}`);
+        throw e;
       } finally {
         draftIds.delete(chatId);
       }
@@ -762,18 +855,39 @@ export function buildChannelReply(
       // that finalize later persists via sendRichMessage. On any failure fall
       // through to the real-message path below.
       if (draftCapable) {
-        const draftBlocks = buildDraftStreamingBlocks(originalText);
+        const draftBlocks = buildDraftStreamingBlocks(originalText, { pillOnly });
         if (draftBlocks.length > 0 && validateBlocksPayload(draftBlocks)) {
           try {
             logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (draft mode): draftId=${ephemeralDraftId}, blocks=${draftBlocks.length}`);
+            logger.info(`[TRACE-PROBE] sendRichDraft blocks=${JSON.stringify(draftBlocks)}`);
             await ctx.api.sendRichMessageDraft(chatId, ephemeralDraftId, buildRichMessagePayload(draftBlocks));
             usingDraft = true;
             logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft ok: draftId=${ephemeralDraftId}`);
             return ephemeralDraftId;
-          } catch (err: any) {
+          } catch (e: unknown) {
+            const err = asApiError(e);
             usingDraft = false;
-            if (is429Error(err)) markDraft429(chatId, get429RetryAfter(err));
-            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft failed, falling back to real message: ${err.message || err}`);
+            if (is429Error(e)) markDraft429(chatId, get429RetryAfter(e));
+            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft failed, falling back to real message: ${err.message}`);
+            // A rejected pill-only payload means this client/server build won't
+            // take a lone `thinking` block: latch the split layout and retry once
+            // before giving up the animated draft for this reply.
+            if (pillOnly && !is429Error(e) && isPillOnlyPayload(draftBlocks)) {
+              pillOnly = false;
+              const splitBlocks = buildDraftStreamingBlocks(originalText, { pillOnly: false });
+              if (splitBlocks.length > 0 && validateBlocksPayload(splitBlocks)) {
+                try {
+                  logger.info(`[TRACE-EVIDENCE] Retrying sendRichMessageDraft with split layout (pill + paragraphs): draftId=${ephemeralDraftId}`);
+                  await ctx.api.sendRichMessageDraft(chatId, ephemeralDraftId, buildRichMessagePayload(splitBlocks));
+                  usingDraft = true;
+                  return ephemeralDraftId;
+                } catch (e2: unknown) {
+                  const err2 = asApiError(e2);
+                  if (is429Error(e2)) markDraft429(chatId, get429RetryAfter(e2));
+                  logger.info(`[TRACE-EVIDENCE] split-layout retry failed too, falling back to real message: ${err2.message}`);
+                }
+              }
+            }
           }
         }
       }
@@ -803,8 +917,9 @@ export function buildChannelReply(
           }
           logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft blocks) success: real message id=${realId}.`);
           return realId;
-        } catch (err: any) {
-          logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (blocks) failed: ${err.message || err}. Stack: ${err.stack}`);
+        } catch (e: unknown) {
+          const err = asApiError(e);
+          logger.info(`[TRACE-EVIDENCE] sendRichDraft Option A (blocks) failed: ${err.message}`);
         }
       }
 
@@ -824,9 +939,10 @@ export function buildChannelReply(
         }
         logger.info(`[TRACE-EVIDENCE] sendRichMessage (sendRichDraft Markdown) success: real message id=${realId}.`);
         return realId;
-      } catch (err: any) {
-        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option C (Markdown) failed: ${err.message || err}. Stack: ${err.stack}`);
-        throw err;
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        logger.info(`[TRACE-EVIDENCE] sendRichDraft Option C (Markdown) failed: ${err.message}`);
+        throw e;
       }
     },
     editRichDraft: async (draftId: number, originalText: string | StructuredMessage, isStreaming = true): Promise<void> => {
@@ -841,23 +957,35 @@ export function buildChannelReply(
       // (retry next frame); finalize always persists via sendRichMessage, so the
       // final answer is never lost even if the preview stops updating.
       if (usingDraft && draftCapable && draftId === ephemeralDraftId) {
-        const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
-        const shouldEdit = await throttleDraft(chatId, safeMarkdown.length, draftDisabled);
+        // Pace on the raw buffer length — the draft path renders native blocks,
+        // so building the markdown fallback here would be pure per-frame waste
+        // (a full regex pass over a buffer that can reach tens of KB, ~4x/sec).
+        const shouldEdit = await throttleDraft(chatId, cacheMarkdown.length, draftDisabled);
         if (!shouldEdit) {
           messageCache.set(draftId, cacheMarkdown);
           return;
         }
-        const draftBlocks = buildDraftStreamingBlocks(originalText);
+        const draftBlocks = buildDraftStreamingBlocks(originalText, { pillOnly });
         if (draftBlocks.length > 0 && validateBlocksPayload(draftBlocks)) {
           try {
             logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (draft update): draftId=${draftId}, blocks=${draftBlocks.length}`);
+            if (draftBlocks.some((b) => b.type === 'thinking') || draftBlocks.length <= 2) {
+              logger.info(`[TRACE-PROBE] editRichDraft blocks=${JSON.stringify(draftBlocks)}`);
+            }
             await ctx.api.sendRichMessageDraft(chatId, draftId, buildRichMessagePayload(draftBlocks));
-            markDraftEditSuccess(chatId, safeMarkdown.length);
+            markDraftEditSuccess(chatId, cacheMarkdown.length);
             messageCache.set(draftId, cacheMarkdown);
             return;
-          } catch (err: any) {
-            if (is429Error(err)) markDraft429(chatId, get429RetryAfter(err));
-            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft update failed (staying on draft, will retry): ${err.message || err}`);
+          } catch (e: unknown) {
+            const err = asApiError(e);
+            if (is429Error(e)) markDraft429(chatId, get429RetryAfter(e));
+            // Same latch as the initial send: a rejected lone pill downgrades this
+            // reply to the split layout, retried on the next frame.
+            if (pillOnly && !is429Error(e) && isPillOnlyPayload(draftBlocks)) {
+              pillOnly = false;
+              logger.info(`[TRACE-EVIDENCE] pill-only draft payload rejected, switching this reply to the split layout`);
+            }
+            logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft update failed (staying on draft, will retry): ${err.message}`);
             return;
           }
         }
@@ -872,10 +1000,12 @@ export function buildChannelReply(
       // visible stutter used the heavy finalize pipeline; markdownToRichBlocks measures
       // <50ms even at 21KB, so native-blocks streaming is smooth again.
       if (isStreaming) {
-        const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
         // Adaptive pacing: skip when too soon AND content barely changed;
-        // otherwise wait out the current window then edit.
-        const shouldEdit = await throttleDraft(chatId, safeMarkdown.length, draftDisabled);
+        // otherwise wait out the current window then edit. Paced on the raw
+        // buffer length so the markdown fallback is built only if the native
+        // blocks path below actually fails (it is a full regex pass over a
+        // buffer that can reach tens of KB, several times per second).
+        const shouldEdit = await throttleDraft(chatId, cacheMarkdown.length, draftDisabled);
         if (!shouldEdit) {
           messageCache.set(draftId, cacheMarkdown);
           return;
@@ -887,23 +1017,26 @@ export function buildChannelReply(
             logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft streaming - blocks): messageId=${draftId}, blocks=${streamingBlocks.length}`);
             await ctx.api.editMessageText(chatId, draftId, buildRichMessagePayload(streamingBlocks));
             logger.info(`[TRACE-EVIDENCE] editMessageText (edit streaming blocks) success for messageId=${draftId}.`);
-            markDraftEditSuccess(chatId, safeMarkdown.length);
+            markDraftEditSuccess(chatId, cacheMarkdown.length);
             messageCache.set(draftId, cacheMarkdown);
             return;
-          } catch (err: any) {
-            if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
-              markDraftEditSuccess(chatId, safeMarkdown.length);
+          } catch (e: unknown) {
+            const err = asApiError(e);
+            if (err.description?.includes('message is not modified') || err.message.includes('message is not modified')) {
+              markDraftEditSuccess(chatId, cacheMarkdown.length);
               messageCache.set(draftId, cacheMarkdown);
               return;
             }
-            if (is429Error(err)) {
-              markDraft429(chatId, get429RetryAfter(err));
-              record429Backoff(chatId, get429RetryAfter(err));
+            if (is429Error(e)) {
+              markDraft429(chatId, get429RetryAfter(e));
+              record429Backoff(chatId, get429RetryAfter(e));
             }
-            logger.info(`[TRACE-EVIDENCE] editRichDraft streaming blocks failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
-            throw err;
+            logger.info(`[TRACE-EVIDENCE] editRichDraft streaming blocks failed for messageId=${draftId}: ${err.message}`);
+            throw e;
           }
         }
+        // Blocks path unusable for this frame — only now pay for the markdown render.
+        const safeMarkdown = prepareTelegramMarkdown(getStreamingMarkdown(originalText));
         try {
           logger.info(`[TRACE-EVIDENCE] editMessageText (editRichDraft streaming - Markdown)`);
           await ctx.api.editMessageText(chatId, draftId, buildRichMessageMarkdownPayload(safeMarkdown));
@@ -911,18 +1044,19 @@ export function buildChannelReply(
           markDraftEditSuccess(chatId, safeMarkdown.length);
           messageCache.set(draftId, cacheMarkdown);
           return;
-        } catch (err: any) {
-          if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+        } catch (e: unknown) {
+          const err = asApiError(e);
+          if (err.description?.includes('message is not modified') || err.message.includes('message is not modified')) {
             markDraftEditSuccess(chatId, safeMarkdown.length);
             messageCache.set(draftId, cacheMarkdown);
             return;
           }
-          if (is429Error(err)) {
-            markDraft429(chatId, get429RetryAfter(err));
-            record429Backoff(chatId, get429RetryAfter(err));
+          if (is429Error(e)) {
+            markDraft429(chatId, get429RetryAfter(e));
+            record429Backoff(chatId, get429RetryAfter(e));
           }
-          logger.info(`[TRACE-EVIDENCE] editRichDraft streaming Markdown failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
-          throw err;
+          logger.info(`[TRACE-EVIDENCE] editRichDraft streaming Markdown failed for messageId=${draftId}: ${err.message}`);
+          throw e;
         }
       }
 
@@ -936,15 +1070,16 @@ export function buildChannelReply(
           messageCache.set(draftId, cacheMarkdown);
           return;
         }
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        if (err.description?.includes('message is not modified') || err.message.includes('message is not modified')) {
           messageCache.set(draftId, cacheMarkdown);
           return;
         }
-        if (is429Error(err)) {
-          record429Backoff(chatId, get429RetryAfter(err));
+        if (is429Error(e)) {
+          record429Backoff(chatId, get429RetryAfter(e));
         }
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A (blocks) failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option A (blocks) failed for messageId=${draftId}: ${err.message}`);
       }
 
       // Option B: Rich HTML
@@ -968,15 +1103,16 @@ export function buildChannelReply(
         logger.info(`[TRACE-EVIDENCE] editMessageText (edit HTML) success for messageId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        if (err.description?.includes('message is not modified') || err.message.includes('message is not modified')) {
           messageCache.set(draftId, cacheMarkdown);
           return;
         }
-        if (is429Error(err)) {
-          record429Backoff(chatId, get429RetryAfter(err));
+        if (is429Error(e)) {
+          record429Backoff(chatId, get429RetryAfter(e));
         }
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option B (HTML) failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option B (HTML) failed for messageId=${draftId}: ${err.message}`);
       }
 
       // Option C: Rich Markdown fallback
@@ -987,13 +1123,14 @@ export function buildChannelReply(
         logger.info(`[TRACE-EVIDENCE] editMessageText (edit Markdown) success for messageId=${draftId}.`);
         messageCache.set(draftId, cacheMarkdown);
         return;
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified') || String(err).includes('message is not modified')) {
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        if (err.description?.includes('message is not modified') || err.message.includes('message is not modified')) {
           messageCache.set(draftId, cacheMarkdown);
           return;
         }
-        logger.info(`[TRACE-EVIDENCE] editRichDraft Option C (Markdown) failed for messageId=${draftId}: ${err.message || err}. Stack: ${err.stack}`);
-        throw err;
+        logger.info(`[TRACE-EVIDENCE] editRichDraft Option C (Markdown) failed for messageId=${draftId}: ${err.message}`);
+        throw e;
       }
     },
     sendRichDraftBlocks: async (draftId: number, blocks: unknown[]): Promise<number> => {
@@ -1018,9 +1155,10 @@ export function buildChannelReply(
         draftIds.set(chatId, res.message_id);
         activeDraftIds.add(res.message_id);
         return res.message_id;
-      } catch (err: any) {
-        logger.warn(`sendRichDraftBlocks failed for draftId=${draftId}: ${err.message || err}`);
-        throw err;
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        logger.warn(`sendRichDraftBlocks failed for draftId=${draftId}: ${err.message}`);
+        throw e;
       }
     },
     editRichBlocks: async (messageId: number, blocks: unknown[]): Promise<number | void> => {
@@ -1039,10 +1177,11 @@ export function buildChannelReply(
         // Edit existing persisted message via editMessageText
         await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(blocks as RichBlock[]));
         return messageId;
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified')) return messageId;
-        logger.warn(`editRichBlocks failed for messageId=${messageId}: ${err.message || err}`);
-        throw err;
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        if (err.description?.includes('message is not modified')) return messageId;
+        logger.warn(`editRichBlocks failed for messageId=${messageId}: ${err.message}`);
+        throw e;
       }
     },
     editRich: async (messageId: number, originalText: string | StructuredMessage): Promise<number | void> => {
@@ -1073,9 +1212,10 @@ export function buildChannelReply(
             return realId;
           }
           throw new Error('final blocks empty or invalid');
-        } catch (err: any) {
+        } catch (e: unknown) {
+          const err = asApiError(e);
           usingDraft = false;
-          logger.warn(`[FINALIZE] draft persist via sendRichMessage failed: ${err.message || err}. Falling through to in-place edit.`);
+          logger.warn(`[FINALIZE] draft persist via sendRichMessage failed: ${err.message}. Falling through to in-place edit.`);
         }
       }
 
@@ -1104,12 +1244,13 @@ export function buildChannelReply(
           messageCache.set(messageId, cacheMarkdown);
           return;
         }
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified')) {
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        if (err.description?.includes('message is not modified')) {
           messageCache.set(messageId, cacheMarkdown);
           return;
         }
-        logger.warn(`editRich Option A (blocks) failed: ${err.message || err}. Trying Option B...`);
+        logger.warn(`editRich Option A (blocks) failed: ${err.message}. Trying Option B...`);
       }
 
       // Option B: Native Rich HTML
@@ -1122,12 +1263,13 @@ export function buildChannelReply(
         logger.debug(`[DEBUG] editMessageText (Option B) success: messageId=${messageId}`);
         messageCache.set(messageId, cacheMarkdown);
         return;
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified')) {
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        if (err.description?.includes('message is not modified')) {
           messageCache.set(messageId, cacheMarkdown);
           return;
         }
-        logger.warn(`editRich Option B failed: ${err.message || err}. Trying Option C...`);
+        logger.warn(`editRich Option B failed: ${err.message}. Trying Option C...`);
       }
 
       // Option C: Rich Markdown
@@ -1138,12 +1280,13 @@ export function buildChannelReply(
         logger.debug(`[DEBUG] editMessageText (Option C) success: messageId=${messageId}`);
         messageCache.set(messageId, cacheMarkdown);
         return;
-      } catch (err: any) {
-        if (err?.description?.includes('message is not modified')) {
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        if (err.description?.includes('message is not modified')) {
           messageCache.set(messageId, cacheMarkdown);
           return;
         }
-        logger.warn(`editRich Option C failed: ${err.message || err}. Trying Option D...`);
+        logger.warn(`editRich Option C failed: ${err.message}. Trying Option D...`);
       }
 
       // Option D: HTML Fallback
@@ -1170,8 +1313,9 @@ export function buildChannelReply(
         );
         messageCache.set(msg.message_id, replyText);
         return msg.message_id;
-      } catch (e: any) {
-        logger.warn(`Failed to send message in ${parseMode} mode: ${e}`);
+      } catch (e: unknown) {
+        const err = asApiError(e);
+        logger.warn(`Failed to send message in ${parseMode} mode: ${err.message}`);
         const msg = await ctx.reply(replyText, {
           message_thread_id: messageThreadId,
         });
@@ -1193,14 +1337,15 @@ export function buildChannelReply(
           const res = await replyObj.sendRichDraft!(replyText);
           setConsecutiveDraftFailures(0);
           return res;
-        } catch (e) {
+        } catch (e: unknown) {
           const failures = getConsecutiveDraftFailures() + 1;
           setConsecutiveDraftFailures(failures);
           if (failures >= 2) {
             setDraftsDisabled(true);
             logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
           } else {
-            logger.warn(`Failed to send rich draft stream (attempt ${failures}): ${e}`);
+            const err = asApiError(e);
+            logger.warn(`Failed to send rich draft stream (attempt ${failures}): ${err.message}`);
           }
         }
       }
@@ -1218,14 +1363,15 @@ export function buildChannelReply(
           }
           setConsecutiveDraftFailures(0);
           return;
-        } catch (e) {
+        } catch (e: unknown) {
           const failures = getConsecutiveDraftFailures() + 1;
           setConsecutiveDraftFailures(failures);
           if (failures >= 2) {
             setDraftsDisabled(true);
             logger.warn(`Circuit breaker triggered: disabling rich drafts for chat ${chatId} due to consecutive failures.`);
           } else {
-            logger.warn(`Failed to edit rich draft stream (attempt ${failures}): ${e}`);
+            const err = asApiError(e);
+            logger.warn(`Failed to edit rich draft stream (attempt ${failures}): ${err.message}`);
           }
         }
       }

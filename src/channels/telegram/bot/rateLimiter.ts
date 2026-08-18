@@ -160,17 +160,28 @@ export function reset429Backoff(chatId: number): void {
   }
 }
 
-export function is429Error(err: any): boolean {
+export function is429Error(err: unknown): boolean {
   if (!err) return false;
-  if (err.error_code === 429 || err.status === 429) return true;
-  if (err.parameters?.retry_after !== undefined) return true;
-  if (err.payload?.parameters?.retry_after !== undefined) return true;
-  const msg = String(err.message || err);
+  if (typeof err === 'object') {
+    const e = err as Record<string, unknown>;
+    if (e['error_code'] === 429 || e['status'] === 429) return true;
+    const params = e['parameters'] as Record<string, unknown> | undefined;
+    if (params?.['retry_after'] !== undefined) return true;
+    const payload = e['payload'] as Record<string, unknown> | undefined;
+    const payloadParams = payload?.['parameters'] as Record<string, unknown> | undefined;
+    if (payloadParams?.['retry_after'] !== undefined) return true;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
   return msg.includes('429') || msg.includes('Too Many Requests');
 }
 
-export function get429RetryAfter(err: any): number | undefined {
-  if (typeof err?.parameters?.retry_after === 'number') return err.parameters.retry_after;
-  if (typeof err?.payload?.parameters?.retry_after === 'number') return err.payload.parameters.retry_after;
+export function get429RetryAfter(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as Record<string, unknown>;
+  const params = e['parameters'] as Record<string, unknown> | undefined;
+  if (typeof params?.['retry_after'] === 'number') return params['retry_after'];
+  const payload = e['payload'] as Record<string, unknown> | undefined;
+  const payloadParams = payload?.['parameters'] as Record<string, unknown> | undefined;
+  if (typeof payloadParams?.['retry_after'] === 'number') return payloadParams['retry_after'];
   return undefined;
 }

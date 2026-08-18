@@ -118,8 +118,8 @@ loginctl enable-linger   # keep the bot alive after SSH logout
 | **Stop service** | `systemctl --user stop gemini-cli-telegram` |
 | **Restart service** | `systemctl --user restart gemini-cli-telegram` |
 | **Check status** | `systemctl --user status gemini-cli-telegram` |
-| **Daemon log** | `tail -f daemon.log` |
-| **Error log** | `tail -f error.log` |
+| **Daemon log** | `tail -f logs/daemon.log` |
+| **Error log** | `tail -f logs/error.log` |
 
 > [!WARNING]
 > The service directly runs `dist/cli.js`. After any `src/` change you **must

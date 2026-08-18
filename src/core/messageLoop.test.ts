@@ -81,9 +81,9 @@ describe('processMessage', () => {
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       // Simulate onEvent callback being triggered
       if (options.onEvent) {
-        options.onEvent({ type: 'text', content: 'Hi ' });
-        options.onEvent({ type: 'text', content: 'there!' });
-        options.onEvent({ type: 'done' });
+        await options.onEvent({ type: 'text', content: 'Hi ' });
+        await options.onEvent({ type: 'text', content: 'there!' });
+        await options.onEvent({ type: 'done' });
       }
       return {
         output: 'Hi there!',
@@ -103,8 +103,10 @@ describe('processMessage', () => {
       })
     );
 
-    // During streaming
-    expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi there!');
+    // During streaming: the first text event fires sendPlain before the second
+    // chunk arrives (the second event's updateMessageStream is debounced).
+    // Buffer contains only 'Hi ' at that point, trimmed to 'Hi'.
+    expect(mockReply.sendPlain).toHaveBeenCalledWith('Hi');
 
     // After completion (final rendering)
     expect(mockReply.edit).toHaveBeenCalledWith(456, expect.stringContaining('Hi there!'));
@@ -142,8 +144,8 @@ describe('processMessage', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       if (options.onEvent) {
-        options.onEvent({ type: 'text', content: 'draft body' });
-        options.onEvent({ type: 'done' });
+        await options.onEvent({ type: 'text', content: 'draft body' });
+        await options.onEvent({ type: 'done' });
       }
       return { output: 'draft body', conversationId: 'conv-draft', exitCode: 0 };
     });
@@ -189,8 +191,8 @@ describe('processMessage', () => {
       } else {
         // 4th call is on the fallback model and succeeds.
         if (options.onEvent) {
-          options.onEvent({ type: 'text', content: 'Hi fallback!' });
-          options.onEvent({ type: 'done' });
+          await options.onEvent({ type: 'text', content: 'Hi fallback!' });
+          await options.onEvent({ type: 'done' });
         }
         return {
           output: 'Hi fallback!',
@@ -417,9 +419,9 @@ describe('processMessage', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       if (options.onEvent) {
-        options.onEvent({ type: 'thought', content: 'Let me think' });
-        options.onEvent({ type: 'text', content: 'Haha!' });
-        options.onEvent({ type: 'done' });
+        await options.onEvent({ type: 'thought', content: 'Let me think' });
+        await options.onEvent({ type: 'text', content: 'Haha!' });
+        await options.onEvent({ type: 'done' });
       }
       return {
         output: '<thought>Let me think</thought>Haha!',
@@ -453,10 +455,10 @@ describe('processMessage', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       if (options.onEvent) {
-        options.onEvent({ type: 'text', content: full.slice(0, 18) });
-        options.onEvent({ type: 'text', content: full.slice(18, 30) });
-        options.onEvent({ type: 'text', content: full.slice(30) }); // ends mid-last-paragraph, no \n
-        options.onEvent({ type: 'done' });
+        await options.onEvent({ type: 'text', content: full.slice(0, 18) });
+        await options.onEvent({ type: 'text', content: full.slice(18, 30) });
+        await options.onEvent({ type: 'text', content: full.slice(30) }); // ends mid-last-paragraph, no \n
+        await options.onEvent({ type: 'done' });
       }
       return { output: full, conversationId: 'conv-rich', exitCode: 0 };
     });
@@ -485,8 +487,8 @@ describe('processMessage', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       if (options.onEvent) {
-        options.onEvent({ type: 'text', content: 'Intro part\n---split---\nMain content part' });
-        options.onEvent({ type: 'done' });
+        await options.onEvent({ type: 'text', content: 'Intro part\n---split---\nMain content part' });
+        await options.onEvent({ type: 'done' });
       }
       return {
         output: 'Intro part\n---split---\nMain content part',
@@ -510,9 +512,9 @@ describe('processMessage', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       if (options.onEvent) {
-        options.onEvent({ type: 'thought', content: 'thinking process' });
-        options.onEvent({ type: 'text', content: 'final reply text' });
-        options.onEvent({ type: 'done' });
+        await options.onEvent({ type: 'thought', content: 'thinking process' });
+        await options.onEvent({ type: 'text', content: 'final reply text' });
+        await options.onEvent({ type: 'done' });
       }
       return {
         output: '<thought>thinking process</thought>final reply text',
@@ -560,9 +562,9 @@ describe('processMessage', () => {
 
     vi.mocked(runAgyPrint).mockImplementation(async (options) => {
       if (options.onEvent) {
-        options.onEvent({ type: 'thought', content: 'the model reasons step by step' });
-        options.onEvent({ type: 'text', content: 'final answer' });
-        options.onEvent({ type: 'done' });
+        await options.onEvent({ type: 'thought', content: 'the model reasons step by step' });
+        await options.onEvent({ type: 'text', content: 'final answer' });
+        await options.onEvent({ type: 'done' });
       }
       return {
         output: '<thought>the model reasons step by step</thought>final answer',

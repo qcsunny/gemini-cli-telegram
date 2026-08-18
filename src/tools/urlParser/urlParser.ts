@@ -211,12 +211,6 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
   const license = repoData?.license?.spdx_id || repoData?.license?.name || 'None';
   const topics = Array.isArray(repoData?.topics) ? repoData.topics.join(', ') : '';
 
-  // Limit README length to avoid blowing prompt limit
-  const maxReadmeLen = 8000;
-  const truncatedReadme = readmeText.length > maxReadmeLen
-    ? `${readmeText.slice(0, maxReadmeLen)}\n\n_... (README 后续内容已截断)_`
-    : readmeText;
-
   const content =
     `# 💻 GitHub 仓库: ${title}\n\n` +
     `• **项目简介**: ${description}\n` +
@@ -225,7 +219,7 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
     (topics ? `• **标签 Topics**: \`${topics}\`\n` : '') +
     `• **仓库链接**: https://github.com/${repoFullName}\n\n` +
     `---\n\n` +
-    `## 📖 README 核心内容\n\n${truncatedReadme || description}`;
+    `## 📖 README 核心内容\n\n${readmeText || description}`;
 
   return {
     url: urlStr,
@@ -436,16 +430,10 @@ export async function parseGeneralWeb(urlStr: string): Promise<ParsedLinkContent
   const rawBody = bodyMatch ? (bodyMatch[1] || bodyMatch[2] || bodyMatch[3]) : html;
   const bodyMarkdown = cleanHtmlToMarkdown(rawBody);
 
-  // Limit max length
-  const maxLen = 10000;
-  const truncatedBody = bodyMarkdown.length > maxLen
-    ? `${bodyMarkdown.slice(0, maxLen)}\n\n_... (页面后续内容已截断)_`
-    : bodyMarkdown;
-
   const content =
     `# 🌐 ${title}\n\n` +
     `• **原文链接**: ${urlStr}\n\n` +
-    `---\n\n${truncatedBody || abstract || '_未能提取到有效正文_'}`;
+    `---\n\n${bodyMarkdown || abstract || '_未能提取到有效正文_'}`;
 
   return {
     url: urlStr,

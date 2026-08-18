@@ -109,9 +109,9 @@ const userConfigSchema = z.object({
    paths: z.object({
     /** SQLite database file. Default: CONFIG_DIR/db.sqlite */
     db: z.string().optional(),
-    /** Main daemon log file. Default: CONFIG_DIR/daemon.log */
+    /** Main daemon log file. Default: CONFIG_DIR/logs/daemon.log */
     log: z.string().optional(),
-    /** Error log file. Default: CONFIG_DIR/error.log */
+    /** Error log file. Default: CONFIG_DIR/logs/error.log */
     errorLog: z.string().optional(),
     /** Process ID file. Default: CONFIG_DIR/daemon.pid */
     pid: z.string().optional(),
@@ -312,6 +312,21 @@ const userConfigSchema = z.object({
      * Default: false.
      */
     useRichDraftPrivate: z.boolean().optional(),
+    /**
+     * Stream the reasoning text INSIDE the native `thinking` pill during the
+     * thinking phase of a private-chat draft, so the pill animation covers the
+     * reasoning itself and not just the "🧠 Thinking..." label.
+     *
+     * Set to false to restore the older split layout — a label-only pill with
+     * the reasoning rendered as plain paragraphs beneath it — which is the safer
+     * choice on clients that render the pill collapsed and therefore hide its
+     * text. Only affects the sendRichMessageDraft path (private chats with
+     * `useRichDraftPrivate` on); the final persisted message always carries the
+     * full reasoning in the "🧠 Thinking Process" details block either way.
+     *
+     * Default: true.
+     */
+    richDraftThinkingInPill: z.boolean().optional(),
   }).optional(),
 });
 
@@ -338,7 +353,7 @@ export function getDbPath(config?: UserConfig | null): string {
 }
 
 export function getLogPath(config?: UserConfig | null): string {
-  return resolvePath(config?.paths?.log, 'daemon.log');
+  return resolvePath(config?.paths?.log, path.join('logs', 'daemon.log'));
 }
 
 export function getPidPath(config?: UserConfig | null): string {
@@ -368,6 +383,7 @@ export const TUNING_DEFAULTS = {
   debugAgyStreamEvents: false,
   streamJsonForChat: false,
   useRichDraftPrivate: false,
+  richDraftThinkingInPill: true,
 };
 
 /**
@@ -387,6 +403,7 @@ type TuningConfig = {
   debugAgyStreamEvents: boolean;
   streamJsonForChat: boolean;
   useRichDraftPrivate: boolean;
+  richDraftThinkingInPill: boolean;
 };
 
 let _cachedTuning: TuningConfig | undefined;

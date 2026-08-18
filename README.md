@@ -66,8 +66,9 @@ A local gateway that bridges the **Google Antigravity / Gemini CLI** to **Telegr
 | `/help` | Show detailed command guidance |
 
 ## Diagnostics & Logs
-- Main log: `daemon.log` (pino, info+warn); errors: `error.log`
-- Live tail: `tail -f daemon.log`
+- Main log: `logs/daemon.log` (pino, info+warn); errors: `logs/error.log`
+- Live tail: `tail -f logs/daemon.log`
+- Both files rotate in-process at 16 MiB, keeping 3 generations (`LOG_MAX_BYTES` / `LOG_KEEP_FILES`; set `LOG_MAX_BYTES=0` to disable). `LOG_DIR` moves the directory.
 - The bot must be started via systemd (`systemctl --user start gemini-cli-telegram.service`).
   Directly running multiple `node dist/cli.js start --live` instances causes Telegram
   API 409 Conflict loops.

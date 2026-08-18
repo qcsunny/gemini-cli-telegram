@@ -1,229 +1,38 @@
 /**
  * @file deepseek.ts
- * @description DeepSeek API proxy backend with streaming SSE.
+ * @description DeepSeek API proxy backend — an OpenAI-compatible SSE endpoint.
+ *
+ * Only the DeepSeek-specific parts live here; the streaming machinery is shared
+ * with web2api in {@link runSseBackend}.
  */
 
-import * as http from 'node:http';
-import { StringDecoder } from 'node:string_decoder';
-import { logger } from '../../utils/logger.js';
-import { getTuningConfig, getBackendUrl, getDefaultModels } from '../../config/userConfig.js';
-import { loadUserConfig } from '../../config/userConfig.js';
-import { saveMessageTurn, getHistory } from '../messageStore.js';
+import { getDefaultModels, loadUserConfig } from '../../config/userConfig.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { deepseekHistories, makeDeepSeekConvId } from '../conversationManager.js';
+import { runSseBackend } from './sseBackend.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
 export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
-  const { prompt, conversationId: existingConvId, model = '', onChunk, signal } = opts;
-  const cfg = loadModelsConfig();
-  const modelId = cfg?.routing[model] ?? getDefaultModels()?.deepseekId;
-
-  const convId = existingConvId || makeDeepSeekConvId();
-
-  const history = getHistory(deepseekHistories, convId, 'deepseek');
-  history.push({ role: 'user', content: prompt });
-
-  const config = loadUserConfig();
-  const apiKey = config?.deepseekApiKey || '';
-
-  const body = JSON.stringify({
-    model: modelId,
-    stream: true,
-    max_tokens: 16384,
-    messages: history.map(h => ({ role: h.role, content: h.content })),
-  });
-
-  const backendUrl = getBackendUrl('deepseek');
-  if (!backendUrl) {
-    return { conversationId: '', output: '', exitCode: 1, stderr: 'DeepSeek backend URL not configured' };
-  }
-  const url = new URL(`${backendUrl}/chat/completions`);
-  const reqOptions: http.RequestOptions = {
-    hostname: url.hostname,
-    port: url.port || (url.protocol === 'https:' ? 443 : 80),
-    path: url.pathname,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body),
-      ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
+  return runSseBackend(opts, {
+    backend: 'deepseek',
+    label: 'DeepSeek',
+    histories: deepseekHistories,
+    makeConvId: makeDeepSeekConvId,
+    resolveModelId: (alias) => loadModelsConfig()?.routing[alias] ?? getDefaultModels()?.deepseekId,
+    authHeaders: (): Record<string, string> => {
+      const apiKey = loadUserConfig()?.deepseekApiKey || '';
+      return apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {};
     },
-  };
-
-  let thoughtBuf = '';
-  let contentBuf = '';
-  let thoughtStartTime = 0;
-  let thoughtEndTime = 0;
-  let inThoughts = false;
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (result: AgyRunResult): void => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-
-    const req = http.request(reqOptions, (res) => {
-      const decoder = new StringDecoder('utf-8');
-      let buf = '';
-
-      if (res.statusCode !== undefined && (res.statusCode < 200 || res.statusCode >= 300)) {
-        let errorBody = '';
-        res.on('data', (chunk) => { errorBody += Buffer.from(chunk).toString('utf8'); });
-        res.on('end', () => finish({
-          conversationId: convId,
-          output: '',
-          exitCode: 1,
-          stderr: `DeepSeek HTTP ${res.statusCode}: ${errorBody.slice(0, 1000)}`,
-        }));
-        return;
-      }
-
-      res.on('data', (chunk: Buffer) => {
-        buf += decoder.write(chunk);
-        const lines = buf.split('\n');
-        buf = lines.pop() ?? '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed?.choices?.[0]?.delta?.content ?? '';
-            const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? '';
-
-            if (reasoning) {
-              if (!thoughtStartTime) {
-                thoughtStartTime = Date.now();
-              }
-              if (!inThoughts) {
-                inThoughts = true;
-                const timeAttr = ' time="0.0"';
-                const startTag = `<thinking${timeAttr}>`;
-                if (onChunk) onChunk(startTag);
-              }
-              thoughtBuf += reasoning;
-              if (onChunk) onChunk(reasoning);
-              opts.onEvent?.({ type: 'thought', content: reasoning });
-            }
-
-            if (delta) {
-              if (thoughtStartTime && !thoughtEndTime) {
-                thoughtEndTime = Date.now();
-              }
-              if (inThoughts) {
-                inThoughts = false;
-                const endTag = '</thinking>\n\n';
-                if (onChunk) onChunk(endTag);
-              }
-              contentBuf += delta;
-              if (onChunk) onChunk(delta);
-              opts.onEvent?.({ type: 'text', content: delta });
-            }
-          } catch {
-            // ignore malformed SSE lines
-          }
-        }
-      });
-
-      res.on('end', () => {
-        buf += decoder.end();
-        if (buf.trim()) {
-          const line = buf.trim();
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            if (data !== '[DONE]') {
-              try {
-                const parsed = JSON.parse(data);
-                const delta = parsed?.choices?.[0]?.delta?.content ?? '';
-                const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? '';
-                if (reasoning) {
-                  if (!thoughtStartTime) thoughtStartTime = Date.now();
-                  if (!inThoughts) {
-                    inThoughts = true;
-                    if (onChunk) onChunk('<thinking time="0.0">');
-                  }
-                  thoughtBuf += reasoning;
-                  onChunk?.(reasoning);
-                  opts.onEvent?.({ type: 'thought', content: reasoning });
-                }
-                if (delta) {
-                  if (thoughtStartTime && !thoughtEndTime) thoughtEndTime = Date.now();
-                  if (inThoughts) {
-                    inThoughts = false;
-                    if (onChunk) onChunk('</thinking>\n\n');
-                  }
-                  contentBuf += delta;
-                  onChunk?.(delta);
-                  opts.onEvent?.({ type: 'text', content: delta });
-                }
-              } catch { /* ignore malformed final SSE line */ }
-            }
-          }
-        }
-        if (inThoughts) {
-          inThoughts = false;
-          if (onChunk) onChunk('</thinking>');
-        }
-        opts.onEvent?.({ type: 'done' });
-
-        let finalOutput = '';
-        if (thoughtStartTime) {
-          if (!thoughtEndTime) thoughtEndTime = Date.now();
-          const durationSec = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
-          finalOutput = `<thinking time="${durationSec}">${thoughtBuf}</thinking>\n\n${contentBuf}`;
-        } else {
-          finalOutput = contentBuf;
-        }
-
-        if (finalOutput) {
-          history.push({ role: 'assistant', content: finalOutput });
-          const maxMessages = getTuningConfig().maxHistoryMessages;
-          const trimmed = history.length > maxMessages ? history.slice(history.length - maxMessages) : history;
-          deepseekHistories.set(convId, trimmed);
-          // BUG-04: Prevent unbounded Map growth (OOM risk). Evict oldest entry
-          // when the map exceeds 500 active conversations.
-          if (deepseekHistories.size > 500) {
-            const firstKey = deepseekHistories.keys().next().value;
-            if (firstKey !== undefined) deepseekHistories.delete(firstKey);
-          }
-        }
-        saveMessageTurn(convId, 'deepseek', prompt, finalOutput);
-        finish({ conversationId: convId, output: finalOutput, exitCode: 0, stderr: '' });
-      });
-
-      res.on('error', (err) => {
-        if (!settled) reject(err);
-      });
-    });
-
-    req.on('error', (err) => {
-      if (!settled) reject(err);
-    });
-
-    // BUG-03: Add Socket-level read timeout so TCP half-open connections
-    // (server connected but never sends data back) don't hang indefinitely.
-    req.setTimeout(60_000, () => {
-      req.destroy(new Error('DeepSeek socket read timeout (60s)'));
-    });
-
-    signal?.addEventListener('abort', () => {
-      logger.debug('[deepseek] Aborting request');
-      req.destroy();
-      
-      let finalOutput = '';
-      if (thoughtStartTime) {
-        if (!thoughtEndTime) thoughtEndTime = Date.now();
-        const durationSec = ((thoughtEndTime - thoughtStartTime) / 1000).toFixed(1);
-        finalOutput = `<thinking time="${durationSec}">${thoughtBuf}</thinking>\n\n${contentBuf}`;
-      } else {
-        finalOutput = contentBuf;
-      }
-      finish({ conversationId: convId, output: finalOutput, exitCode: 1, stderr: 'Aborted' });
-    }, { once: true });
-
-    req.write(body);
-    req.end();
+    // BUG-03: TCP half-open connections must not hang the turn forever.
+    timeoutMs: 60_000,
+    // The duration is unknown while streaming, so the live tag carries 0.0 and
+    // buildOutput stamps the measured value onto the stored copy.
+    openThinking: '<thinking time="0.0">',
+    closeThinking: '</thinking>',
+    buildOutput: ({ thought, content, thinkingMs }) => {
+      if (!thought) return content;
+      const durationSec = (thinkingMs / 1000).toFixed(1);
+      return `<thinking time="${durationSec}">${thought}</thinking>\n\n${content}`;
+    },
   });
 }

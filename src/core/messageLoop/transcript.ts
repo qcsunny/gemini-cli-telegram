@@ -48,12 +48,10 @@ const TOOL_DETAIL_KEYS = [
   'Instruction', 'Prompt',
 ];
 
-/** Inline-code detail cap for a single tool call. */
-const MAX_TOOL_DETAIL_CHARS = 240;
-/** Body cap for a single tool result, so one `cat` of a big file can't eat the block. */
-const MAX_TOOL_RESULT_CHARS = 1200;
-/** Overall cap for the assembled thought (reasoning + tool chain). */
-const MAX_TRANSCRIPT_CHARS = 8000;
+/** Flatten a value into a single-line inline-code payload. */
+function toInlineDetail(value: string): string {
+  return value.replace(/\s+/g, ' ').replace(/`/g, "'").trim();
+}
 
 function safeParse(line: string): any {
   try {
@@ -79,17 +77,6 @@ export function stripControlCharacters(text: string): string {
 export function sanitizeToolResultContent(content: string): string {
   const cleaned = stripControlCharacters(content);
   return cleaned.replace(/</g, '&lt;').replace(/>/g, '&gt;').trim();
-}
-
-/** Flatten a value into a single-line inline-code payload and cap its length. */
-function toInlineDetail(value: string): string {
-  const flat = value.replace(/\s+/g, ' ').replace(/`/g, "'").trim();
-  return flat.length > MAX_TOOL_DETAIL_CHARS ? `${flat.slice(0, MAX_TOOL_DETAIL_CHARS)}…` : flat;
-}
-
-function clampToolResult(body: string): string {
-  if (body.length <= MAX_TOOL_RESULT_CHARS) return body;
-  return `${body.slice(0, MAX_TOOL_RESULT_CHARS)}\n…（已截断 ${body.length - MAX_TOOL_RESULT_CHARS} 字符）`;
 }
 
 export function formatToolCall(tc: any): string | null {
@@ -130,23 +117,18 @@ export interface TurnTranscript {
  * would scramble same-second steps, so it can't order them. In multi-turn files
  * `step_index` resets per turn, so the time filter MUST run before the sort.
  * Steps are not deduplicated: agy can re-emit a planner step with the same
- * index, but the re-emitted copy is usually the more complete one, and
- * MAX_TRANSCRIPT_CHARS bounds any rare duplication.
+ * index, but the re-emitted copy is usually the more complete one. Nothing is
+ * truncated here — the Thinking Process block carries the full reasoning and
+ * tool logs of the turn, and oversized rich messages are handled downstream by
+ * splitRichBlocks (multi-message split, no content loss).
  */
 export function buildTurnTranscript(lines: string[], turnStartTime: number): TurnTranscript {
   const parts: { kind: 'thinking' | 'tool'; text: string }[] = [];
   let hasThinking = false;
-  let used = 0;
-  let truncated = false;
 
   const push = (kind: 'thinking' | 'tool', text: string): void => {
-    if (!text || truncated) return;
-    if (used + text.length > MAX_TRANSCRIPT_CHARS) {
-      truncated = true;
-      return;
-    }
+    if (!text) return;
     parts.push({ kind, text });
-    used += text.length;
   };
 
   // Filter to this turn first, then stable-sort by step_index (see the JSDoc
@@ -179,10 +161,8 @@ export function buildTurnTranscript(lines: string[], turnStartTime: number): Tur
     // Background tools report RUNNING first and finish in a later step; keep the
     // status so a still-running task is not mistaken for a completed one.
     const status = parsed.status === 'DONE' ? '' : ` · ${String(parsed.status ?? '')}`;
-    push('tool', `**${label}${status}**\n\n${clampToolResult(body)}`);
+    push('tool', `**${label}${status}**\n\n${body}`);
   }
-
-  if (truncated) parts.push({ kind: 'tool', text: '…（本轮工具日志过长，已截断）' });
 
   let markdown = '';
   for (let i = 0; i < parts.length; i++) {
