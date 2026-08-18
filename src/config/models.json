@@ -52,14 +52,14 @@
         "Web2API: Gemini 3.1 Pro",
         "DeepSeek: Flash Thinking Search",
         "DeepSeek: Flash Search",
-        "Web2API: Gemini 3.6 Flash Thinking",
+        "Web2API: Gemini 3.7 Flash",
+        "Web2API: Gemini Auto",
+        "Web2API: Gemini 3.5 Flash Thinking Lite",
+        "Web2API: Gemini Flash Lite",
         "DeepSeek: Pro Thinking",
         "DeepSeek: Pro",
         "DeepSeek: Flash Thinking",
-        "DeepSeek: Flash",
-        "Web2API: Gemini Auto",
-        "Web2API: Gemini 3.5 Flash Thinking Lite",
-        "Web2API: Gemini Flash Lite"
+        "DeepSeek: Flash"
       ]
     }
   ],
@@ -88,19 +88,18 @@
     "Web2API: Gemini 3.1 Pro",
     "DeepSeek: Flash Thinking Search",
     "DeepSeek: Flash Search",
-    "Web2API: Gemini 3.6 Flash Thinking",
+    "Web2API: Gemini 3.7 Flash",
+    "Web2API: Gemini Auto",
+    "Web2API: Gemini 3.5 Flash Thinking Lite",
+    "Web2API: Gemini Flash Lite",
     "DeepSeek: Pro Thinking",
     "DeepSeek: Pro",
     "DeepSeek: Flash Thinking",
-    "DeepSeek: Flash",
-    "Web2API: Gemini Auto",
-    "Web2API: Gemini 3.5 Flash Thinking Lite",
-    "Web2API: Gemini Flash Lite"
+    "DeepSeek: Flash"
   ],
   "routing": {
     "Web2API: Gemini 3.1 Pro Enhanced":        "gemini-3.1-pro-enhanced",
-    "Web2API: Gemini 3.6 Flash":               "gemini-3.6-flash",
-    "Web2API: Gemini 3.6 Flash Thinking":      "gemini-3.6-flash-thinking",
+    "Web2API: Gemini 3.7 Flash":               "gemini-3.7-flash",
     "Web2API: Gemini 3.5 Flash Thinking Lite": "gemini-3.5-flash-thinking-lite",
     "Web2API: Gemini 3.1 Pro":                 "gemini-3.1-pro",
     "Web2API: Gemini Flash Lite":              "gemini-flash-lite",

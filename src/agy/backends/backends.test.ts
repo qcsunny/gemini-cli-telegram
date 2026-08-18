@@ -507,7 +507,7 @@ describe('opencode session reuse', () => {
     db.prepare('INSERT INTO session VALUES (?, ?, ?)').run('ses_live', 'gemini-cli-telegram:conv-live', Date.now());
     db.close();
 
-    process.env['OPENCODE_PART_POLL_MS'] = '10';
+    process.env['OPENCODE_PART_POLL_MS'] = '2';
     const { runOpenCode } = await import('./opencode.js');
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
@@ -519,18 +519,18 @@ describe('opencode session reuse', () => {
       onEvent: event => { if (event.type === 'thought') thoughts.push(event.content || ''); },
     });
 
-    await new Promise(resolve => setTimeout(resolve, 60));
+    await new Promise(resolve => setTimeout(resolve, 10));
     const writeDb = new Database(path.join(tmpDir, 'opencode.db'));
     const now = Date.now();
     writeDb.prepare('INSERT INTO message VALUES (?, ?, ?, ?, ?)').run('msg_live', 'ses_live', now, now, JSON.stringify({ role: 'assistant' }));
     writeDb.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)').run('part_reason', 'msg_live', 'ses_live', now, now, JSON.stringify({ type: 'reasoning', text: 'think' }));
-    await new Promise(resolve => setTimeout(resolve, 60));
+    await new Promise(resolve => setTimeout(resolve, 10));
     writeDb.prepare('UPDATE part SET data = ?, time_updated = ? WHERE id = ?').run(JSON.stringify({ type: 'reasoning', text: 'thinking' }), Date.now(), 'part_reason');
     writeDb.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)').run('part_text', 'msg_live', 'ses_live', now + 1, now + 1, JSON.stringify({ type: 'text', text: 'ans' }));
-    await new Promise(resolve => setTimeout(resolve, 60));
+    await new Promise(resolve => setTimeout(resolve, 10));
     writeDb.prepare('UPDATE part SET data = ?, time_updated = ? WHERE id = ?').run(JSON.stringify({ type: 'text', text: 'answer' }), Date.now(), 'part_text');
     writeDb.close();
-    await new Promise(resolve => setTimeout(resolve, 60));
+    await new Promise(resolve => setTimeout(resolve, 10));
 
     child.stdout.emit('data', JSON.stringify({ type: 'step_finish', part: { reason: 'stop' } }) + '\n');
     child.emit('close', 0);

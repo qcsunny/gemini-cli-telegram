@@ -118,7 +118,7 @@ describe('modelOutputs schema & messageCache integration', () => {
     );
 
     // Wait a brief moment for async DB write to finish
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 5));
 
     // Verify row was inserted into model_outputs table
     const row = db.select().from(schema.modelOutputs).where(eq(schema.modelOutputs.messageId, 12345)).get();

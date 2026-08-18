@@ -1,6 +1,9 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  esbuild: {
+    target: 'node22',
+  },
   cacheDir: './node_modules/.vitest',
   test: {
     pool: 'threads',
@@ -9,15 +12,11 @@ export default defineConfig({
         singleThread: true,
       },
     },
+    reporters: [['default', { summary: false }]],
+    include: ['src/**/*.test.ts'],
+    exclude: ['dist/**', 'node_modules/**', 'tools/**', 'scratch/**', '.agents/**'],
     testTimeout: 20000,
     clearMocks: true,
-    deps: {
-      optimizer: {
-        ssr: {
-          enabled: true,
-        },
-      },
-    },
     env: {
       LOG_LEVEL: 'silent',
       NODE_ENV: 'test',
