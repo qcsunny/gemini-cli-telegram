@@ -166,7 +166,7 @@ export function registerSessionHandlers(
         '',
         `💰 <b>Estimated Cost:</b> <code>${currencySymbol}${cost.totalCost.toFixed(5)}</code>`,
         '',
-        `<i>Usage is tracked automatically across all model backends.</i>`
+        `💾 <i>已在 SQLite 数据库持久化（重启服务不丢失；发送 /new 重置开启新会话）。</i>`
       ].join('\n');
 
       await ctx.reply(text, {

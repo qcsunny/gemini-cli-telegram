@@ -1,5 +1,4 @@
 {
-  "channelOrder": ["agy", "claude", "codex", "deepseek", "opencode", "web2api"],
   "tiers": [
     {
       "name": "旗舰推理",

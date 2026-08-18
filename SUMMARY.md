@@ -1,37 +1,32 @@
-# Anchored Summary (generated 2026-08-12)
+# Anchored Summary (generated 2026-08-18)
 
 ## Objective
 - Keep the repo documentation aligned with current architecture and deployment.
-- Reflect the latest robustness hardening (v1.17.2+).
+- Current release line: **v1.24.0**; working tree adds the 🤖 Auto smart router.
 
 ## Important Details
-- **Native agy CLI** stores each conversation in `~/.gemini/antigravity-cli/conversations/{convId}.db` with a `steps` table; each step's `metadata` blob is protobuf-encoded usage.
-- **Protobuf field semantics** (confirmed via statusline.py and live data): field 2=input (new tokens, independent), 3=output (total output **including** thinking), 5=cached (independent), 10=thinking (subset of output, for display only, no separate charge).
-- **statusline.py billing formula**: `cost = input*rate + cached*rate*0.25 + output*rate` — no separate thinking cost.
-- **Deployment is user-space systemd**: `systemctl --user ... gemini-cli-telegram.service`; `loginctl enable-linger` keeps the daemon alive after SSH logout. Never `sudo`; never launch `node dist/cli.js start --live` ad-hoc (409 Conflict loops, see AGENTS.md).
-- **Build-first rule**: the service runs `dist/cli.js`, so every `src/` change requires `npm run build` before `systemctl --user restart`.
+- **Six model backends**, routed by display-name prefix in `runAgyPrint()` (src/agy/agyCli.ts): `Web2API:` → web2api HTTP proxy (:8081), `DeepSeek:` → deepseek proxy (:5001), `OpenCode:` → opencode CLI (run --format json), `Claude CLI:` → claude -p, `Codex:` → codex exec, others → native agy subprocess.
+- **5 capability tiers** (config.json `modelsConfig.tiers` / src/config/models.json): T0 旗舰推理 → T1 高级推理 → T2 通用能力 → T3 轻量与免费 → T4 远程备用 (12 models). 32 models total across 6 channels.
+- **Tier-aware monotonic fallback**: `buildTierAwareChain()` (src/core/modelRegistry.ts) builds a strictly-descending chain; each model retried `retriesPerModel` (default 3); total budget = chain.length × retriesPerModel. `backendHealth.ts` skips cooldown channels (30s→5min exponential, persisted in `runtime_states`).
+- **🤖 Auto smart router** (src/core/router.ts, uncommitted): `Web2API: Gemini Flash Lite` pre-classifies A/B/C with a 2.5s timeout, heuristic fallback (`classifyHeuristic`), maps A→T0 first, B→T1 first, C→T4 free Web2API. Entry: `/model auto` / keyboard `🤖 Auto` button.
+- **Ephemeral draft streaming** (private chats, `tuning.useRichDraftPrivate`): `sendRichMessageDraft` preview + 20s heartbeat keep-alive + native `thinking` pill (`tuning.richDraftThinkingInPill`), persisted once at finalize via `sendRichMessage`. 4-tier rich fallback: blocks → HTML → markdown → plain.
+- **Config priority**: config.json `orderedModels` → config.json `modelsConfig.tiers` → models.json tiers/defaultOrder. `channelOrder` field removed.
+- **Deployment is user-space systemd**: `systemctl --user restart gemini-cli-telegram.service`; service runs `dist/cli.js` so every `src/` change requires `npm run build` first. Logs only in project `logs/` (pino direct file; journalctl empty). Never `sudo`; never ad-hoc `node dist/cli.js start --live` / `stop` (409 loops / silent down).
+- **Testing**: 18 files / 518 tests, all green. `npm run test:changed` for incremental runs.
 
 ## Work State
 ### Completed
-- **Robustness hardening (v1.17.2, commit `f68ee56`)**:
-  - Command injection removed: outbound curl fallback now uses `spawn` + argv array instead of shell-string `exec`.
-  - Child-process lifecycle: SIGINT→SIGKILL escalation (5s) on abort in agyCli/opencode; `destroyAll()` stops the scheduler and waits; graceful shutdown with 15s force-exit fallback and `closeDb()`.
-  - Exchange-rate `_fetching` guard now resets in a `finally` (TTL 24h refresh works again).
-  - `setup` no longer drops unrelated config fields; `saveUserConfig` writes atomically (tmp+rename) and invalidates the cache.
-  - DB: `busy_timeout=5000`, `PRAGMA user_version` schema stamping, explicit open-failure errors.
-  - Messages persisted atomically via `saveMessageTurn()` (transaction), empty assistant rows skipped; `/reset` purges orphaned `messages` rows.
-  - `uncaughtException` now triggers graceful shutdown (systemd restarts) instead of running in corrupted state.
-  - PID identity verification via `/proc/<pid>/cmdline` prevents killing recycled PIDs on `stop`/`status`.
-- **Previous highlights** (from earlier anchored summary): footnote `reference_link`/`reference` support; `readUsageFromDatabase()` sums all steps; no separate thinking cost; `[object Object]` footnote fix in `blocks.ts`.
-- **Releases**: v1.1.2 → v1.17.2 published on GitHub; service restarted after each.
-- **No geminiDirect anymore** — all models go through local agy / web2api / deepseek / opencode backends.
+- **v1.24.0**: native ephemeral rich-message draft for private chats (sendRichMessageDraft preview + 20s heartbeat + native thinking animation, persisted via sendRichMessage as a new real message).
+- **Robustness hardening (v1.17.x line)**: spawn argv (no shell injection), SIGINT→SIGKILL escalation, atomic config save, DB busy_timeout + schema stamping, PID identity verification, graceful shutdown.
+- **Backend expansion**: local Claude CLI (Claude Opus 5) and Codex CLI (GPT-5.6 Sol) backends; duplicate OpenCode model config removed.
+- **Value-investing pipeline unified**: `/invest` keyboard entry now shares the value-invest-analysis script path with inline (both spawn `dist/bin/json.js`, inject full report JSON). Dividend-yield uses trailing-12-month `PRETAX_BONUS_RMB`.
+- **Ops features**: `/usage` token breakdown, `/backends` health monitor, `/export` markdown, `/compare` alias, sqlite WAL maintenance.
 
 ### Active
-- (none)
+- **Working tree**: 🤖 Auto smart router feature (router.ts + messageLoop/modelRegistry/configHandlers/callbackRouter/ui wiring, `channelOrder` removal) — uncommitted.
 
 ### Blocked
 - (none)
 
 ## Next Move
-- Commit and push doc updates (README.md, README.en.md, SUMMARY.md).
-- Continue SemVer 2.0.0 (1.17.x patch line until 1.17.9, then minor).
+- Finish doc updates; commit the Auto-router work; release as **v1.25.0** (MINOR: new feature) via Tag + GitHub Release + service restart.
