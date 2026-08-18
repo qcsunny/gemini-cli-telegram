@@ -10,7 +10,7 @@
  */
 
 import type { Bot, Context } from 'grammy';
-import { InlineKeyboard } from 'grammy';
+import { InlineKeyboard, InputFile } from 'grammy';
 import { addToWatchlist, removeFromWatchlist } from '../../../stock/service/watchlist.js';
 import {
   generateDailyBriefing,
@@ -279,6 +279,19 @@ export async function handleReportGeneration(
       await reply.send(briefing.markdown).catch(async () => {
         await ctx.reply(briefing.markdown).catch(() => {});
       });
+    }
+
+    // Also send the raw markdown report as a document to the user's private chat window
+    if (userId > 0) {
+      try {
+        const dateStr = new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' }).replace(/\//g, '-');
+        const fileName = `${segment}_watchlist_report_${dateStr}.md`;
+        await ctx.api.sendDocument(userId, new InputFile(Buffer.from(briefing.markdown, 'utf-8'), fileName), {
+          caption: `📝 这是您的【${segmentLabel}】自选股 AI 盘后复盘 Markdown 文档。`,
+        });
+      } catch (docErr) {
+        logger.warn(`Failed to send markdown document to user ${userId}'s private chat: ${docErr}`);
+      }
     }
   } catch (err) {
     logger.error(`[WatchlistHandler] Failed to generate daily briefing for user ${userId}: ${err}`);
