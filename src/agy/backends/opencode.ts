@@ -31,7 +31,7 @@ const SESSION_TITLE_PREFIX = 'gemini-cli-telegram:';
 /** Grace period (ms) between SIGINT and SIGKILL escalation on abort. */
 const ABORT_SIGKILL_GRACE_MS = 5000;
 /** OpenCode persists live part text before its JSON CLI emits the completed part. */
-const PART_POLL_MS = 150;
+const PART_POLL_MS = process.env['OPENCODE_PART_POLL_MS'] ? Number(process.env['OPENCODE_PART_POLL_MS']) : 150;
 
 /**
  * Look up an existing opencode session id by the bot's conversation marker.

@@ -221,3 +221,22 @@ describe('SessionManager', () => {
     });
   });
 });
+
+describe('resume', () => {
+  describe('listAvailableSessions', () => {
+    it('should return an empty list because agy CLI manages sessions automatically', async () => {
+      const { listAvailableSessions } = await import('./resume.js');
+      const sessions = await listAvailableSessions();
+      expect(sessions).toEqual([]);
+    });
+  });
+
+  describe('resumeSession', () => {
+    it('should return a static confirmation message', async () => {
+      const { resumeSession } = await import('./resume.js');
+      const mockSession = {} as any;
+      const result = await resumeSession(mockSession, 'latest');
+      expect(result).toBe('Successfully switched active agy session to latest');
+    });
+  });
+});
