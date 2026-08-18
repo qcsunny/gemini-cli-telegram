@@ -79,7 +79,7 @@ describe('displayModelName', () => {
 describe('compareModelName', () => {
   it('should hide backend prefixes only in compare display', () => {
     expect(compareModelName('Web2API: Gemini 3.1 Pro Enhanced')).toBe('Gemini 3.1 Pro Enhanced');
-    expect(compareModelName('OpenCode: DeepSeek V4 Flash')).toBe('DeepSeek V4 Flash');
+    expect(compareModelName('OpenCode: Qwen 3.6 35B A3B')).toBe('Qwen 3.6 35B A3B');
   });
 
   it('should keep DeepSeek prefix since DeepSeek is a model family name', () => {
