@@ -218,7 +218,7 @@ export function registerContentHandlers(
 
     try {
       const db = getDb();
-      const records = await db.select()
+      const records = db.select()
         .from(modelOutputs)
         .where(eq(modelOutputs.chatId, String(chatId)))
         .orderBy(modelOutputs.id)
