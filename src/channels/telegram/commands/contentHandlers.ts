@@ -1,8 +1,8 @@
-import type { Bot, Context } from 'grammy';
+import { type Bot, type Context, InputFile } from 'grammy';
 import * as path from 'node:path';
 import * as fsPromises from 'node:fs/promises';
 import type { SessionManager } from '../../../core/session.js';
-import type { SessionOptions} from '../../../core/types.js';
+import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions } from '../../../core/resume.js';
 import { logger } from '../../../utils/logger.js';
 import { messageCache } from '../../../utils/messageCache.js';
@@ -203,6 +203,57 @@ export function registerContentHandlers(
     } catch (e) {
       logger.error(`Error deleting session ${idx} for chat ${chatId}: ${e}`);
       await ctx.reply(`${ICONS.error} <b>Delete failed:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
+    }
+  });
+
+  // ── Export Session ──
+  bot.command('export', async (ctx: Context) => {
+    const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
+    if (!chatId) return;
+
+    const session = sessionManager.getSession(chatId, threadId);
+    const sessionTitle = session?.currentProject?.name || session?.sessionId?.slice(0, 8) || 'session';
+    const model = session?.config?.getModel() || defaultOptions.model || 'unknown';
+
+    try {
+      const db = getDb();
+      const records = await db.select()
+        .from(modelOutputs)
+        .where(eq(modelOutputs.chatId, String(chatId)))
+        .orderBy(modelOutputs.id)
+        .all();
+
+      if (records.length === 0) {
+        await ctx.reply(`${ICONS.info} <b>No chat history found to export for this session.</b>`, { parse_mode: 'HTML' });
+        return;
+      }
+
+      const dateStr = new Date().toISOString().slice(0, 10);
+      let md = `# 📝 Session Export - ${sessionTitle}\n\n`;
+      md += `> **Date:** ${new Date().toLocaleString()}\n`;
+      md += `> **Session ID:** \`${session?.sessionId || 'unknown'}\`\n`;
+      md += `> **Model:** \`${model}\`\n\n---\n\n`;
+
+      records.forEach((rec, idx) => {
+        md += `### Turn ${idx + 1}\n\n`;
+        if (rec.title) {
+          md += `#### 📌 ${rec.title}\n\n`;
+        }
+        if (rec.thinkingMarkdown && rec.thinkingMarkdown.trim()) {
+          md += `<details>\n<summary>🧠 Thinking Process</summary>\n\n${rec.thinkingMarkdown.trim()}\n\n</details>\n\n`;
+        }
+        md += `${rec.answerMarkdown.trim()}\n\n---\n\n`;
+      });
+
+      const fileName = `session-${sessionTitle}-${dateStr}.md`.replace(/[^a-zA-Z0-9._-]/g, '_');
+      await ctx.replyWithDocument(new InputFile(Buffer.from(md, 'utf-8'), fileName), {
+        caption: `📄 <b>Session Exported Successfully</b>\n\nContains ${records.length} assistant turns.\nModel: <code>${escapeHtml(model)}</code>`,
+        parse_mode: 'HTML',
+      });
+    } catch (e) {
+      logger.error(`Error exporting session for chat ${chatId}: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Export failed:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
     }
   });
 }

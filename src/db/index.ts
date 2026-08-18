@@ -110,7 +110,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       conversation_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL,
-      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode')),
+      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode','claude','codex')),
       created_at TEXT NOT NULL,
       usage TEXT
     );
@@ -177,14 +177,13 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
     );
   `);
 
-  // Migration: allow the 'opencode' backend in the messages table CHECK
+  // Migration: allow all 6 backends ('opencode', 'claude', 'codex') in the messages table CHECK
   // constraint. SQLite cannot ALTER a CHECK constraint, so rebuild the table
   // preserving all existing columns and data. Runs once on databases created
-  // before opencode routing existed (CREATE TABLE IF NOT EXISTS does not touch
-  // an existing table).
+  // before new backends existed.
   try {
     const msgSql = sqlite.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'`).get() as { sql?: string } | undefined;
-    if (msgSql?.sql && !msgSql.sql.includes("'opencode'")) {
+    if (msgSql?.sql && (!msgSql.sql.includes("'opencode'") || !msgSql.sql.includes("'claude'") || !msgSql.sql.includes("'codex'"))) {
       const cols = sqlite.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
       const names = cols.map((c) => c.name);
       const colDefs = names.map((n) => {
@@ -192,7 +191,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
         if (n === 'conversation_id') return 'conversation_id TEXT NOT NULL';
         if (n === 'role') return "role TEXT NOT NULL CHECK(role IN ('user','assistant'))";
         if (n === 'content') return 'content TEXT NOT NULL';
-        if (n === 'backend') return "backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode'))";
+        if (n === 'backend') return "backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode','claude','codex'))";
         if (n === 'created_at') return 'created_at TEXT NOT NULL';
         return `"${n}" TEXT`;
       });
@@ -202,7 +201,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
         sqlite.exec(`DROP TABLE messages`);
         sqlite.exec(`ALTER TABLE messages_new RENAME TO messages`);
       })();
-      logger.info(`[db] Migrated 'messages' table to allow 'opencode' backend (${names.length} columns, data preserved)`);
+      logger.info(`[db] Migrated 'messages' table to allow all backends (${names.length} columns, data preserved)`);
     }
   } catch (e: any) {
     logger.warn(`[db] messages CHECK constraint migration failed: ${e.message}`);
@@ -263,6 +262,20 @@ export function closeDb(): void {
   } else {
     dbInstance = null;
     dbInstancePath = null;
+  }
+}
+
+/**
+ * Performs SQLite WAL checkpoint maintenance to truncate the WAL journal and keep disk footprint small.
+ */
+export function walCheckpoint(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'TRUNCATE'): void {
+  if (sqliteDb) {
+    try {
+      sqliteDb.pragma(`wal_checkpoint(${mode})`);
+      logger.debug(`[db] Executed PRAGMA wal_checkpoint(${mode})`);
+    } catch (e) {
+      logger.warn(`[db] WAL checkpoint error: ${e}`);
+    }
   }
 }
 

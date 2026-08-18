@@ -205,3 +205,36 @@ export function isConnectionError(err: unknown): boolean {
   const msg = (e.message || '').toLowerCase();
   return msg.includes('socket hang up') || msg.includes('connection refused') || msg.includes('econnrefused');
 }
+
+export interface ChannelHealthStatus {
+  channel: string;
+  isHealthy: boolean;
+  failCount: number;
+  cooldownRemainingSeconds: number;
+}
+
+/**
+ * Returns health status overview for all 6 backend channels.
+ */
+export function getAllBackendHealthStatus(): ChannelHealthStatus[] {
+  loadFromDbIfNeeded();
+  const allChannels = ['codex', 'claude', 'agy', 'opencode', 'deepseek', 'web2api'];
+  const now = Date.now();
+  return allChannels.map((channel) => {
+    const health = backendHealth.get(channel);
+    if (!health || now >= health.cooldownUntil) {
+      return {
+        channel,
+        isHealthy: true,
+        failCount: health?.failCount ?? 0,
+        cooldownRemainingSeconds: 0,
+      };
+    }
+    return {
+      channel,
+      isHealthy: false,
+      failCount: health.failCount,
+      cooldownRemainingSeconds: Math.ceil((health.cooldownUntil - now) / 1000),
+    };
+  });
+}

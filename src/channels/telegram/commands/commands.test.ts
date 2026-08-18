@@ -21,6 +21,9 @@ import { fetchInvestAnalysis, fetchInvestAnalyses, buildInvestPrompt, getInvestP
 import { registerInvestHandler } from './investHandler.js';
 import { isPrivateImageRequest, handlePrivateImageRequest } from './privateImageHandler.js';
 import { persistChatMessage, loadRecentMessages, trimChatMessages } from './sumHandler.js';
+import { formatBackendsStatus, registerConfigHandlers } from './configHandlers.js';
+import { getAllBackendHealthStatus, markBackendFailed, clearBackendHealth } from '../../../core/backendHealth.js';
+import { registerContentHandlers } from './contentHandlers.js';
 import { closeDb } from '../../../db/index.js';
 import * as inlineHandler from './inlineHandler.js';
 import * as dailyBriefing from '../../../stock/service/dailyBriefing.js';
@@ -736,5 +739,74 @@ describe('sumHandler chat_messages persistence', () => {
     expect(aliceMsgs).toEqual([
       { senderName: 'Alice', text: 'msg from alice', messageId: 2 },
     ]);
+  });
+});
+
+describe('Backends Health Monitor and /backends command', () => {
+  beforeEach(() => {
+    clearBackendHealth();
+  });
+
+  afterEach(() => {
+    clearBackendHealth();
+  });
+
+  it('should list all 6 backends as healthy by default', () => {
+    const statuses = getAllBackendHealthStatus();
+    expect(statuses).toHaveLength(6);
+    expect(statuses.every((s) => s.isHealthy)).toBe(true);
+
+    const { text, keyboard } = formatBackendsStatus();
+    expect(text).toContain('Model Backends Health Monitor');
+    expect(text).toContain('Google Antigravity (AGY)');
+    expect(text).toContain('Claude CLI');
+    expect(text).toContain('Codex CLI');
+    expect(text).toContain('OpenCode Local Engine');
+    expect(text).toContain('DeepSeek Proxy');
+    expect(text).toContain('Web2API Proxy');
+    expect(text).toContain('正常运作 (Healthy)');
+    expect(keyboard.inline_keyboard).toBeDefined();
+  });
+
+  it('should display cooldown state when a backend fails', () => {
+    markBackendFailed('deepseek');
+    const statuses = getAllBackendHealthStatus();
+    const deepseek = statuses.find((s) => s.channel === 'deepseek');
+    expect(deepseek?.isHealthy).toBe(false);
+    expect(deepseek?.failCount).toBe(1);
+    expect(deepseek?.cooldownRemainingSeconds).toBeGreaterThan(0);
+
+    const { text } = formatBackendsStatus();
+    expect(text).toContain('🔴 <b>DeepSeek Proxy</b>');
+    expect(text).toContain('熔断冷却中');
+  });
+
+  it('should register /backends command on bot', () => {
+    const bot = {
+      command: vi.fn(),
+      on: vi.fn(),
+    } as unknown as Bot;
+    const sessionManager = {
+      getSession: vi.fn(),
+      getSessionCount: vi.fn().mockReturnValue(1),
+    } as unknown as SessionManager;
+    const defaultOptions = { model: 'Gemini 3.7 Flash (High)' } as SessionOptions;
+
+    registerConfigHandlers(bot, sessionManager, defaultOptions);
+    expect(bot.command).toHaveBeenCalledWith('backends', expect.any(Function));
+  });
+
+  it('should register /export command on bot', () => {
+    const bot = {
+      command: vi.fn(),
+      on: vi.fn(),
+    } as unknown as Bot;
+    const sessionManager = {
+      getSession: vi.fn(),
+    } as unknown as SessionManager;
+    const defaultOptions = { model: 'Gemini 3.7 Flash (High)' } as SessionOptions;
+
+    registerContentHandlers(bot, sessionManager, defaultOptions);
+    expect(bot.command).toHaveBeenCalledWith('export', expect.any(Function));
   });
 });

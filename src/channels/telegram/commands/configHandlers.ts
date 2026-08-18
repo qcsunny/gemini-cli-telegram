@@ -1,8 +1,9 @@
-import type { Bot, Context } from 'grammy';
+import { Bot, type Context, InlineKeyboard } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
-import type { SessionOptions} from '../../../core/types.js';
+import type { SessionOptions } from '../../../core/types.js';
 import { logger } from '../../../utils/logger.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
+import { getAllBackendHealthStatus } from '../../../core/backendHealth.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, formatSessionStats, formatHelp } from '../ui.js';
 
 export function registerConfigHandlers(
@@ -136,6 +137,15 @@ export function registerConfigHandlers(
     });
   });
 
+  // ── Backends Health Monitor ──
+  bot.command('backends', async (ctx: Context) => {
+    const { text, keyboard } = formatBackendsStatus();
+    await ctx.reply(text, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    });
+  });
+
   // ── Help ──
   bot.command('help', async (ctx: Context) => {
     await ctx.reply(formatHelp(), {
@@ -143,4 +153,37 @@ export function registerConfigHandlers(
       reply_markup: buildMainKeyboard(),
     });
   });
+}
+
+/**
+ * Format the real-time health and cooldown status of all 6 backend channels.
+ */
+export function formatBackendsStatus(): { text: string; keyboard: InlineKeyboard } {
+  const statuses = getAllBackendHealthStatus();
+  const channelNames: Record<string, string> = {
+    codex: 'Codex CLI',
+    claude: 'Claude CLI',
+    agy: 'Google Antigravity (AGY)',
+    opencode: 'OpenCode Local Engine',
+    deepseek: 'DeepSeek Proxy',
+    web2api: 'Web2API Proxy',
+  };
+
+  const lines = statuses.map((s) => {
+    const name = channelNames[s.channel] || s.channel;
+    if (s.isHealthy) {
+      return `🟢 <b>${name}</b>\n   └ 状态：<code>正常运作 (Healthy)</code>`;
+    }
+    return `🔴 <b>${name}</b>\n   └ 状态：<code>熔断冷却中 (${s.cooldownRemainingSeconds}s 剩余, 失败 ${s.failCount} 次)</code>`;
+  });
+
+  const text = `🛡️ <b>Model Backends Health Monitor</b>\n\n${lines.join('\n\n')}\n\n<i>Last checked: ${new Date().toLocaleTimeString()}</i>`;
+
+  const keyboard = new InlineKeyboard()
+    .text('🔄 刷新状态', 'backends:refresh')
+    .text('⚡ 恢复所有后端', 'backends:reset')
+    .row()
+    .text('⚙️ 切换模型', 'cmd:model');
+
+  return { text, keyboard };
 }
