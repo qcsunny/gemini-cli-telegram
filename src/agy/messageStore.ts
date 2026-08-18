@@ -9,7 +9,7 @@ import { eq, and } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import { logger } from '../utils/logger.js';
 
-type Backend = 'web2api' | 'deepseek' | 'gemini-direct' | 'opencode' | 'claude';
+type Backend = 'web2api' | 'deepseek' | 'gemini-direct' | 'opencode' | 'claude' | 'codex';
 
 export interface StoredMessage {
   role: 'user' | 'assistant';

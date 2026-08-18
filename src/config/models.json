@@ -1,10 +1,11 @@
 {
-  "channelOrder": ["agy", "claude", "deepseek", "opencode", "web2api"],
+  "channelOrder": ["agy", "claude", "codex", "deepseek", "opencode", "web2api"],
   "tiers": [
     {
       "name": "旗舰推理",
       "priority": 0,
       "models": [
+        "Codex: GPT-5.6 Sol",
         "Claude CLI: Claude Opus 5",
         "Claude Opus 4.6 (Thinking)",
         "Gemini 3.1 Pro (High)",
@@ -64,6 +65,7 @@
     }
   ],
   "defaultOrder": [
+    "Codex: GPT-5.6 Sol",
     "Claude CLI: Claude Opus 5",
     "Claude Opus 4.6 (Thinking)",
     "Gemini 3.1 Pro (High)",
@@ -122,9 +124,11 @@
     "OpenCode: GLM 4.7 Flash":                "zhipuai/glm-4.7-flash",
     "OpenCode: Big Pickle":                  "opencode/big-pickle",
     "OpenCode: Qwen 3.6 35B A3B":            "hetzner/Qwen/Qwen3.6-35B-A3B-FP8",
-    "Claude CLI: Claude Opus 5":             "claude-opus-5"
+    "Claude CLI: Claude Opus 5":             "claude-opus-5",
+    "Codex: GPT-5.6 Sol":                    "gpt-5.6-sol"
   },
   "descriptions": {
+    "Codex: GPT-5.6 Sol":                    "本地 Codex CLI 驱动 · 适用：前沿算法突破、超复杂全栈重构、深度思考与系统推理",
     "Claude CLI: Claude Opus 5":             "本地 Claude Code CLI 驱动 · 适用：超高复杂度全栈架构、代码审计与深度思考",
     "OpenCode: GLM 4.7 Flash":               "智谱 GLM-4.7 Flash 极速模型 · 适用：快速代码生成、日常中文问答、高并发轻量任务",
     "OpenCode: Hunyuan 3.0 Free":            "腾讯混元 3.0 大模型免费版 · 适用：中文深度对话、长篇写作、多领域常识问答",

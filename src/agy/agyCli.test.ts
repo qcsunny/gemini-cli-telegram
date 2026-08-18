@@ -10,6 +10,7 @@ import {
   isWeb2ApiModel,
   isDeepSeekModel,
   isClaudeCliModel,
+  isCodexModel,
   getAvailableModels,
 } from '../agy/agyCli.js';
 
@@ -295,6 +296,12 @@ describe('isWeb2ApiModel / isDeepSeekModel', () => {
     expect(isClaudeCliModel('Claude Opus 4.6 (Thinking)')).toBe(false);
     expect(isClaudeCliModel('OpenCode: Big Pickle')).toBe(false);
     expect(isClaudeCliModel('Web2API: Gemini Auto')).toBe(false);
+  });
+
+  it('should identify Codex models', async () => {
+    expect(isCodexModel('Codex: GPT-5.6 Sol')).toBe(true);
+    expect(isCodexModel('Claude CLI: Claude Opus 5')).toBe(false);
+    expect(isCodexModel('Web2API: Gemini Auto')).toBe(false);
   });
 });
 
