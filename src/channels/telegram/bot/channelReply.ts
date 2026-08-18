@@ -1238,8 +1238,22 @@ export function buildChannelReply(
             logger.warn(`[BLOCK VALIDATION] editRich blocks failed validation, falling through`);
             throw new Error('Block payload validation failed');
           }
-          logger.debug(`[DEBUG] editMessageText (Option A - blocks) called: messageId=${messageId}, blocks=${blocks.length}`);
-          await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(blocks));
+
+          const parts = splitRichBlocks(blocks, TELEGRAM_RICH_MAX_LENGTH);
+          if (parts.length > 1) {
+            logger.info(`[editRich] Message blocks exceed max length. Splitting into ${parts.length} parts.`);
+            // Edit the original message with the first part
+            await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(parts[0]));
+            // Send remaining parts as new messages
+            for (let i = 1; i < parts.length; i++) {
+              await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(parts[i]), {
+                message_thread_id: messageThreadId,
+              });
+            }
+          } else {
+            logger.debug(`[DEBUG] editMessageText (Option A - blocks) called: messageId=${messageId}, blocks=${blocks.length}`);
+            await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(blocks));
+          }
           logger.debug(`[DEBUG] editMessageText (Option A - blocks) success: messageId=${messageId}`);
           messageCache.set(messageId, cacheMarkdown);
           return;
