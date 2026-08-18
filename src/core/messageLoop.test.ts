@@ -217,10 +217,10 @@ describe('processMessage', () => {
       expect.objectContaining({ model: 'Gemini 3.1 Pro (Low)' })
     );
 
-    // Fourth call uses the fallback model (next in tier-aware chain: OpenCode: DeepSeek V4 Flash Free).
+    // Fourth call uses the fallback model (next in tier-aware chain: OpenCode: Big Pickle).
     expect(runAgyPrint).toHaveBeenNthCalledWith(
       4,
-      expect.objectContaining({ model: 'OpenCode: DeepSeek V4 Flash Free' })
+      expect.objectContaining({ model: 'OpenCode: Big Pickle' })
     );
 
     // Warning should have been sent to channel (original + fallback models).
@@ -228,11 +228,11 @@ describe('processMessage', () => {
       expect.stringContaining('Gemini 3.1 Pro (Low)')
     );
     expect(mockReply.send).toHaveBeenCalledWith(
-      expect.stringContaining('OpenCode: DeepSeek V4 Flash Free')
+      expect.stringContaining('OpenCode: Big Pickle')
     );
 
     // Session model must have updated
-    expect(mockSession.model).toBe('OpenCode: DeepSeek V4 Flash Free');
+    expect(mockSession.model).toBe('OpenCode: Big Pickle');
     expect(mockSession.conversationId).toBe('fallback-conv-id');
 
     // Conversation should be saved to database with fallback model
@@ -240,7 +240,7 @@ describe('processMessage', () => {
       123456,
       'fallback-conv-id',
       '/test/project/path',
-      'OpenCode: DeepSeek V4 Flash Free',
+      'OpenCode: Big Pickle',
       undefined
     );
   });
