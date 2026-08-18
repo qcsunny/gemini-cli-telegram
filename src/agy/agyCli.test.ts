@@ -271,7 +271,7 @@ describe('readConversationHistory', () => {
 
 describe('isWeb2ApiModel / isDeepSeekModel', () => {
   it('should identify Web2API models', async () => {
-    expect(isWeb2ApiModel('Web2API: Gemini 3.6 Flash')).toBe(true);
+    expect(isWeb2ApiModel('Web2API: Gemini 3.7 Flash')).toBe(true);
     expect(isWeb2ApiModel('Web2API: Gemini Auto')).toBe(true);
   });
 

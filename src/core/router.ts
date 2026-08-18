@@ -74,7 +74,7 @@ export function resolveModelForCategory(category: QueryComplexityLevel): string 
       // Tier 4 (Remote/Free Web2API)
       const tier4 = tiers.find(t => t.priority === 4);
       if (tier4 && tier4.models.length > 0) {
-        const web2api = tier4.models.find(m => m.includes('3.6 Flash') || m.includes('Flash Lite')) || tier4.models[0];
+        const web2api = tier4.models.find(m => m.includes('Flash Lite') || m.includes('3.7 Flash')) || tier4.models[0];
         return web2api;
       }
     }
@@ -82,7 +82,7 @@ export function resolveModelForCategory(category: QueryComplexityLevel): string 
   // Fallback defaults
   if (category === 'A') return 'Claude CLI: Claude Opus 5';
   if (category === 'B') return 'Gemini 3.7 Flash (High)';
-  return 'Web2API: Gemini 3.6 Flash';
+  return 'Web2API: Gemini Flash Lite';
 }
 
 /**
