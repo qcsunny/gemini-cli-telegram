@@ -98,6 +98,8 @@ export async function runCodex(opts: AgyRunOptions): Promise<AgyRunResult> {
     let errBuf = '';
     let contentBuf = '';
     let thoughtBuf = '';
+    let lastContentLen = 0;
+    let lastThoughtLen = 0;
     let stepFinished = false;
     let isError = false;
     let usageTokens: { input: number; output: number; cached: number; thinking: number } | undefined;
@@ -112,14 +114,23 @@ export async function runCodex(opts: AgyRunOptions): Promise<AgyRunResult> {
         } else if (event.type === 'item.completed' || event.type === 'item.updated') {
           opts.onActivity?.();
           const item = event.item || {};
-          if (item.type === 'agent_message' && item.text) {
-            contentBuf = item.text;
-            opts.onChunk?.(item.text);
-            events.emit({ type: 'text', content: item.text });
-          } else if (item.type === 'reasoning' && item.text) {
-            thoughtBuf = item.text;
-            opts.onChunk?.(item.text);
-            events.emit({ type: 'thought', content: item.text });
+          const text = item.text || (typeof item.content === 'string' ? item.content : '');
+          if (item.type === 'agent_message' && text) {
+            contentBuf = text;
+            if (text.length > lastContentLen) {
+              const delta = text.slice(lastContentLen);
+              lastContentLen = text.length;
+              opts.onChunk?.(delta);
+              events.emit({ type: 'text', content: delta });
+            }
+          } else if (item.type === 'reasoning' && text) {
+            thoughtBuf = text;
+            if (text.length > lastThoughtLen) {
+              const delta = text.slice(lastThoughtLen);
+              lastThoughtLen = text.length;
+              opts.onChunk?.(delta);
+              events.emit({ type: 'thought', content: delta });
+            }
           }
         } else if (event.type === 'turn.completed') {
           stepFinished = true;

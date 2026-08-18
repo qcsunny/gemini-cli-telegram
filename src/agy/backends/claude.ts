@@ -131,8 +131,12 @@ export async function runClaudeCli(opts: AgyRunOptions): Promise<AgyRunResult> {
             for (const block of message.content) {
               if (block.type === 'text' && block.text && !contentBuf) {
                 contentBuf = block.text;
+                opts.onChunk?.(block.text);
+                events.emit({ type: 'text', content: block.text });
               } else if (block.type === 'thinking' && block.thinking && !thoughtBuf) {
                 thoughtBuf = block.thinking;
+                opts.onChunk?.(block.thinking);
+                events.emit({ type: 'thought', content: block.thinking });
               }
             }
           }
@@ -144,6 +148,8 @@ export async function runClaudeCli(opts: AgyRunOptions): Promise<AgyRunResult> {
           }
           if (event.result && typeof event.result === 'string' && !contentBuf) {
             contentBuf = event.result;
+            opts.onChunk?.(event.result);
+            events.emit({ type: 'text', content: event.result });
           }
           const usage = event.usage;
           if (usage) {
