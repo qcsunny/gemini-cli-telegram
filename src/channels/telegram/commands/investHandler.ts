@@ -1046,7 +1046,7 @@ export function registerInvestHandler(
     }
   };
 
-  bot.command('invest', (ctx) => handleInvest(ctx));
+  bot.command(['invest', 'compare'], (ctx) => handleInvest(ctx));
   bot.on('callback_query:data', async (ctx, next) => {
     const match = ctx.callbackQuery.data.match(/^stock_invest:(.+)$/);
     if (!match) {

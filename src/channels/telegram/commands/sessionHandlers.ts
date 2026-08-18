@@ -1,10 +1,6 @@
-/**
- * @license
- * Copyright 2026 Google LLC
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import type { Bot, Context } from 'grammy';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
@@ -12,7 +8,11 @@ import { logger } from '../../../utils/logger.js';
 import { getDefaultModel, getDefaultProjectName } from '../../../config/userConfig.js';
 import { ICONS, buildMainKeyboard, buildResumeKeyboard, escapeHtml, formatWelcome } from '../ui.js';
 import { fullInlineOutputs } from './inlineHandler.js';
-
+import { getDb, schema } from '../../../db/index.js';
+import { eq } from 'drizzle-orm';
+import { getConversationId } from '../../../agy/conversationStore.js';
+import { getConversationsDir, readUsageFromDatabase } from '../../../agy/protobuf.js';
+import { calculateCost } from '../../../utils/pricing.js';
 
 export function registerSessionHandlers(
   bot: Bot,
@@ -49,8 +49,8 @@ export function registerSessionHandlers(
     });
   });
 
-  // ── New Session ──
-  bot.command('new', async (ctx: Context) => {
+  // ── New Session (with /reset and /clear aliases) ──
+  bot.command(['new', 'reset', 'clear'], async (ctx: Context) => {
     const chatId = ctx.chat?.id;
     const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
@@ -62,7 +62,7 @@ export function registerSessionHandlers(
           clearInterval(activeSession.typingInterval);
           activeSession.typingInterval = undefined;
         }
-        activeSession.abortController.abort('Reset by /new');
+        activeSession.abortController.abort('Reset by command');
         activeSession.busy = false;
       }
 
@@ -84,6 +84,87 @@ export function registerSessionHandlers(
     } catch (e) {
       logger.error(`Error resetting session for chat ${chatId}: ${e}`);
       await ctx.reply(`${ICONS.error} <b>Failed to reset session:</b> ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  // ── Usage & Cost Command ──
+  bot.command('usage', async (ctx: Context) => {
+    const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
+    if (!chatId) return;
+
+    const session = sessionManager.getSession(chatId, threadId);
+    const model = session?.config?.getModel() || defaultOptions.model || 'unknown';
+
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalCached = 0;
+    let totalThinking = 0;
+
+    try {
+      const convId = await getConversationId(chatId, threadId);
+      if (convId) {
+        // 1. Try reading usage from agy conversation SQLite database
+        const agyDbPath = path.join(getConversationsDir(), `${convId}.db`);
+        if (fs.existsSync(agyDbPath)) {
+          const agyUsage = readUsageFromDatabase(agyDbPath, -1);
+          if (agyUsage) {
+            totalInput += agyUsage.input;
+            totalOutput += agyUsage.output;
+            totalCached += agyUsage.cached;
+            totalThinking += agyUsage.thinking;
+          }
+        }
+
+        // 2. Also read usage from SQLite messages table (for web2api/deepseek/opencode/claude/codex)
+        const db = getDb();
+        const rows = db.select({ usage: schema.messages.usage })
+          .from(schema.messages)
+          .where(eq(schema.messages.conversationId, convId))
+          .all();
+
+        for (const r of rows) {
+          if (r.usage) {
+            try {
+              const u = JSON.parse(r.usage);
+              totalInput += u.input || 0;
+              totalOutput += u.output || 0;
+              totalCached += u.cached || 0;
+              totalThinking += u.thinking || 0;
+            } catch {
+              // ignore parse errors
+            }
+          }
+        }
+      }
+
+      const cost = calculateCost(model, totalInput, totalOutput, totalCached, totalThinking);
+      const currencySymbol = cost.currency === 'CNY' ? '¥' : '$';
+
+      const text = [
+        `📊 <b>Session Token Usage & Cost</b>`,
+        '',
+        `🤖 <b>Active Model:</b> <code>${escapeHtml(model)}</code>`,
+        `🔢 <b>Conversation Turns:</b> <code>${session?.turnCount ?? 0}</code>`,
+        '',
+        `<b>Token Breakdown:</b>`,
+        `  📥 <b>Input (Prompt):</b> <code>${totalInput.toLocaleString()}</code>`,
+        `  ⚡ <b>Cached (Context):</b> <code>${totalCached.toLocaleString()}</code>`,
+        `  📤 <b>Output (Generated):</b> <code>${totalOutput.toLocaleString()}</code>`,
+        `  🧠 <b>Reasoning (Thinking):</b> <code>${totalThinking.toLocaleString()}</code>`,
+        '',
+        `💰 <b>Estimated Cost:</b> <code>${currencySymbol}${cost.totalCost.toFixed(5)}</code>`,
+        '',
+        `<i>Usage is tracked automatically across all model backends.</i>`
+      ].join('\n');
+
+      await ctx.reply(text, {
+        parse_mode: 'HTML',
+        reply_markup: buildMainKeyboard(),
+      });
+    } catch (e) {
+      logger.error(`Error calculating usage for chat ${chatId}: ${e}`);
+      await ctx.reply(`${ICONS.error} <b>Failed to load usage stats:</b> ${e instanceof Error ? e.message : String(e)}`, { parse_mode: 'HTML' });
     }
   });
 
