@@ -24,6 +24,7 @@ import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
 import { getTuningConfig, getDefaultModel } from '../config/userConfig.js';
 import { getEffectiveModelOrder, getChannelModel, buildTierAwareChain } from './modelRegistry.js';
+import { classifyAndRouteQuery, AUTO_MODEL_NAME } from './router.js';
 import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError } from './backendHealth.js';
 
 import { withTimeout } from './messageLoop/threading.js';
@@ -196,11 +197,23 @@ export async function processMessage(
       session._busySince = Date.now();
       session.turnCount++;
 
+      let initialModel = session.model || getEffectiveModelOrder()[0];
+      if (initialModel === AUTO_MODEL_NAME) {
+        try {
+          const routeResult = await classifyAndRouteQuery(finalPrompt, '', cwd);
+          initialModel = routeResult.targetModel;
+          logger.info(`[messageLoop] Auto-routed prompt to "${initialModel}" (category=${routeResult.category}, method=${routeResult.method}, elapsed=${routeResult.elapsedMs}ms)`);
+        } catch (e) {
+          logger.warn(`[messageLoop] Auto-router fallback: ${e}`);
+          initialModel = getEffectiveModelOrder()[0] || 'Gemini 3.7 Flash (High)';
+        }
+      }
+
       // Build a capability-tier-aware fallback chain (T0 -> T1 -> T2 -> T3).
       // Guarantees monotonic downgrade (只降不升). Models that permanently failed
       // are skipped via skipModels.
       const skipModels = new Set<string>();
-      const chain = buildTierAwareChain(session.model || getEffectiveModelOrder()[0], skipModels);
+      const chain = buildTierAwareChain(initialModel, skipModels);
 
       // Retry policy (per the agreed design):
       //   • Each model is attempted up to retriesPerModel times (configurable via tuning).

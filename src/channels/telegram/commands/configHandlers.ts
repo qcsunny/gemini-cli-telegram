@@ -4,6 +4,7 @@ import type { SessionOptions } from '../../../core/types.js';
 import { logger } from '../../../utils/logger.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { getAllBackendHealthStatus } from '../../../core/backendHealth.js';
+import { AUTO_MODEL_NAME } from '../../../core/router.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, formatSessionStats, formatHelp } from '../ui.js';
 
 export function registerConfigHandlers(
@@ -41,13 +42,18 @@ export function registerConfigHandlers(
       return;
     }
 
-    // Resolve number to model name
+    // Resolve number to model name or auto
     const models = await getAvailableModels();
-    const num = parseInt(arg, 10);
-    const modelName =
-      !isNaN(num) && num >= 1 && num <= models.length
-        ? models[num - 1]
-        : arg;
+    let modelName: string;
+    if (arg.toLowerCase() === 'auto' || arg.includes('Auto')) {
+      modelName = AUTO_MODEL_NAME;
+    } else {
+      const num = parseInt(arg, 10);
+      modelName =
+        !isNaN(num) && num >= 1 && num <= models.length
+          ? models[num - 1]
+          : arg;
+    }
 
     try {
       const session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);

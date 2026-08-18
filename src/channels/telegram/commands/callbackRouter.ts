@@ -19,6 +19,7 @@ import { formatBackendsStatus } from './configHandlers.js';
 import { clearBackendHealth } from '../../../core/backendHealth.js';
 import { extractTitleFromMarkdown, saveMarkdownToAnswerSaveDir } from './helpers.js';
 import { PROJECTS_PER_PAGE } from './projectHandlers.js';
+import { AUTO_MODEL_NAME } from '../../../core/router.js';
 
 export function registerCallbackRouter(
   bot: Bot,
@@ -543,11 +544,16 @@ export function registerCallbackRouter(
     if (data.startsWith('/model ')) {
       const models = await getAvailableModels();
       const modelArg = data.replace('/model ', '');
-      const num = parseInt(modelArg, 10);
-      const modelName =
-        !isNaN(num) && num >= 1 && num <= models.length
-          ? models[num - 1]
-          : modelArg;
+      let modelName: string;
+      if (modelArg.toLowerCase() === 'auto' || modelArg.includes('Auto')) {
+        modelName = AUTO_MODEL_NAME;
+      } else {
+        const num = parseInt(modelArg, 10);
+        modelName =
+          !isNaN(num) && num >= 1 && num <= models.length
+            ? models[num - 1]
+            : modelArg;
+      }
 
       ctx.answerCallbackQuery(`Brain: ${modelName}`).catch(e => logger.error(`Failed callback: ${e}`));
 

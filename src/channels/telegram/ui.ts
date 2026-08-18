@@ -107,6 +107,10 @@ export function buildModelKeyboard(
     .text(currentTier === 4 ? '▶ 🔁 Remote' : '🔁 Remote', '/model_tier 4')
     .row();
 
+  // Smart Auto Router quick switch
+  const isAutoActive = models.some(m => m.active && (m.display.includes('Auto') || m.id === 'auto'));
+  keyboard.text(isAutoActive ? '● 🤖 Auto (智能分流)' : '○ 🤖 Auto (智能分流)', '/model auto').row();
+
   const chunkSize = 1;
 
   for (let i = 0; i < models.length; i += chunkSize) {

@@ -11,7 +11,6 @@ import { logger } from '../utils/logger.js';
 // ── ModelsConfig (mirrors the structure in agyCli.ts) ────────────────────────
 
 interface ModelsConfig {
-  channelOrder?: string[];
   defaultOrder?: string[];
   routing: Record<string, string>;
   tiers?: Array<{ name: string; priority: number; models: string[] }>;
@@ -27,7 +26,6 @@ export function loadModelsConfig(): ModelsConfig | null {
   const userCfg = loadUserConfig();
   if (userCfg?.modelsConfig) {
     _parsedModels = {
-      channelOrder: userCfg.modelsConfig.channelOrder,
       defaultOrder: userCfg.modelsConfig.tiers?.flatMap(t => t.models) ?? [],
       routing: userCfg.modelsConfig.routing,
       tiers: userCfg.modelsConfig.tiers,
@@ -59,36 +57,25 @@ export function clearModelOrderCache(): void {
 }
 
 /**
- * Derives display order from tiers + channelOrder.
- * Groups models by channel (agy/deepseek/opencode/web2api) within each tier,
- * respecting the channelOrder for grouping priority.
+ * Derives display order from tiers, preserving each tier's internal model order.
+ * Models are listed tier by tier (sorted by priority), in the exact order
+ * they appear within each tier.
  */
-function deriveDisplayOrder(tiers: ModelsConfig['tiers'], channelOrder: string[]): string[] {
+function deriveDisplayOrder(tiers: ModelsConfig['tiers']): string[] {
   if (!tiers || tiers.length === 0) return [];
 
-  // Build channel → models map across all tiers (preserving tier priority)
-  const channelModels = new Map<string, string[]>();
-  for (const ch of channelOrder) channelModels.set(ch, []);
-
+  const result: string[] = [];
   for (const tier of [...tiers].sort((a, b) => a.priority - b.priority)) {
     for (const model of tier.models) {
-      const ch = getChannelModel(model) ?? 'agy';
-      const list = channelModels.get(ch);
-      if (list) list.push(model);
+      result.push(model);
     }
-  }
-
-  // Flatten in channelOrder
-  const result: string[] = [];
-  for (const ch of channelOrder) {
-    result.push(...(channelModels.get(ch) ?? []));
   }
   return result;
 }
 
 /**
  * Returns the effective model order list.
- * Priority: config.json orderedModels → derived from tiers+channelOrder → models.json defaultOrder.
+ * Priority: config.json orderedModels → derived from tiers → models.json defaultOrder.
  */
 export function getEffectiveModelOrder(): string[] {
   if (_cachedModelOrder !== undefined) return _cachedModelOrder;
@@ -102,20 +89,18 @@ export function getEffectiveModelOrder(): string[] {
     return _cachedModelOrder;
   }
 
-  // 2. config.json modelsConfig.tiers + channelOrder
+  // 2. config.json modelsConfig.tiers
   if (cfg?.modelsConfig?.tiers && cfg.modelsConfig.tiers.length > 0) {
-    const channelOrder = cfg.modelsConfig.channelOrder ?? ['agy', 'deepseek', 'opencode', 'web2api'];
-    _cachedModelOrder = deriveDisplayOrder(cfg.modelsConfig.tiers, channelOrder);
-    logger.info(`[modelRegistry] Derived display order from tiers+channelOrder (${_cachedModelOrder.length} models)`);
+    _cachedModelOrder = deriveDisplayOrder(cfg.modelsConfig.tiers);
+    logger.info(`[modelRegistry] Derived display order from tiers (${_cachedModelOrder.length} models)`);
     return _cachedModelOrder;
   }
 
-  // 3. models.json: derive from tiers + channelOrder
+  // 3. models.json: derive from tiers
   const modelsCfg = loadModelsConfig();
   if (modelsCfg?.tiers && modelsCfg.tiers.length > 0) {
-    const channelOrder = modelsCfg.channelOrder ?? ['agy', 'deepseek', 'opencode', 'web2api'];
-    _cachedModelOrder = deriveDisplayOrder(modelsCfg.tiers, channelOrder);
-    logger.info(`[modelRegistry] Derived display order from tiers+channelOrder (${_cachedModelOrder.length} models)`);
+    _cachedModelOrder = deriveDisplayOrder(modelsCfg.tiers);
+    logger.info(`[modelRegistry] Derived display order from tiers (${_cachedModelOrder.length} models)`);
     return _cachedModelOrder;
   }
 
@@ -169,6 +154,8 @@ export function getChannelModel(model: string): string | null {
   if (model.startsWith('Web2API:')) return 'web2api';
   if (model.startsWith('DeepSeek:')) return 'deepseek';
   if (model.startsWith('OpenCode:')) return 'opencode';
+  if (model.startsWith('Claude CLI:')) return 'claude';
+  if (model.startsWith('Codex:')) return 'codex';
   return 'agy';
 }
 
