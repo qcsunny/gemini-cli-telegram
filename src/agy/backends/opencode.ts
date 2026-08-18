@@ -71,7 +71,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
   const cfg = loadModelsConfig();
   const modelId = (model && cfg?.routing[model]) || '';
 
-  const args = ['run', '--format', 'json', '--thinking', '--dir', cwd, prompt];
+  const args = ['run', '--format', 'json', '--thinking', '--dir', cwd];
 
   if (modelId) {
     args.push('--model', modelId);
@@ -93,6 +93,8 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
   } else {
     args.push('--title', `${SESSION_TITLE_PREFIX}${convId}`);
   }
+
+  args.push(prompt);
 
   return new Promise((resolve, reject) => {
     const env: Record<string, string | undefined> = { ...process.env };
