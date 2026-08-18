@@ -15,6 +15,8 @@ import { loadModelsConfig } from '../../../core/modelRegistry.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { loadMessages } from '../../../agy/messageStore.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, buildProjectKeyboard, buildResumeKeyboard, formatProjectInfo, formatSessionStats, formatHelp, formatWelcome, escapeHtml } from '../ui.js';
+import { formatBackendsStatus } from './configHandlers.js';
+import { clearBackendHealth } from '../../../core/backendHealth.js';
 import { extractTitleFromMarkdown, saveMarkdownToAnswerSaveDir } from './helpers.js';
 import { PROJECTS_PER_PAGE } from './projectHandlers.js';
 
@@ -58,6 +60,59 @@ export function registerCallbackRouter(
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
+      return;
+    }
+
+    if (data === 'backends:refresh') {
+      ctx.answerCallbackQuery('Refreshing backends...').catch(() => {});
+      const { text, keyboard } = formatBackendsStatus();
+      try {
+        await ctx.editMessageText(text, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } catch {
+        // ignore if content is identical
+      }
+      return;
+    }
+
+    if (data === 'backends:reset') {
+      ctx.answerCallbackQuery('Resetting cooldowns...').catch(() => {});
+      clearBackendHealth();
+      const { text, keyboard } = formatBackendsStatus();
+      try {
+        await ctx.editMessageText(`⚡ <b>All backend cooldowns have been reset!</b>\n\n${text}`, {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+      } catch {
+        // ignore if content is identical
+      }
+      return;
+    }
+
+    if (data === 'cmd:model') {
+      ctx.answerCallbackQuery('Loading models...').catch(() => {});
+      const session = sessionManager.getSession(chatId, threadId);
+      const currentModel = session?.config?.getModel() || 'unknown';
+      const models = await getAvailableModels();
+      const page = 0;
+      const start = page * MODELS_PER_PAGE;
+      const pageModels = models.slice(start, start + MODELS_PER_PAGE);
+      const modelItems = pageModels.map((m, i) => ({
+        id: ((page * MODELS_PER_PAGE) + i + 1).toString(),
+        display: m,
+        active: m === currentModel,
+      }));
+
+      await ctx.editMessageText(
+        `${ICONS.model} <b>Model Selection</b> (🚀 Flagship Reasoning)\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page, 0),
+        },
+      );
       return;
     }
 

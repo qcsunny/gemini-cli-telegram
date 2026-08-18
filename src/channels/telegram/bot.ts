@@ -1371,8 +1371,18 @@ export class TelegramBot {
         tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
 
         const taskText = injectMediaCaptionTask(captionText);
+        let promptText = taskText ?? captionText;
+        if (!promptText || !promptText.trim()) {
+          if (mediaType === 'voice' || mediaType === 'audio') {
+            promptText = '请转写并理解这段语音音频内容，并根据其中的内容或指令进行回答。';
+          } else if (mediaType === 'document') {
+            promptText = '请阅读并分析该文件的核心内容。';
+          } else if (mediaType === 'photo') {
+            promptText = '请分析这幅图片的内容。';
+          }
+        }
         const multimodalInput: MultimodalInput = {
-          text: taskText ?? captionText,
+          text: promptText,
           media: [
             {
               type: mediaType,

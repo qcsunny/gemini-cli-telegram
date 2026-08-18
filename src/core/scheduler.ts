@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import { getScheduledTasksPath } from '../config/userConfig.js';
+import { walCheckpoint } from '../db/index.js';
 
 /**
  * Data structure representing a scheduled background chat task.
@@ -53,6 +54,8 @@ export class ChatScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private callback?: TaskCallback;
   private readonly CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
+  private lastWalCheckpoint = Date.now();
+  private readonly WAL_CHECKPOINT_INTERVAL_MS = 10 * 60 * 1000; // Checkpoint WAL every 10 minutes
   /**
    * Task ids whose callback is currently in flight. The check loop runs on a
    * fixed 30s interval that does NOT wait for a previous invocation to finish,
@@ -90,6 +93,12 @@ export class ChatScheduler {
 
   private async checkAndRunTasks(): Promise<void> {
     const now = Date.now();
+    // Periodic SQLite WAL checkpoint maintenance (every 10 min)
+    if (now - this.lastWalCheckpoint >= this.WAL_CHECKPOINT_INTERVAL_MS) {
+      this.lastWalCheckpoint = now;
+      walCheckpoint('PASSIVE');
+    }
+
     const tasksToRun: ScheduledTask[] = [];
 
     for (const task of this.tasks.values()) {
