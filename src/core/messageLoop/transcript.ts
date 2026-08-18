@@ -161,7 +161,7 @@ export function buildTurnTranscript(lines: string[], turnStartTime: number): Tur
     // Background tools report RUNNING first and finish in a later step; keep the
     // status so a still-running task is not mistaken for a completed one.
     const status = parsed.status === 'DONE' ? '' : ` · ${String(parsed.status ?? '')}`;
-    push('tool', `**${label}${status}**\n\n${body}`);
+    push('tool', `**${label}${status}**\n\n\`\`\`\n${body}\n\`\`\``);
   }
 
   let markdown = '';
