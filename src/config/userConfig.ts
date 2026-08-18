@@ -83,11 +83,14 @@ const projectInfoSchema = z.object({
 /** Zod schema for overall UserConfig validation */
 const userConfigSchema = z.object({
   telegramBotToken: z.string(),
-  allowedUsers: z.array(z.number()),
+  allowedUsers: z.array(z.number()).min(1, 'allowedUsers must contain at least one Telegram user ID'),
   model: z.string().optional(),
   proxy: z.string().optional(),
   geminiApiKey: z.string().optional(),
   deepseekApiKey: z.string().optional(),
+  anthropicAuthToken: z.string().optional(),
+  agentRouterApiKey: z.string().optional(),
+  codexPath: z.string().optional(),
   /** API key for external stock market data provider (optional). */
   stockMarketApiKey: z.string().optional(),
   /** API key for RapidAPI Yahoo Finance provider fallback (optional). */

@@ -91,6 +91,10 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   // immediately. Prevents silent message loss when two instances contend on WAL.
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('busy_timeout = 5000');
+  sqlite.pragma('synchronous = NORMAL');
+  sqlite.pragma('temp_store = MEMORY');
+  sqlite.pragma('mmap_size = 268435456');
+  sqlite.pragma('cache_size = -32000');
   const prevVersion = sqlite.pragma('user_version', { simple: true }) as number;
 
   // Automatically ensure the conversations table exists on initialization

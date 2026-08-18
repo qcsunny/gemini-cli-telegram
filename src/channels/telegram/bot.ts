@@ -919,11 +919,18 @@ export class TelegramBot {
     // but /cancel gets its own key so it bypasses the queue.
     this.bot.use(sequentialize(getSequentialKey));
 
-    if (allowedUsers && allowedUsers.length > 0) {
-      const allowedSet = new Set(allowedUsers);
-      this.bot.use(async (ctx, next) => {
-        const userId = ctx.from?.id;
-        const callbackData = ctx.callbackQuery?.data;
+    if (!allowedUsers || allowedUsers.length === 0) {
+      if (process.env['NODE_ENV'] !== 'test') {
+        throw new Error('allowedUsers whitelist is empty or not configured. For security, the bot cannot start.');
+      }
+      logger.warn('allowedUsers whitelist is empty (Test environment only). Whitelist check bypassed.');
+      return;
+    }
+
+    const allowedSet = new Set(allowedUsers);
+    this.bot.use(async (ctx, next) => {
+      const userId = ctx.from?.id;
+      const callbackData = ctx.callbackQuery?.data;
 
         // Allow read-only inline page flipping for everyone (final result pagination only)
         if (callbackData && (
@@ -956,14 +963,9 @@ export class TelegramBot {
         }
         await next();
       });
-      logger.info(
-        `Access restricted to ${allowedUsers.length} user(s): ${allowedUsers.join(', ')}`,
-      );
-    } else {
-      logger.warn(
-        'No allowed users configured. Bot is accessible to everyone.',
-      );
-    }
+    logger.info(
+      `Access restricted to ${allowedUsers.length} user(s): ${allowedUsers.join(', ')}`,
+    );
   }
 
   private setupMessageHandler(): void {
