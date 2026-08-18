@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
@@ -233,6 +233,135 @@ describe('modelRegistry', () => {
       const skip = new Set(['model-a2', 'model-b1']);
       const chain = buildTierAwareChain('model-a1', skip);
       expect(chain).toEqual(['model-a1', 'model-b2']);
+    });
+  });
+});
+
+describe('backendHealth', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    const { clearBackendHealth } = await import('./backendHealth.js');
+    clearBackendHealth();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe('isBackendAvailable', () => {
+    it('should return true for null channel', async () => {
+      const { isBackendAvailable } = await import('./backendHealth.js');
+      expect(isBackendAvailable(null)).toBe(true);
+    });
+
+    it('should return true when no health entry exists', async () => {
+      const { isBackendAvailable } = await import('./backendHealth.js');
+      expect(isBackendAvailable('web2api')).toBe(true);
+    });
+
+    it('should return false when channel is in cooldown', async () => {
+      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+      markBackendFailed('deepseek');
+      expect(isBackendAvailable('deepseek')).toBe(false);
+    });
+
+    it('should return true after cooldown expires', async () => {
+      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+      markBackendFailed('deepseek');
+      vi.advanceTimersByTime(30_000);
+      expect(isBackendAvailable('deepseek')).toBe(true);
+    });
+
+    it('should delete entry after cooldown expires', async () => {
+      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+      markBackendFailed('deepseek');
+      vi.advanceTimersByTime(30_000);
+      isBackendAvailable('deepseek');
+      expect(isBackendAvailable('deepseek')).toBe(true);
+    });
+  });
+
+  describe('markBackendFailed', () => {
+    it('should mark channel as unavailable with 30s cooldown on first failure', async () => {
+      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+      markBackendFailed('web2api');
+      expect(isBackendAvailable('web2api')).toBe(false);
+      vi.advanceTimersByTime(29_999);
+      expect(isBackendAvailable('web2api')).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(isBackendAvailable('web2api')).toBe(true);
+    });
+
+    it('should double cooldown on subsequent failures', async () => {
+      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+      markBackendFailed('web2api');
+      markBackendFailed('web2api');
+      vi.advanceTimersByTime(30_000);
+      expect(isBackendAvailable('web2api')).toBe(false);
+      vi.advanceTimersByTime(30_000);
+      expect(isBackendAvailable('web2api')).toBe(true);
+    });
+
+    it('should cap cooldown at 5 minutes (300s)', async () => {
+      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+      for (let i = 0; i < 6; i++) {
+        markBackendFailed('web2api');
+      }
+      vi.advanceTimersByTime(299_999);
+      expect(isBackendAvailable('web2api')).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(isBackendAvailable('web2api')).toBe(true);
+    });
+
+    it('should not throw for null channel', async () => {
+      const { markBackendFailed } = await import('./backendHealth.js');
+      expect(() => markBackendFailed(null)).not.toThrow();
+    });
+  });
+
+  describe('markBackendHealthy', () => {
+    it('should clear cooldown for a channel', async () => {
+      const { isBackendAvailable, markBackendFailed, markBackendHealthy } = await import('./backendHealth.js');
+      markBackendFailed('web2api');
+      expect(isBackendAvailable('web2api')).toBe(false);
+      markBackendHealthy('web2api');
+      expect(isBackendAvailable('web2api')).toBe(true);
+    });
+
+    it('should not throw for null channel', async () => {
+      const { markBackendHealthy } = await import('./backendHealth.js');
+      expect(() => markBackendHealthy(null)).not.toThrow();
+    });
+
+    it('should not throw for unknown channel', async () => {
+      const { markBackendHealthy } = await import('./backendHealth.js');
+      expect(() => markBackendHealthy('unknown')).not.toThrow();
+    });
+  });
+
+  describe('isConnectionError', () => {
+    it('should return true for network error codes', async () => {
+      const { isConnectionError } = await import('./backendHealth.js');
+      expect(isConnectionError({ code: 'ECONNREFUSED' })).toBe(true);
+      expect(isConnectionError({ code: 'ENOTFOUND' })).toBe(true);
+      expect(isConnectionError({ code: 'ECONNRESET' })).toBe(true);
+      expect(isConnectionError({ code: 'ENETUNREACH' })).toBe(true);
+      expect(isConnectionError({ code: 'ETIMEDOUT' })).toBe(true);
+    });
+
+    it('should return true for connection error messages', async () => {
+      const { isConnectionError } = await import('./backendHealth.js');
+      expect(isConnectionError({ message: 'Socket Hang Up' })).toBe(true);
+      expect(isConnectionError({ message: 'Connection refused' })).toBe(true);
+      expect(isConnectionError({ message: 'econnrefused' })).toBe(true);
+    });
+
+    it('should return false for non-network errors', async () => {
+      const { isConnectionError } = await import('./backendHealth.js');
+      expect(isConnectionError(null)).toBe(false);
+      expect(isConnectionError('string')).toBe(false);
+      expect(isConnectionError({ code: 'ENOENT' })).toBe(false);
+      expect(isConnectionError({ message: 'something went wrong' })).toBe(false);
     });
   });
 });
