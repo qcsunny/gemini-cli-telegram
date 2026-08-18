@@ -10,6 +10,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { logger } from '../../utils/logger.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
+import { loadUserConfig } from '../../config/userConfig.js';
 import { codexHistories, makeCodexConvId } from '../conversationManager.js';
 import { saveMessage } from '../messageStore.js';
 import { createEventQueue } from '../eventQueue.js';
@@ -18,9 +19,10 @@ import type { AgyRunOptions, AgyRunResult } from '../types.js';
 export const codexThreadMap = new Map<string, string>();
 
 export function getCodexPath(): string {
+  const userConfig = loadUserConfig();
+  if (userConfig?.codexPath) return userConfig.codexPath;
   if (process.env['CODEX_PATH']) return process.env['CODEX_PATH'];
   const candidates = [
-    '/path/to/codex',
     path.join(os.homedir(), '.local', 'bin', 'codex'),
     '/usr/local/bin/codex',
     '/usr/bin/codex',
@@ -60,10 +62,16 @@ export async function runCodex(opts: AgyRunOptions): Promise<AgyRunResult> {
     args.push('--model', modelId);
   }
 
+  const userConfig = loadUserConfig();
+  const token = process.env['AGENTROUTER_API_KEY'] || userConfig?.agentRouterApiKey;
+  if (!token && process.env['NODE_ENV'] !== 'test') {
+    throw new Error('AGENTROUTER_API_KEY is missing. Please configure it in config.json or environment variables.');
+  }
+
   return new Promise((resolve, reject) => {
     const env: Record<string, string | undefined> = {
       ...process.env,
-      AGENTROUTER_API_KEY: process.env['AGENTROUTER_API_KEY'] || 'PLACEHOLDER_TOKEN',
+      AGENTROUTER_API_KEY: token,
     };
     if (proxy) {
       env['HTTP_PROXY'] = proxy;

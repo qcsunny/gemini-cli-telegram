@@ -297,7 +297,13 @@ program
       console.log('No running daemon found.');
       process.exit(0);
     }
-    const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+    const rawPid = fs.readFileSync(pidPath, 'utf-8').trim();
+    const pid = parseInt(rawPid, 10);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      console.error(`Invalid PID in ${pidPath}: "${rawPid}". Cleaning up stale pid file.`);
+      try { fs.unlinkSync(pidPath); } catch {}
+      process.exit(1);
+    }
     if (pidIsAlive(pid) && !isOurDaemonPid(pid)) {
       // The pid is alive but NOT our daemon (PID recycled by another process).
       // Do NOT send signals to it — just remove the stale pid file.
@@ -332,7 +338,13 @@ program
       console.log('Daemon is not running.');
       process.exit(0);
     }
-    const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+    const rawPid = fs.readFileSync(pidPath, 'utf-8').trim();
+    const pid = parseInt(rawPid, 10);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      console.error(`Invalid PID in ${pidPath}: "${rawPid}". Cleaning up stale pid file.`);
+      try { fs.unlinkSync(pidPath); } catch {}
+      process.exit(1);
+    }
     if (!pidIsAlive(pid)) {
       fs.unlinkSync(pidPath);
       console.log('Daemon is not running (cleaned up stale pid file).');

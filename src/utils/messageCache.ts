@@ -52,7 +52,7 @@ interface CacheEntry {
 export class MessageCache {
   private cache: LRUCache<number, CacheEntry>;
   /** Tracks the most recent reply context per chat, enabling per-chat retrieval. */
-  private lastReplyContexts: Map<number, ReplyContext> = new Map();
+  private lastReplyContexts: LRUCache<number, ReplyContext>;
   /** Fallback to the most recently stored context (when no chatId is available). */
   private lastReplyContext: ReplyContext | null = null;
 
@@ -62,6 +62,10 @@ export class MessageCache {
    */
   constructor(ttlMs: number, maxSize: number) {
     this.cache = new LRUCache<number, CacheEntry>({
+      max: maxSize,
+      ttl: ttlMs,
+    });
+    this.lastReplyContexts = new LRUCache<number, ReplyContext>({
       max: maxSize,
       ttl: ttlMs,
     });
@@ -162,9 +166,6 @@ export class MessageCache {
    * Finds and returns the most recently stored ReplyContext (any chat).
    */
   getLastReplyContext(): ReplyContext | null {
-    if (this.lastReplyContexts.size > 0) {
-      return Array.from(this.lastReplyContexts.values())[this.lastReplyContexts.size - 1];
-    }
     return this.lastReplyContext;
   }
 

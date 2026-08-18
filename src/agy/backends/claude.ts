@@ -10,6 +10,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { logger } from '../../utils/logger.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
+import { loadUserConfig } from '../../config/userConfig.js';
 import { claudeHistories, makeClaudeConvId } from '../conversationManager.js';
 import { saveMessage } from '../messageStore.js';
 import { createEventQueue } from '../eventQueue.js';
@@ -63,11 +64,17 @@ export async function runClaudeCli(opts: AgyRunOptions): Promise<AgyRunResult> {
   args.push('--session-id', sessionId);
   args.push(prompt);
 
+  const userConfig = loadUserConfig();
+  const token = process.env['ANTHROPIC_AUTH_TOKEN'] || userConfig?.anthropicAuthToken;
+  if (!token && process.env['NODE_ENV'] !== 'test') {
+    throw new Error('ANTHROPIC_AUTH_TOKEN is missing. Please configure it in config.json or environment variables.');
+  }
+
   return new Promise((resolve, reject) => {
     const env: Record<string, string | undefined> = {
       ...process.env,
       ANTHROPIC_BASE_URL: process.env['ANTHROPIC_BASE_URL'] || 'https://agentrouter.org',
-      ANTHROPIC_AUTH_TOKEN: process.env['ANTHROPIC_AUTH_TOKEN'] || 'PLACEHOLDER_TOKEN',
+      ANTHROPIC_AUTH_TOKEN: token,
       ANTHROPIC_MODEL: process.env['ANTHROPIC_MODEL'] || 'claude-opus-5',
     };
     if (proxy) {
