@@ -20,7 +20,7 @@ import { logger } from '../utils/logger.js';
 import type { DaemonSession, SessionOptions, SendMediaFn, SendMediaGroupFn, ProjectInfo } from './types.js';
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd, getSessionKey } from '../agy/conversationStore.js';
-import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory } from '../agy/agyCli.js';
+import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory, clearClaudeHistory } from '../agy/agyCli.js';
 import { loadUserConfig, saveUserConfig, getDefaultModel, getDefaultProjectName, CONFIG_DIR } from '../config/userConfig.js';
 
 /** Factory function type for building chat-bound media sender functions */
@@ -367,6 +367,7 @@ export class SessionManager {
         clearWeb2ApiHistory(convId);
         clearDeepSeekHistory(convId);
         clearOpenCodeHistory(convId);
+        clearClaudeHistory(convId);
       }
     } catch (e) {
       logger.warn(`Error deleting conversation for chat ${key}: ${e}`);
