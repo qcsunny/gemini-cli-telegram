@@ -22,6 +22,13 @@ import {
   buildTierAwareChain,
   clearModelOrderCache,
 } from './modelRegistry.js';
+import {
+  clearBackendHealth,
+  isBackendAvailable,
+  markBackendFailed,
+  markBackendHealthy,
+  isConnectionError,
+} from './backendHealth.js';
 import * as userConfig from '../config/userConfig.js';
 
 const MOCK_MODELS_JSON = {
@@ -238,9 +245,8 @@ describe('modelRegistry', () => {
 });
 
 describe('backendHealth', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useFakeTimers();
-    const { clearBackendHealth } = await import('./backendHealth.js');
     clearBackendHealth();
   });
 
@@ -249,31 +255,26 @@ describe('backendHealth', () => {
   });
 
   describe('isBackendAvailable', () => {
-    it('should return true for null channel', async () => {
-      const { isBackendAvailable } = await import('./backendHealth.js');
+    it('should return true for null channel', () => {
       expect(isBackendAvailable(null)).toBe(true);
     });
 
-    it('should return true when no health entry exists', async () => {
-      const { isBackendAvailable } = await import('./backendHealth.js');
+    it('should return true when no health entry exists', () => {
       expect(isBackendAvailable('web2api')).toBe(true);
     });
 
-    it('should return false when channel is in cooldown', async () => {
-      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+    it('should return false when channel is in cooldown', () => {
       markBackendFailed('deepseek');
       expect(isBackendAvailable('deepseek')).toBe(false);
     });
 
-    it('should return true after cooldown expires', async () => {
-      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+    it('should return true after cooldown expires', () => {
       markBackendFailed('deepseek');
       vi.advanceTimersByTime(30_000);
       expect(isBackendAvailable('deepseek')).toBe(true);
     });
 
-    it('should delete entry after cooldown expires', async () => {
-      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+    it('should delete entry after cooldown expires', () => {
       markBackendFailed('deepseek');
       vi.advanceTimersByTime(30_000);
       isBackendAvailable('deepseek');
@@ -282,8 +283,7 @@ describe('backendHealth', () => {
   });
 
   describe('markBackendFailed', () => {
-    it('should mark channel as unavailable with 30s cooldown on first failure', async () => {
-      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+    it('should mark channel as unavailable with 30s cooldown on first failure', () => {
       markBackendFailed('web2api');
       expect(isBackendAvailable('web2api')).toBe(false);
       vi.advanceTimersByTime(29_999);
@@ -292,8 +292,7 @@ describe('backendHealth', () => {
       expect(isBackendAvailable('web2api')).toBe(true);
     });
 
-    it('should double cooldown on subsequent failures', async () => {
-      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+    it('should double cooldown on subsequent failures', () => {
       markBackendFailed('web2api');
       markBackendFailed('web2api');
       vi.advanceTimersByTime(30_000);
@@ -302,8 +301,7 @@ describe('backendHealth', () => {
       expect(isBackendAvailable('web2api')).toBe(true);
     });
 
-    it('should cap cooldown at 5 minutes (300s)', async () => {
-      const { isBackendAvailable, markBackendFailed } = await import('./backendHealth.js');
+    it('should cap cooldown at 5 minutes (300s)', () => {
       for (let i = 0; i < 6; i++) {
         markBackendFailed('web2api');
       }
@@ -313,35 +311,30 @@ describe('backendHealth', () => {
       expect(isBackendAvailable('web2api')).toBe(true);
     });
 
-    it('should not throw for null channel', async () => {
-      const { markBackendFailed } = await import('./backendHealth.js');
+    it('should not throw for null channel', () => {
       expect(() => markBackendFailed(null)).not.toThrow();
     });
   });
 
   describe('markBackendHealthy', () => {
-    it('should clear cooldown for a channel', async () => {
-      const { isBackendAvailable, markBackendFailed, markBackendHealthy } = await import('./backendHealth.js');
+    it('should clear cooldown for a channel', () => {
       markBackendFailed('web2api');
       expect(isBackendAvailable('web2api')).toBe(false);
       markBackendHealthy('web2api');
       expect(isBackendAvailable('web2api')).toBe(true);
     });
 
-    it('should not throw for null channel', async () => {
-      const { markBackendHealthy } = await import('./backendHealth.js');
+    it('should not throw for null channel', () => {
       expect(() => markBackendHealthy(null)).not.toThrow();
     });
 
-    it('should not throw for unknown channel', async () => {
-      const { markBackendHealthy } = await import('./backendHealth.js');
+    it('should not throw for unknown channel', () => {
       expect(() => markBackendHealthy('unknown')).not.toThrow();
     });
   });
 
   describe('isConnectionError', () => {
-    it('should return true for network error codes', async () => {
-      const { isConnectionError } = await import('./backendHealth.js');
+    it('should return true for network error codes', () => {
       expect(isConnectionError({ code: 'ECONNREFUSED' })).toBe(true);
       expect(isConnectionError({ code: 'ENOTFOUND' })).toBe(true);
       expect(isConnectionError({ code: 'ECONNRESET' })).toBe(true);
@@ -349,15 +342,13 @@ describe('backendHealth', () => {
       expect(isConnectionError({ code: 'ETIMEDOUT' })).toBe(true);
     });
 
-    it('should return true for connection error messages', async () => {
-      const { isConnectionError } = await import('./backendHealth.js');
+    it('should return true for connection error messages', () => {
       expect(isConnectionError({ message: 'Socket Hang Up' })).toBe(true);
       expect(isConnectionError({ message: 'Connection refused' })).toBe(true);
       expect(isConnectionError({ message: 'econnrefused' })).toBe(true);
     });
 
-    it('should return false for non-network errors', async () => {
-      const { isConnectionError } = await import('./backendHealth.js');
+    it('should return false for non-network errors', () => {
       expect(isConnectionError(null)).toBe(false);
       expect(isConnectionError('string')).toBe(false);
       expect(isConnectionError({ code: 'ENOENT' })).toBe(false);
