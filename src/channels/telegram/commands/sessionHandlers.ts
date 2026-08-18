@@ -13,6 +13,7 @@ import { eq } from 'drizzle-orm';
 import { getConversationId } from '../../../agy/conversationStore.js';
 import { getConversationsDir, readUsageFromDatabase } from '../../../agy/protobuf.js';
 import { calculateCost } from '../../../utils/pricing.js';
+import { getChannelModel } from '../../../core/modelRegistry.js';
 
 export function registerSessionHandlers(
   bot: Bot,
@@ -96,6 +97,15 @@ export function registerSessionHandlers(
     const session = sessionManager.getSession(chatId, threadId);
     const model = session?.config?.getModel() || defaultOptions.model || 'unknown';
 
+    const channel = getChannelModel(model);
+    if (channel === 'web2api' || channel === 'deepseek') {
+      await ctx.reply(
+        `ℹ️ <b>当前模型（<code>${escapeHtml(model)}</code>）为 Web / 反代代理通道，无需统计 API Token 用量与计费。</b>\n\n<i>💡 <code>/usage</code> 命令主要用于统计 AGY、Claude CLI、Codex CLI、OpenCode 等计费后端的 Token 开销。</i>`,
+        { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
+      );
+      return;
+    }
+
     let totalInput = 0;
     let totalOutput = 0;
     let totalCached = 0;
@@ -116,14 +126,15 @@ export function registerSessionHandlers(
           }
         }
 
-        // 2. Also read usage from SQLite messages table (for web2api/deepseek/opencode/claude/codex)
+        // 2. Also read usage from SQLite messages table (for opencode/claude/codex)
         const db = getDb();
-        const rows = db.select({ usage: schema.messages.usage })
+        const rows = db.select({ usage: schema.messages.usage, backend: schema.messages.backend })
           .from(schema.messages)
           .where(eq(schema.messages.conversationId, convId))
           .all();
 
         for (const r of rows) {
+          if (r.backend === 'web2api' || r.backend === 'deepseek') continue;
           if (r.usage) {
             try {
               const u = JSON.parse(r.usage);

@@ -7,7 +7,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 
-vi.mock('node:fs');
+vi.mock('node:fs', () => ({
+  existsSync: vi.fn(),
+  readFileSync: vi.fn(),
+  writeFileSync: vi.fn(),
+  mkdirSync: vi.fn(),
+  renameSync: vi.fn(),
+  unlinkSync: vi.fn(),
+}));
 vi.mock('node:os', () => ({
   homedir: () => '/mock/home',
 }));
@@ -66,9 +73,13 @@ describe('userConfig', () => {
 
     expect(fs.mkdirSync).toHaveBeenCalled();
     expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('config.json'),
+      expect.stringContaining('config.json.tmp'),
       expect.stringContaining('new-token'),
       expect.objectContaining({ mode: 0o600 })
+    );
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.stringContaining('config.json.tmp'),
+      expect.stringContaining('config.json')
     );
   });
 
