@@ -293,7 +293,7 @@ describe('isWeb2ApiModel / isDeepSeekModel', () => {
   it('should identify Claude CLI models', async () => {
     expect(isClaudeCliModel('Claude CLI: Claude Opus 5')).toBe(true);
     expect(isClaudeCliModel('Claude Opus 4.6 (Thinking)')).toBe(false);
-    expect(isClaudeCliModel('OpenCode: Claude Opus 5')).toBe(false);
+    expect(isClaudeCliModel('OpenCode: Big Pickle')).toBe(false);
     expect(isClaudeCliModel('Web2API: Gemini Auto')).toBe(false);
   });
 });
