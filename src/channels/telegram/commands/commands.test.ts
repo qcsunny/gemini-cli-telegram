@@ -24,6 +24,7 @@ import { persistChatMessage, loadRecentMessages, trimChatMessages } from './sumH
 import { formatBackendsStatus, registerConfigHandlers } from './configHandlers.js';
 import { getAllBackendHealthStatus, markBackendFailed, clearBackendHealth } from '../../../core/backendHealth.js';
 import { registerContentHandlers } from './contentHandlers.js';
+import { registerSessionHandlers } from './sessionHandlers.js';
 import { closeDb } from '../../../db/index.js';
 import * as inlineHandler from './inlineHandler.js';
 import * as dailyBriefing from '../../../stock/service/dailyBriefing.js';
@@ -550,8 +551,12 @@ describe('investHandler', () => {
     commands = {};
     callbackHandler = undefined;
     mockBot = {
-      command: vi.fn((name: string, handler: Function) => {
-        commands[name] = handler;
+      command: vi.fn((name: string | string[], handler: Function) => {
+        if (Array.isArray(name)) {
+          for (const n of name) commands[n] = handler;
+        } else {
+          commands[name] = handler;
+        }
         return mockBot as any;
       }),
       on: vi.fn((event: string, handler: Function) => {
@@ -580,9 +585,10 @@ describe('investHandler', () => {
     registerInvestHandler(mockBot as Bot, mockSessionManager, {});
   });
 
-  it('should register /invest command', () => {
-    expect(mockBot.command).toHaveBeenCalledWith('invest', expect.any(Function));
+  it('should register /invest and /compare commands', () => {
+    expect(mockBot.command).toHaveBeenCalledWith(['invest', 'compare'], expect.any(Function));
     expect(commands['invest']).toBeDefined();
+    expect(commands['compare']).toBeDefined();
     expect(callbackHandler).toBeDefined();
   });
 
@@ -808,5 +814,20 @@ describe('Backends Health Monitor and /backends command', () => {
 
     registerContentHandlers(bot, sessionManager, defaultOptions);
     expect(bot.command).toHaveBeenCalledWith('export', expect.any(Function));
+  });
+
+  it('should register /usage and session alias commands on bot', () => {
+    const bot = {
+      command: vi.fn(),
+      on: vi.fn(),
+    } as unknown as Bot;
+    const sessionManager = {
+      getSession: vi.fn(),
+    } as unknown as SessionManager;
+    const defaultOptions = { model: 'Gemini 3.7 Flash (High)' } as SessionOptions;
+
+    registerSessionHandlers(bot, sessionManager, defaultOptions);
+    expect(bot.command).toHaveBeenCalledWith('usage', expect.any(Function));
+    expect(bot.command).toHaveBeenCalledWith(['new', 'reset', 'clear'], expect.any(Function));
   });
 });
