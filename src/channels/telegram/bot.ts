@@ -41,7 +41,7 @@ import { telegramFormatter } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
-import { CONFIG_PATH, getBackendUrl, getTuningConfig } from '../../config/userConfig.js';
+import { CONFIG_PATH, getBackendUrl, getTuningConfig, loadUserConfig } from '../../config/userConfig.js';
 import { buildChannelReply } from './bot/channelReply.js';
 import { startBackoffCleanup, reset429Backoff } from './bot/rateLimiter.js';
 
@@ -629,6 +629,26 @@ export class TelegramBot {
             this.bot.api.sendDocument(chatId, document, { message_thread_id: threadId, ...(other || {}) }),
         } as unknown as Context;
         const scheduledReply = buildChannelReply(threadCtx, chatId, 'RichText');
+
+        // Check if the scheduled task is a watchlist command.
+        // If so, execute the command directly using the watchlist handler.
+        if (task.message.startsWith('/watchlist') || task.message.startsWith('/wl')) {
+          const rawText = task.message.trim();
+          const parts = rawText.split(/\s+/).slice(1);
+          const subCmd = parts[0]?.toLowerCase();
+          if (subCmd === 'report' || subCmd === 'briefing') {
+            const segArg = (parts[1]?.toLowerCase() || 'all');
+            const segment = ['cn', 'hk', 'us', 'crypto', 'all'].includes(segArg) ? segArg : 'all';
+            const userConfig = loadUserConfig();
+            const allowedUsers = userConfig?.allowedUsers || [];
+            const userId = chatId > 0 ? chatId : (allowedUsers[0] || 0);
+
+            logger.info(`Routing scheduled task message to watchlist report handler: segment=${segment}, userId=${userId}`);
+            const { handleReportGeneration } = await import('./commands/watchlistHandler.js');
+            await handleReportGeneration(threadCtx, userId, segment as any);
+            return;
+          }
+        }
 
         const session = await this.sessionManager.getOrCreate(chatId, this.defaultOptions, threadId);
         if (session.busy) {
