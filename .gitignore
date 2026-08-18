@@ -1,10 +1,14 @@
 node_modules/
 dist/
+coverage/
+.claude/
 *.tsbuildinfo
 .env
 config.json
 config.json.bak
 *.log
+*.log.*
+logs/
 *.pid
 .exchange-rate-cache.json
 projects.json

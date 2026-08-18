@@ -679,7 +679,7 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
     bsParts.length ? bsParts.join('，') : '',
     cfParts.length ? cfParts.join('，') : '',
     quoteParts.length ? quoteParts.join('，') : '',
-    quote.profile ? `公司简介：${quote.profile.slice(0, 500)}` : '',
+    quote.profile ? `公司简介：${quote.profile}` : '',
     quote.fmpRateLimited ? `\n⚠️ 【数据提醒】美股确定性 API 接口每日配额受限 (HTTP 429)。请大模型主动调用联网搜索工具，查集补齐 ${quote.symbol} 近 5 期 (近4季度及近5年年报) 的营收、净利润、EPS、毛利率等三大报表真实数据。` : '',
     '',
     '## 抓取的近 5 年年度财报历史趋势（确定性数据）',

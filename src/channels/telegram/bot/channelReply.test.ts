@@ -107,11 +107,38 @@ describe('buildPrivateStreamingBlocks', () => {
 });
 
 describe('buildDraftStreamingBlocks', () => {
-  it('emits a native thinking block while only thinking (draft-only placeholder)', () => {
+  it('streams the reasoning inside the native thinking pill (thought only, no content)', () => {
     const blocks = buildDraftStreamingBlocks({ content: '', thought: 'Step 1 reasoning' });
-    expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type: string }).type).toBe('thinking');
-    expect(JSON.stringify(blocks)).toContain('Step 1 reasoning');
+    expect(blocks).toEqual([{ type: 'thinking', text: '🧠 Step 1 reasoning' }]);
+  });
+
+  it('trims a long reasoning chain to its tail inside the pill', () => {
+    const thought = `${'a'.repeat(4000)}NEWEST`;
+    const blocks = buildDraftStreamingBlocks({ content: '', thought });
+    const pill = blocks[0] as { type: string; text: string };
+    expect(pill.type).toBe('thinking');
+    expect(pill.text.endsWith('NEWEST')).toBe(true);
+    expect(pill.text.startsWith('🧠 …')).toBe(true);
+    expect(pill.text.length).toBeLessThan(thought.length);
+  });
+
+  it('keeps the reasoning outside the pill when richDraftThinkingInPill is false', () => {
+    mockGetTuningConfig.mockReturnValueOnce({ richDraftThinkingInPill: false });
+    const blocks = buildDraftStreamingBlocks({ content: '', thought: 'Step 1 reasoning' });
+    expect(blocks[0]).toEqual({ type: 'thinking', text: '🧠 Thinking...' });
+    expect(blocks.length).toBeGreaterThan(1);
+    expect(JSON.stringify(blocks.slice(1))).toContain('Step 1 reasoning');
+  });
+
+  it('starts the pill before the first thought arrives, so only its text grows', () => {
+    const blocks = buildDraftStreamingBlocks({ content: '', thought: '' });
+    expect(blocks).toEqual([{ type: 'thinking', text: '🧠 Thinking...' }]);
+  });
+
+  it('keeps a plain placeholder paragraph for the split layout', () => {
+    const blocks = buildDraftStreamingBlocks({ content: '', thought: '' }, { pillOnly: false });
+    expect(blocks.some((b) => b.type === 'thinking')).toBe(false);
+    expect(JSON.stringify(blocks)).toContain('🧠 Thinking...');
   });
 
   it('falls through to the shared builder once the body starts (phase 2)', () => {
@@ -141,7 +168,24 @@ describe('buildChannelReply draft mode (sendRichMessageDraft)', () => {
     const [chatId, sentDraftId, payload] = api.sendRichMessageDraft.mock.calls[0] as [number, number, unknown];
     expect(chatId).toBe(12345);
     expect(sentDraftId).toBe(draftId);
-    expect(JSON.stringify(payload)).toContain('"type":"thinking"');
+    expect(JSON.stringify(payload)).toContain('let me think');
+    expect(JSON.stringify(payload)).toContain('thinking');
+    expect(api.sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it('retries with the split layout when Telegram rejects a pill-only draft payload', async () => {
+    const { ctx, api } = makeCtx('private');
+    api.sendRichMessageDraft.mockRejectedValueOnce(
+      Object.assign(new Error('Bad Request: BLOCK_INVALID'), { error_code: 400 }),
+    );
+    const reply = buildChannelReply(ctx, 12345, 'RichText');
+    const draftId = await reply.sendRichDraft!({ content: '', thought: 'let me think' });
+    expect(draftId).toBeGreaterThan(0);
+    expect(reply.usesEphemeralDraft).toBe(true);
+    expect(api.sendRichMessageDraft).toHaveBeenCalledTimes(2);
+    const retryPayload = JSON.stringify(api.sendRichMessageDraft.mock.calls[1]![2]);
+    expect(retryPayload).toContain('🧠 Thinking...');
+    expect(retryPayload).toContain('let me think');
     expect(api.sendRichMessage).not.toHaveBeenCalled();
   });
 

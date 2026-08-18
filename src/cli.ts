@@ -172,7 +172,9 @@ program
         }
       }
 
-      const logStream = fs.createWriteStream(getLogPath(config), { flags: 'a' });
+      const livePath = getLogPath(config);
+      fs.mkdirSync(path.dirname(livePath), { recursive: true });
+      const logStream = fs.createWriteStream(livePath, { flags: 'a' });
       process.stdout.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stdout.write;
       process.stderr.write = ((chunk: string | Uint8Array) => logStream.write(chunk)) as typeof process.stderr.write;
 
@@ -196,6 +198,7 @@ program
       // --- Background mode (default): spawn detached child ---
       fs.mkdirSync(CONFIG_DIR, { recursive: true });
       const logPath = getLogPath(config);
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
       const logFd = fs.openSync(logPath, 'a');
       const errFd = fs.openSync(logPath + '.err', 'a');
 

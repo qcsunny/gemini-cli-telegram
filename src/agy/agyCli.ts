@@ -27,7 +27,8 @@ import { runDeepSeek } from './backends/deepseek.js';
 
 import { runOpenCode } from './backends/opencode.js';
 import { readUsageFromDatabase, getMaxStepIdx, getConversationsDir } from './protobuf.js';
-import type { AgyRunOptions, AgyRunResult } from './types.js';
+import { createEventQueue } from './eventQueue.js';
+import type { AgyRunOptions, AgyRunResult, AgyStreamEvent } from './types.js';
 import { parseAgyTranscriptThoughtUpdates, describeAgyStreamEvent, pickNewConversationId } from './transcriptStream.js';
 
 // Re-export all types and functions for backward compatibility
@@ -315,20 +316,17 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     // (which awaits each oversized text event) finishes before 'done' fires and
     // before this run resolves. Without this, the final edit would jump straight
     // to the full answer, defeating the re-chunking.
-    let eventChain: Promise<unknown> = Promise.resolve();
-    const emitEvent = (event: { type: 'thought' | 'text' | 'done'; content?: string }): void => {
-      eventChain = eventChain
-        .then(() => opts.onEvent?.(event))
-        .catch((err) => {
-          logger.warn(`[agyCli] onEvent handler failed (continuing stream): ${err}`);
-        });
-    };
+    const events = createEventQueue(opts.onEvent, 'agyCli');
+    const emitEvent = (event: AgyStreamEvent): void => events.emit(event);
 
     const emitThought = (content: string): void => {
       if (!content) return;
       thoughtBuf += content;
       opts.onActivity?.();
-      opts.onEvent?.({ type: 'thought', content });
+      // Must go through emitEvent, not opts.onEvent directly: bypassing the chain
+      // lets a slow async thought handler be overtaken by the next event (and its
+      // rejection go unhandled).
+      emitEvent({ type: 'thought', content });
     };
 
     const formatToolNote = (update: Record<string, any>): string => {
@@ -338,7 +336,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       const detail = parameters
         ? Object.values(parameters).find((value) => typeof value === 'string' && value.trim())
         : undefined;
-      return `[${name}]${detail ? ` ${String(detail).slice(0, 240)}` : ''}`;
+      return `[${name}]${detail ? ` ${String(detail)}` : ''}`;
     };
 
     const processTranscript = async (): Promise<void> => {
@@ -483,7 +481,11 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (!settled) { settled = true; reject(err); }
     });
 
-    child.on('close', async (code, signal) => {
+    // Declared as a named async fn rather than inlined as `on('close', async …)`:
+    // an async listener's rejection is invisible to the EventEmitter, so a throw
+    // anywhere below (transcript read, SQLite usage extraction) would leave this
+    // promise pending forever *and* surface as an unhandled rejection.
+    const handleClose = async (code: number | null, signal: NodeJS.Signals | null): Promise<void> => {
       if (transcriptPollTimer) clearInterval(transcriptPollTimer);
       await processTranscript();
       const durationMs = Date.now() - startTime;
@@ -503,7 +505,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       // so the last edits happen while streaming rather than being skipped by
       // finalize's isFinished guard.
       emitEvent({ type: 'done' });
-      await eventChain;
+      await events.drain();
       errBuf += stderrDecoder.end();
 
       const exitCode = code ?? 1;
@@ -571,6 +573,16 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         ? `<thinking>${thoughtBuf.trim()}</thinking>\n\n${outputBuf}`
         : outputBuf;
       resolve({ conversationId: resolvedConvId || transcriptConversationId || '', output: finalOutput, exitCode, stderr: errBuf, signal: sigStr, durationMs, isTimeout, usage });
+    };
+
+    child.on('close', (code, signal) => {
+      handleClose(code, signal).catch((err: unknown) => {
+        logger.error(`[agyCli] close handler failed: ${err}`);
+        if (!settled) {
+          settled = true;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
     });
   });
 }

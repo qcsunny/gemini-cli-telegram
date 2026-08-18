@@ -250,7 +250,10 @@ async function withSession(
     const isBlocked = e?.description?.includes('bot was blocked by the user') || e?.error_code === 403;
     if (isBlocked) {
       logger.warn(`Bot was blocked by user in chat ${chatId}. Cleaning up session.`);
-      sessionManager.destroy(chatId, threadId);
+      // Cleanup must not mask the original handler error, so swallow its own failure.
+      await sessionManager.destroy(chatId, threadId).catch((err: unknown) => {
+        logger.warn(`Session cleanup failed for chat ${chatId}: ${err}`);
+      });
       return;
     }
     try {
@@ -730,7 +733,7 @@ export class TelegramBot {
     logger.info('Stopping Telegram bot...');
     this.stopHealthCheck();
     await this.sessionManager.destroyAll();
-    this.bot.stop();
+    await this.bot.stop();
     logger.info('Telegram bot stopped.');
   }
 
@@ -798,8 +801,11 @@ export class TelegramBot {
     try {
       if (!this.runner?.isRunning()) {
         logger.warn('Runner appears to have stopped. Stopping old runner, waiting 5s, then restarting socket without clearing session history...');
-        // Stop old runner to release getUpdates connection
-        try { this.runner?.stop(); } catch { /* ignore */ }
+        // Stop old runner to release getUpdates connection. `stop()` is async —
+        // a bare try/catch would not catch its rejection.
+        await this.runner?.stop().catch((err: unknown) => {
+          logger.warn(`Failed to stop stalled runner: ${err}`);
+        });
         await new Promise((r) => setTimeout(r, 5000));
         try {
           this.runner = run(this.bot, {

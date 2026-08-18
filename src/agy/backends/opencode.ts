@@ -7,6 +7,7 @@ import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { getOpenCodeDbPath } from '../../config/userConfig.js';
 import { opencodeHistories, makeOpenCodeConvId } from '../conversationManager.js';
 import { saveMessage } from '../messageStore.js';
+import { createEventQueue } from '../eventQueue.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
 import * as os from 'node:os';
@@ -100,6 +101,20 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       env['HTTPS_PROXY'] = proxy;
     }
     let settled = false;
+    // Serializes the caller's (possibly async) event handler: a slow `text`
+    // handler must not be overtaken by the `done` that follows it.
+    const events = createEventQueue(opts.onEvent, 'opencode');
+
+    /** Resolve only once every queued event handler has settled, so a caller's
+     *  finalize step never runs before the last streamed edit it depends on. */
+    const resolveAfterDrain = (result: AgyRunResult): void => {
+      events.drain()
+        .then(() => resolve(result))
+        .catch((err: unknown) => {
+          logger.warn(`[opencode] event drain failed: ${err}`);
+          resolve(result); // The run must still resolve even if a handler blew up.
+        });
+    };
 
     const child = spawn(opencode, args, {
       cwd,
@@ -124,10 +139,6 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
     let partPollTimer: NodeJS.Timeout | undefined;
     let partPollDb: Database.Database | undefined;
     let polledSessionId: string | null = existingSessionId;
-    let sawPolledReasoning = false;
-    let sawPolledText = false;
-    let sawPolledTool = false;
-    let livePartPollingReady = false;
     const emittedPartLengths = new Map<string, number>();
     const emittedToolParts = new Set<string>();
 
@@ -140,7 +151,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (previousLength === 0 && thoughtBuf && !thoughtBuf.endsWith('\n')) thoughtBuf += '\n';
       thoughtBuf += delta;
       opts.onActivity?.();
-      opts.onEvent?.({ type: 'thought', content: delta });
+      events.emit({ type: 'thought', content: delta });
     };
 
     const emitText = (partId: string, text: string): void => {
@@ -151,7 +162,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       contentBuf += delta;
       opts.onActivity?.();
       opts.onChunk?.(delta);
-      opts.onEvent?.({ type: 'text', content: delta });
+      events.emit({ type: 'text', content: delta });
     };
 
     const emitTool = (partId: string, data: Record<string, any>): void => {
@@ -166,7 +177,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (thoughtBuf && !thoughtBuf.endsWith('\n')) thoughtBuf += '\n';
       thoughtBuf += note + '\n';
       opts.onActivity?.();
-      opts.onEvent?.({ type: 'thought', content: note + '\n' });
+      events.emit({ type: 'thought', content: note + '\n' });
     };
 
     const pollLiveParts = (): void => {
@@ -191,20 +202,18 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
               AND p.time_created >= ?
             ORDER BY p.time_created, p.id`,
         ).all(polledSessionId, runStartedAt - 2000) as Array<{ id: string; data: string }>;
-        livePartPollingReady = true;
 
         for (const row of rows) {
           let data: Record<string, any>;
           try { data = JSON.parse(row.data); } catch { continue; }
           const type = data['type'];
           if (type === 'reasoning' && typeof data['text'] === 'string') {
-            sawPolledReasoning = true;
-            emitReasoning(row.id, data['text']);
+            if (!stdoutThoughtBuf) {
+              emitReasoning(row.id, data['text']);
+            }
           } else if (type === 'text' && typeof data['text'] === 'string') {
-            sawPolledText = true;
             emitText(row.id, data['text']);
           } else if (type === 'tool') {
-            sawPolledTool = true;
             emitTool(row.id, data);
           }
         }
@@ -235,13 +244,13 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
           if (part.type === 'reasoning' && part.text) {
             logger.debug(`[TRACE opencode] reasoning event: text.length=${part.text.length} preview="${part.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
             stdoutThoughtBuf += part.text + '\n';
-            if (!livePartPollingReady && !sawPolledReasoning) emitReasoning(`stdout-reasoning-${thoughtBuf.length}`, part.text);
+            emitReasoning('stdout-reasoning', part.text);
           } else if (part.type === 'text' && part.text) {
             stdoutContentBuf += part.text;
-            if (!livePartPollingReady && !sawPolledText) emitText(`stdout-text-${contentBuf.length}`, part.text);
+            emitText('stdout-text', part.text);
           } else if (part.type === 'tool') {
             const toolName = part.tool || 'tool';
-            if (!livePartPollingReady && !sawPolledTool) emitTool(`stdout-tool-${thoughtBuf.length}`, { tool: toolName, state: part.state });
+            emitTool(`stdout-tool-${toolName}`, { tool: toolName, state: part.state });
           } else if (event.type === 'step_finish') {
             stepFinished = part.reason === 'stop';
             opts.onActivity?.();
@@ -257,7 +266,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
               } : part.tokens;
             }
             if (stepFinished) {
-              opts.onEvent?.({ type: 'done' });
+              events.emit({ type: 'done' });
             }
           }
       } catch {
@@ -310,12 +319,12 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       if (finalStderr) errBuf += finalStderr;
 
       if (!stepFinished) {
-        opts.onEvent?.({ type: 'done' });
+        events.emit({ type: 'done' });
       }
 
       // If abort already settled the promise, skip DB side-effects
       if (settled) {
-        resolve({ conversationId: convId, output: buildOutput(contentBuf.trim()), exitCode: code ?? 1, stderr: errBuf });
+        resolveAfterDrain({ conversationId: convId, output: buildOutput(contentBuf.trim()), exitCode: code ?? 1, stderr: errBuf });
         return;
       }
       settled = true;
@@ -341,7 +350,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       saveMessage(convId, 'user', prompt, 'opencode');
       saveMessage(convId, 'assistant', trimmedOutput, 'opencode', usage);
 
-      resolve({
+      resolveAfterDrain({
         conversationId: convId,
         output: trimmedOutput,
         exitCode: code ?? 1,

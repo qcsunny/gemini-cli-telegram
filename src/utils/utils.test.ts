@@ -188,15 +188,24 @@ describe('Utils Test Suite', () => {
 
   // ── 4. Logger ──
   describe('logger', () => {
+    // Point the logger at a temp dir so tests never unlink the live
+    // daemon.log/error.log the running service holds open (which orphans
+    // its writes to a deleted inode).
+    const TMP_ERROR_LOG = path.join(os.tmpdir(), 'gemini-test-error.log');
+    const TMP_DAEMON_LOG = path.join(os.tmpdir(), 'gemini-test-daemon.log');
+
     beforeEach(async () => {
       vi.resetModules();
       vi.stubEnv('NODE_ENV', 'production');
       vi.stubEnv('LOG_LEVEL', 'info');
-      // Point the logger at a temp dir so tests never unlink the live
-      // daemon.log/error.log the running service holds open (which orphans
-      // its writes to a deleted inode).
-      vi.stubEnv('TEST_ERROR_LOG_PATH', path.join(os.tmpdir(), 'gemini-test-error.log'));
-      vi.stubEnv('TEST_DAEMON_LOG_PATH', path.join(os.tmpdir(), 'gemini-test-daemon.log'));
+      vi.stubEnv('TEST_ERROR_LOG_PATH', TMP_ERROR_LOG);
+      vi.stubEnv('TEST_DAEMON_LOG_PATH', TMP_DAEMON_LOG);
+      // Clear leftovers *before* importing logger.js: the module opens its fds
+      // eagerly, so unlinking after the import would leave writes going to a
+      // deleted inode and the file would never reappear.
+      for (const p of [TMP_ERROR_LOG, TMP_DAEMON_LOG]) {
+        try { fs.unlinkSync(p); } catch { /* not there → nothing to clear */ }
+      }
     });
 
     afterEach(async () => {
@@ -237,9 +246,6 @@ describe('Utils Test Suite', () => {
 
     it('should write error logs to error.log file', async () => {
       const { logger, pinoInstance, ERROR_LOG_PATH } = await import('./logger.js');
-      if (fs.existsSync(ERROR_LOG_PATH)) {
-        fs.unlinkSync(ERROR_LOG_PATH);
-      }
 
       logger.error('unit test error writing to log', new Error('test failure details'));
 
@@ -272,6 +278,61 @@ describe('Utils Test Suite', () => {
 
       debugSpy.mockRestore();
       vi.unstubAllEnvs();
+    });
+
+    it('should keep error records out of daemon.log', async () => {
+      const { logger, pinoInstance, DAEMON_LOG_PATH, ERROR_LOG_PATH } = await import('./logger.js');
+
+      logger.info('daemon-visible info line');
+      logger.error('error-only line');
+
+      await vi.waitFor(() => {
+        pinoInstance.flush();
+        const daemon = fs.readFileSync(DAEMON_LOG_PATH, 'utf-8');
+        expect(daemon).toContain('daemon-visible info line');
+        expect(daemon).not.toContain('error-only line');
+        expect(fs.readFileSync(ERROR_LOG_PATH, 'utf-8')).toContain('error-only line');
+      }, { timeout: 1000, interval: 20 });
+    });
+
+    it('should rotate a log file by size and keep N generations', async () => {
+      const { createRotatingStream } = await import('./logger.js');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gemini-rotate-'));
+      const file = path.join(dir, 'rotate.log');
+      try {
+        const sink = createRotatingStream(file, { maxBytes: 200, keep: 2 });
+        for (let i = 0; i < 6; i++) {
+          sink.write(`{"level":30,"msg":"line ${i} ${'x'.repeat(90)}"}\n`);
+        }
+
+        await vi.waitFor(() => {
+          expect(fs.existsSync(`${file}.1`)).toBe(true);
+          expect(fs.existsSync(`${file}.2`)).toBe(true);
+          // keep: 2 → the third generation is dropped, never written
+          expect(fs.existsSync(`${file}.3`)).toBe(false);
+          // The live file always holds the newest line.
+          expect(fs.readFileSync(file, 'utf-8')).toContain('line 5');
+        }, { timeout: 1000, interval: 20 });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('should not rotate when maxBytes is 0 (rotation disabled)', async () => {
+      const { createRotatingStream } = await import('./logger.js');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gemini-norotate-'));
+      const file = path.join(dir, 'plain.log');
+      try {
+        const sink = createRotatingStream(file, { maxBytes: 0 });
+        for (let i = 0; i < 5; i++) sink.write(`{"level":30,"msg":"${'y'.repeat(500)}"}\n`);
+
+        await vi.waitFor(() => {
+          expect(fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean)).toHaveLength(5);
+        }, { timeout: 1000, interval: 20 });
+        expect(fs.existsSync(`${file}.1`)).toBe(false);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });

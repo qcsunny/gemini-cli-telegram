@@ -46,7 +46,7 @@ export function persistChatMessage(msg: Message | undefined, now = new Date().to
         senderId: msg.from?.id ?? 0,
         senderName: msg.from?.first_name ?? msg.from?.username ?? 'Unknown',
         senderUsername: msg.from?.username ? msg.from.username.toLowerCase() : null,
-        text: text.slice(0, 4000),
+        text,
         createdAt: now,
       })
       .onConflictDoNothing()

@@ -11,7 +11,7 @@ import { logger } from '../utils/logger.js';
 
 type Backend = 'web2api' | 'deepseek' | 'gemini-direct' | 'opencode';
 
-interface StoredMessage {
+export interface StoredMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt?: string;

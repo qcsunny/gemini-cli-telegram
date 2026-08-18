@@ -208,14 +208,41 @@ describe('buildTurnTranscript', () => {
     }
   });
 
-  it('caps a single oversized tool result', () => {
+  it('keeps a single oversized tool result in full', () => {
     const huge = [
       JSON.stringify({ type: 'RUN_COMMAND', status: 'DONE', step_index: 1, created_at: '2026-08-15T01:38:20+08:00', content: 'x'.repeat(5000) }),
     ];
     const { markdown, hasThinking } = buildTurnTranscript(huge, TURN);
     expect(hasThinking).toBe(false);
-    expect(markdown).toContain('已截断');
-    expect(markdown.length).toBeLessThan(2000);
+    // No truncation anywhere: the full 5000-char body survives verbatim.
+    expect(markdown).toContain('x'.repeat(5000));
+    expect(markdown).not.toContain('已截断');
+    expect(markdown.length).toBeGreaterThan(5000);
+  });
+
+  it('keeps reasoning AND every tool log even when their combined size is huge', () => {
+    // Reasoning before and after a long tool chain must all survive in full —
+    // the Thinking Process block is never truncated, whatever the total size.
+    const bigTool = (i: number) =>
+      JSON.stringify({
+        type: 'RUN_COMMAND',
+        status: 'DONE',
+        step_index: i,
+        created_at: `2026-08-15T01:38:2${i}+08:00`,
+        content: 'y'.repeat(1500),
+      });
+    const lines = [
+      JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', step_index: 1, created_at: '2026-08-15T01:38:20+08:00', thinking: '**First** opening reasoning' }),
+      ...Array.from({ length: 7 }, (_, i) => bigTool(2 + i)),
+      JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', step_index: 10, created_at: '2026-08-15T01:38:28+08:00', thinking: '**Final Conclusion** closing reasoning' }),
+    ];
+    const { markdown, hasThinking } = buildTurnTranscript(lines, TURN);
+    expect(hasThinking).toBe(true);
+    expect(markdown).toContain('opening reasoning');
+    expect(markdown).toContain('closing reasoning');
+    expect(markdown.match(/⚙️ 执行命令/g)).toHaveLength(7);
+    expect(markdown.match(/y{1500}/g)).toHaveLength(7);
+    expect(markdown).not.toContain('已截断');
   });
 
   it('returns empty when the turn produced nothing outside the body', () => {

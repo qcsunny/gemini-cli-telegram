@@ -101,11 +101,16 @@ async function setupUsers(rl: readline.Interface, token: string): Promise<number
       if (userId) {
         console.log(`${ICONS.success} Detected User ID: <code>${userId}</code> (${ctx.from.first_name})`);
         await ctx.reply(`${ICONS.sparkles} <b>Setup: Authentication Successful</b>\n\nYour User ID <code>${userId}</code> has been whitelisted.\n\nYou can now finish the setup in your terminal.`);
-        bot.stop();
+        // Release the long-polling connection before handing control back to the
+        // terminal, otherwise the next `start` fights this instance for getUpdates.
+        await bot.stop();
         resolve([userId]);
       }
     });
-    bot.start();
+    // `start()` only resolves once the bot stops, so it must not be awaited here.
+    bot.start().catch((err: unknown) => {
+      console.error(`${ICONS.error} Bot polling failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
   });
 }
 

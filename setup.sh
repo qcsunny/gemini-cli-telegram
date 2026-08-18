@@ -19,7 +19,12 @@ NODE_BIN="$(command -v node || true)"
 if [ -z "$NODE_BIN" ] && [ -d "$HOME/.nvm/versions/node" ]; then
   NODE_BIN="$(ls -d "$HOME/.nvm/versions/node"/*/bin/node 2>/dev/null | sort -V | tail -1)"
 fi
-if [ -z "$NODE_BIN" ] || [ "$(("$NODE_BIN" -v 2>/dev/null | sed 's/v//;s/\..*//')" || 0)" -lt 22 ]; then
+NODE_MAJOR=0
+if [ -n "$NODE_BIN" ]; then
+  NODE_MAJOR="$("$NODE_BIN" -v 2>/dev/null | sed 's/^v//; s/\..*//')"
+  NODE_MAJOR="${NODE_MAJOR:-0}"
+fi
+if [ "$NODE_MAJOR" -lt 22 ]; then
   echo "Installing Node.js 22..."
   if [ "$OS" == "debian" ]; then
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
@@ -45,32 +50,36 @@ echo -e "${BLUE}This will guide you through Google Login and Telegram Bot setup.
 exec < /dev/tty
 "$NODE_BIN" dist/cli.js setup
 
-# 4. Install systemd service
-echo -e "${YELLOW}[4/4] Installing systemd service...${NC}"
+# 4. Install systemd service (user-space — no root, see README "Deployment")
+echo -e "${YELLOW}[4/4] Installing systemd user service...${NC}"
 WORKDIR="$(pwd)"
-TMP_UNIT="$(mktemp)"
-cat > "$TMP_UNIT" <<UNIT
+UNIT_DIR="$HOME/.config/systemd/user"
+mkdir -p "$UNIT_DIR"
+cat > "$UNIT_DIR/gemini-cli-telegram.service" <<UNIT
 [Unit]
-Description=Gemini Telegram Bot Service
+Description=Gemini CLI Telegram Bot
 After=network.target
 
 [Service]
 Type=simple
-User=$USER
 WorkingDirectory=$WORKDIR
 ExecStart=$NODE_BIN dist/cli.js start --live
-Restart=always
-RestartSec=10
-StandardOutput=append:$WORKDIR/daemon.log
-StandardError=append:$WORKDIR/daemon.log
+Environment=NODE_ENV=production
+Environment=PATH=$(dirname "$NODE_BIN"):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+Restart=on-failure
+RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 UNIT
-sudo mv "$TMP_UNIT" /etc/systemd/system/gemini-telegram.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now gemini-telegram.service
+systemctl --user daemon-reload
+systemctl --user enable --now gemini-cli-telegram.service
+# Keep the service running after the SSH session ends.
+loginctl enable-linger "$USER" 2>/dev/null || \
+  echo -e "${YELLOW}Note: could not enable linger; the bot may stop when you log out.${NC}"
 
 echo -e "\n${GREEN}=== Setup Complete ===${NC}"
-echo -e "Status: ${BLUE}systemctl status gemini-telegram.service${NC}"
-echo -e "Logs:   ${BLUE}sudo journalctl -u gemini-telegram -f${NC}"
+echo -e "Status:  ${BLUE}systemctl --user status gemini-cli-telegram.service${NC}"
+echo -e "Restart: ${BLUE}systemctl --user restart gemini-cli-telegram.service${NC}"
+echo -e "Logs:    ${BLUE}tail -f $WORKDIR/logs/daemon.log${NC}   (the app writes its own pino log there, not journald)"

@@ -1,0 +1,14 @@
+// Typed-linting needs every file ESLint touches to belong to a TS program.
+// tsconfig.json deliberately excludes *.test.ts (they must not land in dist/),
+// so this variant re-includes them for the linter only. Never used to emit.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tools"]
+}
