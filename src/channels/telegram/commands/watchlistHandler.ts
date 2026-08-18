@@ -231,7 +231,7 @@ export function registerWatchlistCommands(bot: Bot, scheduler?: ChatScheduler): 
   });
 }
 
-async function handleReportGeneration(
+export async function handleReportGeneration(
   ctx: Context,
   userId: number,
   segment: MarketSegment = 'all'

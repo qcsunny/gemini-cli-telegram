@@ -242,7 +242,9 @@ ${segmentPromptFocus}
 ### 🎯 四、 后续跟踪与操作策略关注
 - 提炼 2~3 条务实、可落地的观察要点（如下阶段财报披露节点、关键支撑/压力位、仓位配置建议）。
 
-注意：输出内容专业客观，排版美观精炼。`;
+注意：
+1. 输出内容专业客观，排版美观精炼。
+2. 分析范围应严格局限于【输入数据】中 watchlist 列出的自选股，绝对不要分析或引入自选股列表以外的其他个股。`;
 
   const initialModel = options?.model || getDefaultModel() || 'Gemini 3.7 Flash (High)';
   logger.info(`[DailyBriefing] Generating ${segment} briefing for user ${userId} (${symbols.length} symbols) using model ${initialModel}`);
