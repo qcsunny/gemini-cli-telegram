@@ -143,6 +143,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
     let polledSessionId: string | null = existingSessionId;
     const emittedPartLengths = new Map<string, number>();
     const emittedToolParts = new Set<string>();
+    const emittedTextParts = new Map<string, string>();
 
     const emitReasoning = (partId: string, text: string): void => {
       const previousLength = emittedPartLengths.get(partId) ?? 0;
@@ -162,6 +163,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       const delta = text.slice(previousLength);
       emittedPartLengths.set(partId, text.length);
       contentBuf += delta;
+      emittedTextParts.set(partId, text);
       opts.onActivity?.();
       opts.onChunk?.(delta);
       events.emit({ type: 'text', content: delta });
@@ -215,7 +217,14 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
             }
           } else if (type === 'text' && typeof data['text'] === 'string') {
             if (row.finish === 'tool-calls') {
-              // Intermediate text emitted during tool calling steps is reasoning/commentary
+              // If this part was previously emitted as text while finish was pending,
+              // unwind it from contentBuf so it cleanly moves to thoughtBuf
+              if (emittedTextParts.has(row.id)) {
+                const prevText = emittedTextParts.get(row.id)!;
+                contentBuf = contentBuf.replace(prevText, '');
+                emittedTextParts.delete(row.id);
+                emittedPartLengths.delete(row.id);
+              }
               emitReasoning(row.id, data['text']);
             } else {
               emitText(row.id, data['text']);
