@@ -847,17 +847,38 @@ export function registerInvestHandler(
   const handleInvest = async (ctx: any, symbolOverride?: string): Promise<void> => {
     const rawArgs = symbolOverride ?? ctx.match;
     const trimmed = typeof rawArgs === 'string' ? rawArgs.trim() : '';
+    const targetChatId = ctx.chat?.id ?? ctx.from?.id;
+
+    const reply = async (text: string, other?: any) => {
+      if (ctx.reply) {
+        try {
+          return await ctx.reply(text, other);
+        } catch (err: any) {
+          if (targetChatId && ctx.api?.sendMessage) {
+            return await ctx.api.sendMessage(targetChatId, text, other);
+          }
+          throw err;
+        }
+      } else if (targetChatId && ctx.api?.sendMessage) {
+        return await ctx.api.sendMessage(targetChatId, text, other);
+      }
+    };
 
     if (!trimmed) {
-      await ctx.reply(
+      await reply(
         `${ICONS.info} <b>Invest Usage:</b>\n\n<code>/invest NVDA</code>\n<code>/invest 600519</code>\n<code>/invest 600519,000858</code>\n<code>/invest NVDA vs AAPL</code>\n<code>/invest 005827</code>`,
         { parse_mode: 'HTML' }
       );
       return;
     }
 
+    if (!targetChatId) {
+      logger.error('[Invest] No targetChatId found in context');
+      return;
+    }
+
     const session = await sessionManager.getOrCreate(
-      ctx.chat.id,
+      targetChatId,
       defaultOptions,
       ctx.message?.message_thread_id,
     );
@@ -873,7 +894,7 @@ export function registerInvestHandler(
 
     if (symbols.length >= 2) {
       const investCwd = getInvestProjectPath();
-      await ctx.reply(
+      await reply(
         `${ICONS.info} 正在并发抓取 <b>${symbols.join('、')}</b> 确定性财报与估值数据进行同行业对比…`,
         { parse_mode: 'HTML' }
       );
@@ -882,7 +903,7 @@ export function registerInvestHandler(
         const okResults = fetchResults.filter((r) => r.ok && r.data);
         const model = getDefaultModel();
         if (model) {
-          await ctx.reply(`${ICONS.thinking} 正在生成多标的价值投资深度对比报告…`);
+          await reply(`${ICONS.thinking} 正在生成多标的价值投资深度对比报告…`);
           const userPrompt = `/invest ${symbols.join(' vs ')}`;
           const prompt = okResults.length > 0
             ? buildComparePrompt(
@@ -900,15 +921,15 @@ export function registerInvestHandler(
             conversationId,
           });
           if (res.exitCode === 0 && res.output) {
-            await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
+            await sendInvestDeepReport(ctx, targetChatId, res.output);
           } else {
-            await ctx.reply(`${ICONS.warning} 多标的对比报告生成失败（exit ${res.exitCode}）`);
+            await reply(`${ICONS.warning} 多标的对比报告生成失败（exit ${res.exitCode}）`);
           }
         }
         return;
       } catch (err) {
         logger.error(`Failed to handle multi-symbol /invest comparison: ${err}`);
-        await ctx.reply(`${ICONS.error} <b>对比分析失败</b>: ${(err as Error)?.message || err}`);
+        await reply(`${ICONS.error} <b>对比分析失败</b>: ${(err as Error)?.message || err}`);
         return;
       }
     }
@@ -921,11 +942,11 @@ export function registerInvestHandler(
       if (fundDataset && (fundDataset.info || fundDataset.nav.length > 0)) {
         const fundResult = analyzeFund(fundDataset);
         const fundBlocks = buildFundBlocks(fundResult, fundDataset);
-        await ctx.api.sendRichMessage(ctx.chat.id, { blocks: fundBlocks as any });
+        await ctx.api.sendRichMessage(targetChatId, { blocks: fundBlocks as any });
 
         const model = getDefaultModel();
         if (model) {
-          await ctx.reply(`${ICONS.thinking} 正在基于 7 维度框架生成基金深度分析报告…`);
+          await reply(`${ICONS.thinking} 正在基于 7 维度框架生成基金深度分析报告…`);
           const prompt = buildFundDeepReportPrompt(fundResult, fundDataset);
           const res = await runInvestModel({
             prompt,
@@ -936,9 +957,9 @@ export function registerInvestHandler(
             conversationId,
           });
           if (res.exitCode === 0 && res.output) {
-            await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
+            await sendInvestDeepReport(ctx, targetChatId, res.output);
           } else {
-            await ctx.reply(`${ICONS.warning} 基金深度报告生成失败（exit ${res.exitCode}）`);
+            await reply(`${ICONS.warning} 基金深度报告生成失败（exit ${res.exitCode}）`);
           }
         }
         return;
@@ -953,7 +974,7 @@ export function registerInvestHandler(
         const investResult = await fetchInvestAnalysis(symbol, investCwd);
         if (investResult.ok && investResult.data) {
           logger.info(`[Invest] script analysis OK for ${investResult.symbol ?? symbol}`);
-          await ctx.reply(
+          await reply(
             `${ICONS.info} <b>${investResult.symbol ?? symbol}</b> — 价值投资分析专家脚本已生成确定性报告，正在生成深度分析…`,
             { parse_mode: 'HTML' }
           );
@@ -972,9 +993,9 @@ export function registerInvestHandler(
               conversationId,
             });
             if (res.exitCode === 0 && res.output) {
-              await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
+              await sendInvestDeepReport(ctx, targetChatId, res.output);
             } else {
-              await ctx.reply(`${ICONS.warning} 深度报告生成失败（exit ${res.exitCode}）`);
+              await reply(`${ICONS.warning} 深度报告生成失败（exit ${res.exitCode}）`);
             }
           }
           return;
@@ -987,7 +1008,7 @@ export function registerInvestHandler(
       // 3. Stock / Market Quote Analysis Pathway
       const quote = await marketService.getQuote(symbol);
       if (!quote) {
-        await ctx.reply(`${ICONS.warning} ⚠️ <b>Symbol not found:</b> ${symbol}\n\nPlease check the symbol and try again.`);
+        await reply(`${ICONS.warning} ⚠️ <b>Symbol not found:</b> ${symbol}\n\nPlease check the symbol and try again.`);
         return;
       }
 
@@ -1009,7 +1030,7 @@ export function registerInvestHandler(
       const detailUrl = `https://www.tradingview.com/symbols/${tvSymbol.replace(':', '-')}/`;
       const chartUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
-      await ctx.api.sendRichMessage(ctx.chat.id, { blocks: [...blocks, ...finBlocks] as any }, {
+      await ctx.api.sendRichMessage(targetChatId, { blocks: [...blocks, ...finBlocks] as any }, {
         reply_markup: {
           inline_keyboard: [
             [
@@ -1024,7 +1045,7 @@ export function registerInvestHandler(
       // Deep report via the model
       const model = getDefaultModel();
       if (model) {
-        await ctx.reply(`${ICONS.thinking} 正在生成深度分析报告…`);
+        await reply(`${ICONS.thinking} 正在生成深度分析报告…`);
         const prompt = buildDeepReportPrompt(result, quote);
         const res = await runInvestModel({
           prompt,
@@ -1035,14 +1056,14 @@ export function registerInvestHandler(
           conversationId,
         });
         if (res.exitCode === 0 && res.output) {
-          await sendInvestDeepReport(ctx, ctx.chat.id, res.output);
+          await sendInvestDeepReport(ctx, targetChatId, res.output);
         } else {
-          await ctx.reply(`${ICONS.warning} 深度报告生成失败（exit ${res.exitCode}）`);
+          await reply(`${ICONS.warning} 深度报告生成失败（exit ${res.exitCode}）`);
         }
       }
     } catch (err) {
       logger.error(`Failed to handle /invest command for ${symbol}: ${err}`);
-      await ctx.reply(`${ICONS.error} <b>Error running invest analysis for ${symbol}</b>: ${(err as Error)?.message || err}`);
+      await reply(`${ICONS.error} <b>Error running invest analysis for ${symbol}</b>: ${(err as Error)?.message || err}`);
     }
   };
 
