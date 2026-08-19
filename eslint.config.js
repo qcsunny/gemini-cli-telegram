@@ -36,7 +36,7 @@ export default tseslint.config(
     extends: [tseslint.configs.base],
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        project: './tsconfig.eslint.json',
         tsconfigRootDir: import.meta.dirname,
       },
     },

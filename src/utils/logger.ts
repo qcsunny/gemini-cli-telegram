@@ -245,7 +245,7 @@ export const pinoInstance = (() => {
 export async function flushLogs(): Promise<void> {
   try {
     if (!isDev) {
-      await pinoInstance.flush();
+      pinoInstance.flush();
     }
   } catch {
     // best-effort — never block shutdown on logging
