@@ -1,4 +1,4 @@
-import type { Bot, Context } from 'grammy';
+import { InputFile, type Bot, type Context } from 'grammy';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import type { SessionManager } from '../../../core/session.js';
@@ -27,8 +27,17 @@ export function registerSessionHandlers(
       const resultId = match.replace('full_', '');
       const fullData = fullInlineOutputs.get(resultId);
       if (fullData) {
-        const markdown = `<b>💬 Question:</b> ${escapeHtml(fullData.prompt)}\n\n<b>🤖 Answer (${escapeHtml(fullData.model)}):</b>\n\n${escapeHtml(fullData.output)}`;
-        await ctx.reply(markdown, { parse_mode: 'HTML' });
+        const mdDoc = `# 💬 Question\n\n${fullData.prompt}\n\n# 🤖 Answer (${fullData.model})\n\n${fullData.output}`;
+        if (mdDoc.length <= 3900) {
+          const markdown = `<b>💬 Question:</b> ${escapeHtml(fullData.prompt)}\n\n<b>🤖 Answer (${escapeHtml(fullData.model)}):</b>\n\n${escapeHtml(fullData.output)}`;
+          await ctx.reply(markdown, { parse_mode: 'HTML' });
+        } else {
+          // Inline cards cap at 32768 rich-text chars and plain text at 4096;
+          // deliver oversized answers as a Markdown document instead.
+          await ctx.replyWithDocument(new InputFile(Buffer.from(mdDoc, 'utf8'), `full_answer_${resultId}.md`), {
+            caption: `📄 完整回答（${fullData.output.length} 字符）· ${fullData.model}`,
+          });
+        }
         return;
       }
     }

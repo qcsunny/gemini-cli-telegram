@@ -182,7 +182,7 @@ const userConfigSchema = z.object({
      *
      * Default: 1000 (1 second) — balances smoothness and rate-limit safety.
      */
-    debounceIntervalMs: z.number().optional(),
+    debounceIntervalMs: z.number().positive().optional(),
     /**
      * Absolute wall-clock timeout (ms) for a single model run. This timer is NEVER
      * reset by activity and serves as a hard kill switch. If a model run exceeds
@@ -195,7 +195,7 @@ const userConfigSchema = z.object({
      *
      * Default: 900000 (15 minutes) — sufficient for ~180k Chinese chars at 200 char/s.
      */
-    modelRunHardTimeoutMs: z.number().optional(),
+    modelRunHardTimeoutMs: z.number().positive().optional(),
     /**
      * Inactivity timeout (ms) — if the model produces NO output for this long, the
      * run is killed as a suspected upstream stall. This timer resets on every
@@ -208,7 +208,7 @@ const userConfigSchema = z.object({
      *
      * Default: 600000 (10 minutes) — balances stall detection with slow-model tolerance.
      */
-    modelRunInactivityMs: z.number().optional(),
+    modelRunInactivityMs: z.number().positive().optional(),
     /**
      * Number of times each model is retried before falling back to the next tier.
      * Applies per-model: if a model fails, it is retried up to this many times
@@ -221,7 +221,7 @@ const userConfigSchema = z.object({
      *
      * Default: 3 — retries transient failures while still falling back promptly.
      */
-    retriesPerModel: z.number().optional(),
+    retriesPerModel: z.number().positive().optional(),
     /**
      * Sliding window size for conversation history sent to web2api / deepseek / gemini-direct
      * backends. These backends don't maintain server-side conversation state, so the full
@@ -232,7 +232,7 @@ const userConfigSchema = z.object({
      *
      * Default: 40 — sufficient context for multi-turn conversations without excessive cost.
      */
-    maxHistoryMessages: z.number().optional(),
+    maxHistoryMessages: z.number().positive().optional(),
     /**
      * Time-to-live (ms) for cached raw Markdown messages used by the /save command.
      * After this duration, cached entries are automatically evicted.
@@ -244,7 +244,7 @@ const userConfigSchema = z.object({
      *
      * Default: 86400000 (24 hours) — covers typical daily usage patterns.
      */
-    cacheTtlMs: z.number().optional(),
+    cacheTtlMs: z.number().positive().optional(),
     /**
      * Maximum number of entries in the message cache. When the cache reaches this
      * limit, the least-recently-used entry is evicted to make room for new ones.
@@ -254,7 +254,7 @@ const userConfigSchema = z.object({
      *
      * Default: 1000 — handles ~1000 messages/day with room for burst traffic.
      */
-    cacheMaxSize: z.number().optional(),
+    cacheMaxSize: z.number().positive().optional(),
     /** Maximum Telegram attachment size accepted for model input. Default: 50 MiB. */
     maxDownloadBytes: z.number().positive().optional(),
     /**
@@ -602,7 +602,9 @@ export function saveUserConfig(config: UserConfig): void {
   const tmpPath = `${CONFIG_PATH}.tmp`;
   fs.writeFileSync(tmpPath, content, { mode: 0o600 });
   fs.renameSync(tmpPath, CONFIG_PATH);
-  // Invalidate the read cache so callers immediately see the new value and
+  // Invalidate the read caches so callers immediately see the new value and
   // concurrent writers don't clobber each other within the previous TTL window.
   _configCache = undefined;
+  _cachedTuning = undefined;
+  _cachedSummarization = undefined;
 }

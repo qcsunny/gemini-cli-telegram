@@ -222,8 +222,12 @@ export const pinoInstance = (() => {
     {
       level,
       timestamp: () => {
-        const d = new Date(Date.now() + 3 * 3600 * 1000);
-        return ',"time":"' + d.toISOString().replace('Z', '+03:00') + '"';
+        const d = new Date();
+        const offsetMin = -d.getTimezoneOffset();
+        const sign = offsetMin >= 0 ? '+' : '-';
+        const abs = Math.abs(offsetMin);
+        const offset = `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+        return ',"time":"' + d.toISOString().replace('Z', offset) + '"';
       },
       base: { pid: process.pid },
     },
@@ -233,6 +237,20 @@ export const pinoInstance = (() => {
     ]),
   );
 })();
+
+/**
+ * Flush buffered log writes so nothing is lost on graceful shutdown.
+ * Best-effort: prod mode flushes the pino streams; dev mode is a no-op.
+ */
+export async function flushLogs(): Promise<void> {
+  try {
+    if (!isDev) {
+      await pinoInstance.flush();
+    }
+  } catch {
+    // best-effort — never block shutdown on logging
+  }
+}
 
 /**
  * Helper to combine message string and variadic arguments for backward compatibility.

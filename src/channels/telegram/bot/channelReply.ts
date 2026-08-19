@@ -20,7 +20,7 @@ import { markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks, buildFinalB
 import { logger } from '../../../utils/logger.js';
 import { extractThoughtAndContent } from '../../../agy/thoughtParser.js';
 import { messageCache } from '../../../utils/messageCache.js';
-import { draftBackoffUntil, record429Backoff, is429Error, get429RetryAfter } from './rateLimiter.js';
+import { draftBackoffUntil, record429Backoff, recordBackoffSuccess, is429Error, get429RetryAfter } from './rateLimiter.js';
 import { getTuningConfig } from '../../../config/userConfig.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
 
@@ -293,6 +293,12 @@ const draftThrottleStates = new Map<number, DraftThrottleState>();
 const DRAFT_THROTTLE_MIN_MS = 250;
 const DRAFT_THROTTLE_MAX_MS = 4000;
 
+/** Drop per-chat draft pacing & 429 backoff state (called when a turn ends). */
+export function clearDraftThrottleState(chatId: number): void {
+  draftThrottleStates.delete(chatId);
+  draftBackoffUntil.delete(chatId);
+}
+
 /**
  * Draft update pacing — adaptive version (ported from InlineQueue):
  *
@@ -319,14 +325,15 @@ async function throttleDraft(chatId: number, contentLen: number, disabled = fals
     draftThrottleStates.set(chatId, st);
   }
 
-  // Global 429 backoff (retry-after window) overrides everything.
+  // Global 429 backoff (retry-after window) overrides everything. Sleep in
+  // bounded slices so /cancel or shutdown can interrupt long waits.
   const backoffUntil = draftBackoffUntil.get(chatId) ?? 0;
   if (now < backoffUntil) {
     logger.info(`[429 BACKOFF] Throttling draft update for chatId=${chatId} due to active 429 backoff (${backoffUntil - now}ms left)`);
-    await new Promise(r => setTimeout(r, backoffUntil - now));
+    await sleepInterruptibly(backoffUntil - now);
   }
   if (now < st!.nextAllowedTime) {
-    await new Promise(r => setTimeout(r, st!.nextAllowedTime - now));
+    await sleepInterruptibly(st!.nextAllowedTime - now);
   }
 
   const elapsed = now - st!.lastEditTime;
@@ -352,6 +359,22 @@ function markDraftEditSuccess(chatId: number, contentLen: number): void {
     st.lastSentLen = contentLen;
     // Gradually recover the throttle window toward the minimum on clean success.
     st.currentMs = Math.max(DRAFT_THROTTLE_MIN_MS, Math.floor(st.currentMs * 0.85));
+  }
+  // Decay the module-level 429 multiplier and cap remaining backoff on success
+  // so one big 429 cannot freeze the chat for the whole turn.
+  recordBackoffSuccess(chatId);
+}
+
+/**
+ * Sleep in ≤1s slices so /cancel, shutdown or a later backoff reset can
+ * interleave with the wait loop; the event loop gets a chance to process the
+ * reset/cancel callbacks between slices instead of blocking for the full
+ * backoff duration.
+ */
+async function sleepInterruptibly(ms: number): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(0, deadline - Date.now()))));
   }
 }
 
@@ -633,7 +656,7 @@ export function buildChannelReply(
       localConsecutiveDraftFailures = val;
     }
   };
-  const safeEdit = async (messageId: number, text: string | StructuredMessage, html = true) => {
+const safeEdit = async (messageId: number, text: string | StructuredMessage, html = true, throwOnFail = false) => {
     try {
       const cacheMarkdown = getCacheMarkdown(text);
 
@@ -666,11 +689,21 @@ export function buildChannelReply(
         } catch (e2: unknown) {
           const err2 = asApiError(e2);
           if (!err2.description?.includes('message is not modified')) {
+            if (throwOnFail) {
+              // All edit tiers failed — surface the error so callers (e.g.
+              // messageLoop finalize) can degrade gracefully instead of
+              // silently dropping the answer.
+              logger.error(`Failed to edit message ${messageId}: ${err2.message}`);
+              throw err2;
+            }
             logger.warn(`Failed to edit message ${messageId}: ${err2.message}`);
           } else {
             messageCache.set(messageId, cacheMarkdown);
           }
         }
+      } else if (throwOnFail) {
+        logger.error(`Failed to edit message ${messageId}: ${err.message}`);
+        throw err;
       } else {
         logger.warn(`Failed to edit message ${messageId}: ${err.message}`);
       }
@@ -764,16 +797,21 @@ export function buildChannelReply(
                 partBlocks = [...partBlocks, { type: 'footer', text: `(Part ${pIdx + 1}/${parts.length})` } as RichBlock];
               }
               const richMessage = buildRichMessagePayload(partBlocks);
-              const res = await ctx.api.sendRichMessage(chatId, richMessage, {
-                message_thread_id: messageThreadId,
-                reply_parameters: pIdx === 0 ? replyParams : undefined,
-              });
-              lastMsgId = res.message_id;
-              messageCache.set(lastMsgId, safeMarkdown);
+              try {
+                const res = await ctx.api.sendRichMessage(chatId, richMessage, {
+                  message_thread_id: messageThreadId,
+                  reply_parameters: pIdx === 0 ? replyParams : undefined,
+                });
+                lastMsgId = res.message_id;
+                messageCache.set(lastMsgId, safeMarkdown);
+              } catch (partErr: unknown) {
+                logger.warn(`[SENDRICH] Part ${pIdx + 1}/${parts.length} send failed: ${asApiError(partErr).message}`);
+              }
               if (pIdx < parts.length - 1) {
                 await new Promise(r => setTimeout(r, 300));
               }
             }
+            if (lastMsgId === 0) throw new Error('All multi-part sends failed');
             return lastMsgId;
           } else {
             logger.debug(`[SENDRICH] Option A skipped: empty blocks, falling through`);
@@ -1244,11 +1282,16 @@ export function buildChannelReply(
             logger.info(`[editRich] Message blocks exceed max length. Splitting into ${parts.length} parts.`);
             // Edit the original message with the first part
             await ctx.api.editMessageText(chatId, messageId, buildRichMessagePayload(parts[0]));
-            // Send remaining parts as new messages
+            // Send remaining parts as new messages; a failed continuation part
+            // must not roll back the whole edit into the next fallback tier.
             for (let i = 1; i < parts.length; i++) {
-              await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(parts[i]), {
-                message_thread_id: messageThreadId,
-              });
+              try {
+                await ctx.api.sendRichMessage(chatId, buildRichMessagePayload(parts[i]), {
+                  message_thread_id: messageThreadId,
+                });
+              } catch (partErr: unknown) {
+                logger.warn(`[editRich] Part ${i + 1}/${parts.length} send failed: ${asApiError(partErr).message}`);
+              }
             }
           } else {
             logger.debug(`[DEBUG] editMessageText (Option A - blocks) called: messageId=${messageId}, blocks=${blocks.length}`);
@@ -1303,8 +1346,8 @@ export function buildChannelReply(
         logger.warn(`editRich Option C failed: ${err.message}. Trying Option D...`);
       }
 
-      // Option D: HTML Fallback
-      await safeEdit(messageId, originalText, true);
+      // Option D: HTML Fallback (throwOnFail: finalize must not silently lose the answer)
+      await safeEdit(messageId, originalText, true, true);
     },
 
     send: async (replyText: string): Promise<number> => {

@@ -415,39 +415,8 @@ export class StockFallbackProvider implements MarketDataProvider {
       logger.warn(`[EastmoneyCandles] Failed for ${cleanSym}: ${err}`);
     }
 
-    const quote = await this.getQuote(cleanSym);
-    if (!quote) return null;
-
-    const basePrice = quote.price;
-    const now = Math.floor(Date.now() / 1000);
-    const data: CandleDataPoint[] = [];
-
-    for (let i = 20; i >= 0; i--) {
-      const time = now - i * 3600;
-      const variation = (Math.sin(i) * 0.02 + (20 - i) * 0.001) * basePrice;
-      const close = Number((basePrice - variation).toFixed(2));
-      const open = Number((close - (Math.random() - 0.48) * 2).toFixed(2));
-      const high = Number((Math.max(open, close) + Math.random() * 1.5).toFixed(2));
-      const low = Number((Math.min(open, close) - Math.random() * 1.5).toFixed(2));
-
-      data.push({
-        time,
-        open,
-        high,
-        low,
-        close,
-        volume: Math.floor(1000000 + Math.random() * 500000),
-      });
-    }
-
-    return {
-      symbol: cleanSym,
-      interval,
-      range,
-      data,
-      source: this.name,
-      isDelayed: true,
-    };
+    // No synthetic candles: return null so callers can omit the chart/highs.
+    return null;
   }
 
   async searchSymbols(query: string): Promise<StockSearchResult[]> {

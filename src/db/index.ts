@@ -23,7 +23,7 @@ let sqliteDb: InstanceType<typeof Database> | null = null;
 let dbInstancePath: string | null = null;
 
 /** Current schema revision embedded in SQLite PRAGMA user_version. */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 /**
  * Returns default absolute path to the SQLite database file.
@@ -168,18 +168,6 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   sqlite.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlists_user_symbol ON watchlists(telegram_user_id, symbol);
   `);
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS alerts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      telegram_user_id INTEGER NOT NULL,
-      symbol TEXT NOT NULL,
-      condition TEXT NOT NULL CHECK(condition IN ('gte','lte')),
-      target_price INTEGER NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      last_triggered_at TEXT,
-      created_at TEXT NOT NULL
-    );
-  `);
 
   // Migration: allow all 6 backends ('opencode', 'claude', 'codex') in the messages table CHECK
   // constraint. SQLite cannot ALTER a CHECK constraint, so rebuild the table
@@ -228,6 +216,16 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   } catch (e: any) {
     if (!e.message?.includes('duplicate column name')) {
       logger.warn(`[db] Notice on adding 'sender_username' column: ${e.message}`);
+    }
+  }
+
+  // v4: drop the legacy price-alerts table (feature removed — dead code).
+  if (prevVersion < 4) {
+    try {
+      sqlite.exec(`DROP TABLE IF EXISTS alerts;`);
+      logger.info('[db] Dropped legacy alerts table (feature removed)');
+    } catch (e: any) {
+      logger.warn(`[db] alerts table drop failed: ${e.message}`);
     }
   }
 

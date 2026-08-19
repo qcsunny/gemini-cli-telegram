@@ -10,7 +10,7 @@
  */
 
 import { getDb } from '../../db/index.js';
-import { watchlists, alerts } from '../../db/schema.js';
+import { watchlists } from '../../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { logger } from '../../utils/logger.js';
 
@@ -57,29 +57,5 @@ export async function getUserWatchlist(telegramUserId: number): Promise<string[]
   } catch (err) {
     logger.error(`Failed to get watchlist for user ${telegramUserId}: ${err}`);
     return [];
-  }
-}
-
-export async function createAlert(
-  telegramUserId: number,
-  symbol: string,
-  condition: 'gte' | 'lte',
-  targetPrice: number
-): Promise<boolean> {
-  const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
-  const db = getDb();
-  try {
-    db.insert(alerts).values({
-      telegramUserId,
-      symbol: cleanSym,
-      condition,
-      targetPrice: Math.round(targetPrice * 100),
-      enabled: true,
-      createdAt: new Date().toISOString(),
-    }).run();
-    return true;
-  } catch (err) {
-    logger.error(`Failed to create alert for user ${telegramUserId} on ${cleanSym}: ${err}`);
-    return false;
   }
 }

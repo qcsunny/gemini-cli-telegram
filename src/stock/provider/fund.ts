@@ -116,33 +116,44 @@ function decodeGbk(buf: ArrayBuffer): string {
 }
 
 async function fetchFundNav(code: string, pageSize = 250): Promise<FundNavRow[]> {
-  const rows: FundNavRow[] = [];
   const pageLen = 20;
   const pages = Math.ceil(pageSize / pageLen);
-  for (let pg = 1; pg <= pages; pg++) {
-    try {
-      const url = `${LSJZ_API}?fundCode=${code}&pageIndex=${pg}&pageSize=${pageLen}`;
-      const json = await get<{ Data?: { LSJZList?: Array<Record<string, unknown>> } }>(url, `${F10_BASE}/`);
-      const list = json.Data?.LSJZList ?? [];
-      for (const row of list) {
-        rows.push({
-          date: String(row['FSRQ'] ?? '').slice(0, 10),
-          nav: num(row['DWJZ']) ?? 0,
-          accumNav: num(row['LJJZ']) ?? 0,
-          dailyChangePct: num(row['JZZZL']),
-          sgtz: String(row['SGZT'] ?? ''),
-          shtz: String(row['SHZT'] ?? ''),
-        });
+  const entries: Array<{ pg: number; date: string; nav: number; accumNav: number; dailyChangePct: number | null; sgtz: string; shtz: string }> = [];
+  let cursor = 1;
+  let stopped = false;
+
+  const worker = async (): Promise<void> => {
+    while (!stopped) {
+      const pg = cursor++;
+      if (pg > pages) break;
+      try {
+        const url = `${LSJZ_API}?fundCode=${code}&pageIndex=${pg}&pageSize=${pageLen}`;
+        const json = await get<{ Data?: { LSJZList?: Array<Record<string, unknown>> } }>(url, `${F10_BASE}/`);
+        const list = json.Data?.LSJZList ?? [];
+        for (const row of list) {
+          entries.push({
+            pg,
+            date: String(row['FSRQ'] ?? '').slice(0, 10),
+            nav: num(row['DWJZ']) ?? 0,
+            accumNav: num(row['LJJZ']) ?? 0,
+            dailyChangePct: num(row['JZZZL']),
+            sgtz: String(row['SGZT'] ?? ''),
+            shtz: String(row['SHZT'] ?? ''),
+          });
+        }
+        if (list.length < pageLen) stopped = true;
+      } catch (err) {
+        logger.warn(`[Fund] fetchFundNav page ${pg} failed for ${code}: ${err}`);
+        stopped = true;
       }
-      if (list.length < pageLen) break;
-    } catch (err) {
-      logger.warn(`[Fund] fetchFundNav page ${pg} failed for ${code}: ${err}`);
-      break;
     }
-  }
+  };
+
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  entries.sort((a, b) => a.pg - b.pg);
   const seen = new Set<string>();
-  const uniq = rows.filter((r) => (seen.has(r.date) ? false : (seen.add(r.date), true) && r.date && r.nav > 0));
-  return uniq.slice(0, pageSize);
+  const rows = entries.filter((r) => (seen.has(r.date) ? false : (seen.add(r.date), true) && r.date && r.nav > 0));
+  return rows.slice(0, pageSize).map(({ pg: _pg, ...row }) => row);
 }
 
 function exchangePrefix(code: string): string | null {
@@ -382,11 +393,17 @@ async function fetchFundInfo(code: string): Promise<FundInfo | null> {
   }
 }
 
+/** NAV & fund dataset cache TTL (data moves daily; 6h refresh is plenty). */
+const FUND_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const fundCache = new Map<string, { dataset: FundDataset; fetchedAt: number }>();
+
 export async function getFundDataset(symbol: string): Promise<FundDataset | null> {
   const trimmed = symbol.trim().toUpperCase().replace(/^\$/, '').replace(/\.(OF|OFD|SH|SZ)$/i, '');
   const m = /^(SH|SZ)?(\d{6})$/i.exec(trimmed);
   if (!m) return null;
   const code = m[2]!;
+  const cached = fundCache.get(code);
+  if (cached && Date.now() - cached.fetchedAt < FUND_CACHE_TTL_MS) return cached.dataset;
   const [info, nav, topHoldings, quote, managerTenure] = await Promise.all([
     fetchFundInfo(code),
     fetchFundNav(code),
@@ -402,5 +419,7 @@ export async function getFundDataset(symbol: string): Promise<FundDataset | null
     info.sellStatus = nav[0]?.shtz ?? '';
     peerRank = await fetchFundPeerRank(code, info.type);
   }
-  return { symbol: code, info, nav, topHoldings, peerRank, quote, timestamp: Math.floor(Date.now() / 1000) };
+  const dataset: FundDataset = { symbol: code, info, nav, topHoldings, peerRank, quote, timestamp: Math.floor(Date.now() / 1000) };
+  fundCache.set(code, { dataset, fetchedAt: Date.now() });
+  return dataset;
 }

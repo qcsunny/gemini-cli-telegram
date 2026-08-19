@@ -42,7 +42,7 @@ import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
 import { CONFIG_PATH, getBackendUrl, getTuningConfig, loadUserConfig } from '../../config/userConfig.js';
-import { buildChannelReply } from './bot/channelReply.js';
+import { buildChannelReply, clearDraftThrottleState } from './bot/channelReply.js';
 import { startBackoffCleanup, reset429Backoff } from './bot/rateLimiter.js';
 
 const TYPING_KEEPALIVE_MS = 3000;
@@ -272,6 +272,8 @@ async function withSession(
     }
     session.busy = false;
     (session as { _busySince?: number })._busySince = undefined;
+    // Drop per-chat draft pacing/backoff state so the next turn starts fresh.
+    clearDraftThrottleState(chatId);
   }
 }
 

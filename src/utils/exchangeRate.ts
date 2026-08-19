@@ -97,11 +97,24 @@ export function initExchangeRate(): void {
 }
 
 /**
- * Synchronous getter for the cached rate (for use in hot paths).
- * Returns the last known rate or the default if none available.
- * If cache is stale, triggers a background refresh for next call.
+ * True when the last known rate is older than CACHE_TTL_MS (or never fetched),
+ * i.e. the value returned by getCachedUsdToCnyRate() may be outdated.
  */
+export function isExchangeRateStale(): boolean {
+  return cachedRate ? Date.now() - cachedRate.fetchedAt > CACHE_TTL_MS : true;
+}
+
+/** Getter for the cached rate with stale-aware logging (throttled). */
+let staleWarned = false;
 export function getCachedUsdToCnyRate(): number {
+  if (isExchangeRateStale() && !staleWarned) {
+    staleWarned = true;
+    logger.warn('[exchangeRate] Using possibly stale cached rate (refresh failed or TTL exceeded)');
+  }
+  return getCachedUsdToCnyRateRaw();
+}
+
+function getCachedUsdToCnyRateRaw(): number {
   if (cachedRate) {
     if (Date.now() - cachedRate.fetchedAt > CACHE_TTL_MS && !_fetching) {
       _fetching = true;

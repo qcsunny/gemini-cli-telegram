@@ -91,7 +91,7 @@ export async function fetchRecentFinancials(
         cur.grossProfit !== undefined && cur.revenue !== 0
           ? (cur.grossProfit / cur.revenue) * 100
           : null;
-      cur.netMargin = cur.revenue !== 0 ? (cur.netIncome / cur.revenue) * 100 : null;
+      cur.netMargin = cur.netIncome !== undefined && cur.revenue !== 0 ? (cur.netIncome / cur.revenue) * 100 : null;
       cur.operatingMargin =
         cur.operatingIncome !== undefined && cur.revenue !== 0
           ? (cur.operatingIncome / cur.revenue) * 100

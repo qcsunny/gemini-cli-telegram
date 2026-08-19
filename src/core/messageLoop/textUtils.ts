@@ -14,16 +14,20 @@ export function stripWholeMessageCodeFence(text: string): string {
   const allowedLangs = new Set(['', 'markdown', 'md', 'text', 'plaintext', 'none', 'txt']);
   if (lang && !allowedLangs.has(lang)) return text;
   const rest = trimmed.slice(opening[0].length);
-  // Find the FIRST fence-close line. Prefer a run as long as the opener's
+  // Find the fence-close line. Prefer a run as long as the opener's
   // (spec-compliant); if the model closed with fewer backticks than it opened
   // with (common quirk: ````markdown … ```), fall back to any flush line of
-  // >=3 backticks. The earliest match keeps the tail after the outer fence.
-  let closeMatch = new RegExp('^' + fenceTicks + '[ \\t]*$', 'm').exec(rest);
-  if (!closeMatch) {
-    closeMatch = /^`{3,}[ \t]*$/m.exec(rest);
-  }
-  if (!closeMatch) return text;
-  const inner = rest.slice(0, closeMatch.index).trim();
+  // >=3 backticks. When several candidates exist, use the LAST one: models
+  // wrap the whole answer in one outer fence, while real code snippets inside
+  // the answer produce paired fences whose first close is not the end of the
+  // wrapper — cutting at the first close would truncate the answer tail.
+  const exactMatches = [...rest.matchAll(new RegExp('^' + fenceTicks + '[ \\t]*$', 'gm'))];
+  const anyMatches = [...rest.matchAll(/^`{3,}[ \t]*$/gm)];
+  const close = exactMatches.length > 0
+    ? exactMatches[exactMatches.length - 1]
+    : anyMatches.length > 0 ? anyMatches[anyMatches.length - 1] : null;
+  if (!close) return text;
+  const inner = rest.slice(0, close.index).trim();
   // If the inner content contains nested fences (e.g. real code snippets),
   // don't strip when lang is empty and it might break code.
   if (lang === '' && /^```/m.test(inner)) return text;

@@ -204,7 +204,7 @@ export async function generateDailyBriefing(
       },
       rating: q.recommendations ? {
         consensus: q.recommendations.consensusText,
-        buyPct: `${q.recommendations.buyProbability}%`,
+        score: q.recommendations.ratingScore,
         targetMean: q.recommendations.targetPriceMean,
       } : undefined,
     })),

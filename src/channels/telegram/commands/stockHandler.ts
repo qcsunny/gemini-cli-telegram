@@ -74,11 +74,8 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
 
   const rec = quote.recommendations;
   const recSection = rec ? [
-    { type: 'bold', text: ['🏦 华尔街/机构评级建议：'] },
-    `\n• 综合评级：${rec.consensusText}` +
-    `\n• 建议买入比例：${rec.buyProbability}%  (买入:${rec.buy+rec.strongBuy}家)` +
-    `\n• 建议持有比例：${rec.holdProbability}%  (持有:${rec.hold}家)` +
-    `\n• 建议卖出比例：${rec.sellProbability}%  (卖出:${rec.sell+rec.strongSell}家)` +
+    { type: 'bold', text: ['🏦 分析师评级（FMP）：'] },
+    `\n• ${rec.consensusText}` +
     (rec.targetPriceMean ? `\n• 机构目标均价：$${rec.targetPriceMean} (最高:$${rec.targetPriceHigh} / 最低:$${rec.targetPriceLow})\n\n` : '\n\n')
   ] : [];
 

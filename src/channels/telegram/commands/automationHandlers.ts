@@ -79,8 +79,14 @@ export function registerAutomationHandlers(
         const task = await scheduler.addTask(chatId, message, 'once', timeExpr);
         logger.info(`[schedule] add success: chatId=${chatId} taskId=${task.id} nextRun=${task.nextRun}`);
         const nextRun = new Date(task.nextRun);
+        // HH:MM that already passed today gets silently pushed to tomorrow —
+        // surface that instead of confusing the user.
+        const todayPassed = /^\d{1,2}:\d{2}$/.test(timeExpr) && nextRun.getDate() !== new Date().getDate();
+        const note = todayPassed
+          ? `\n${ICONS.warning} <b>今天 ${timeExpr} 已过，已安排到明天 ${timeExpr}</b>`
+          : '';
         await ctx.reply(
-          `${ICONS.success} <b>Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nNext run: <b>${nextRun.toLocaleString()}</b>\nMessage: <i>${escapeHtml(message)}</i>`,
+          `${ICONS.success} <b>Task Scheduled</b>\n\nID: <code>${task.id.slice(0, 8)}</code>\nNext run: <b>${nextRun.toLocaleString()}</b>${note}\nMessage: <i>${escapeHtml(message)}</i>`,
           {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),

@@ -661,7 +661,7 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
     ? annuals
         .map(
           (a) =>
-            `- ${a.date} (${a.period})：营收 ${fmtAmount(a.revenue)} | 净利 ${fmtAmount(a.netIncome)} | 毛利率 ${a.grossMargin != null ? a.grossMargin.toFixed(1) + '%' : '--'} | ROE ${a.roe != null ? a.roe.toFixed(1) + '%' : '--'}`
+            `- ${a.date} (${a.period})：营收 ${fmtAmount(a.revenue)} | 净利 ${a.netIncome !== undefined ? fmtAmount(a.netIncome) : '--'} | 毛利率 ${a.grossMargin != null ? a.grossMargin.toFixed(1) + '%' : '--'} | ROE ${a.roe != null ? a.roe.toFixed(1) + '%' : '--'}`
         )
         .join('\n')
     : '无（请主动联网搜寻补齐近 5 年年报数据）';

@@ -89,17 +89,3 @@ export const watchlists = sqliteTable('watchlists', {
   symbol: text('symbol').notNull(),
   createdAt: text('created_at').notNull(),
 });
-
-/**
- * Alerts table persists user price alerts linked to Telegram userId.
- */
-export const alerts = sqliteTable('alerts', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  telegramUserId: integer('telegram_user_id').notNull(),
-  symbol: text('symbol').notNull(),
-  condition: text('condition', { enum: ['gte', 'lte'] }).notNull(),
-  targetPrice: integer('target_price').notNull(), // Stored in cents (price * 100) to avoid float issues in DB
-  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-  lastTriggeredAt: text('last_triggered_at'),
-  createdAt: text('created_at').notNull(),
-});

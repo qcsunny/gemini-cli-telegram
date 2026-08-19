@@ -1464,6 +1464,18 @@ export function splitRichBlocks(
       let currentPreLen = 0;
       for (const line of lines) {
         const lineLen = line.length + 1;
+        // A single line longer than maxChars (e.g. base64 blobs, long URLs)
+        // cannot be kept whole — hard-split it so the part stays under the
+        // server cap instead of producing an oversized part.
+        if (lineLen > maxChars && currentLines.length === 0) {
+          const rawChunks = splitRichTextByLength(line, maxChars);
+          for (const chunk of rawChunks) {
+            if (currentLen + chunk.length + 1 > maxChars && currentLen > 0) finishPart();
+            parts[parts.length - 1].push({ type: 'pre', text: chunk, language: lang } as RichBlock);
+            currentLen += chunk.length + 1;
+          }
+          continue;
+        }
         if (currentPreLen + lineLen > maxChars && currentLines.length > 0) {
           if (currentLen > 0) finishPart();
           parts[parts.length - 1].push({ type: 'pre', text: currentLines.join('\n'), language: lang } as RichBlock);

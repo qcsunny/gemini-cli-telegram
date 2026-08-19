@@ -699,7 +699,18 @@ export async function processMessage(
               }
               if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
             } catch (e2) {
-              logger.warn(`[messageLoop] editRich/sendRich fallback failed: ${e2}`);
+              logger.error(`[messageLoop] editRich/sendRich fallback failed: ${e2}`);
+              // Last resort: persist the answer as a plain-text message so the
+              // user never loses the response to an edit failure.
+              try {
+                const finalText = thoughtBuffer.trim()
+                  ? `🧠 Thinking Process\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
+                  : answerBuffer.trim();
+                currentMessageId = await reply.send!(finalText);
+                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
+              } catch (e3) {
+                logger.error(`[messageLoop] Plain-text degrade failed: ${e3}`);
+              }
             }
           }
         } else if (answerBuffer.trim()) {

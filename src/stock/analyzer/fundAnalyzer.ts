@@ -38,7 +38,7 @@ function periodReturn(nav: FundNavRow[], days: number): number | null {
   const endIdx = Math.min(days, nav.length - 1);
   const end = nav[0]?.nav;
   const start = nav[endIdx]?.nav;
-  if (!end || !start || start === 0) return null;
+  if (!end || !start || start <= 0) return null;
   return ((end - start) / start) * 100;
 }
 
@@ -114,8 +114,17 @@ function scoreReturn(nav: FundNavRow[], info: FundInfo | null): DimensionScore {
   let periodLabel = '';
 
   if (y1 != null || y3 != null) {
-    anchor = y1 ?? y3;
-    periodLabel = y1 != null ? '近1年' : '近3年';
+    if (y1 != null) {
+      anchor = y1;
+      periodLabel = '近1年';
+    } else {
+      // y3 via official info.returns.y3 is a true 3-year figure; a NAV-based
+      // fallback may cover fewer days — label it honestly instead of "近3年".
+      anchor = y3;
+      periodLabel = r?.y3 != null || nav.length >= 700
+        ? '近3年'
+        : `近${Math.max(1, Math.round(nav.length / 21))}个月`;
+    }
     factor = 1.0;
   } else if (m6 != null) {
     anchor = m6;

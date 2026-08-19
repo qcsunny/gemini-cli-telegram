@@ -152,6 +152,19 @@ export function record429Backoff(chatId: number, retryAfterSec?: number): void {
   logger.warn(`[429 BACKOFF] Dynamic rate-limit backoff set for chatId=${chatId}: wait ${waitMs}ms (mult=${mult})`);
 }
 
+/** Cap the aggregate backoff wait so one 429 cannot freeze a chat for minutes. */
+export function recordBackoffSuccess(chatId: number): void {
+  loadFromDbIfNeeded();
+  const mult = draftBackoffMultiplier.get(chatId);
+  if (mult && mult > 1) {
+    draftBackoffMultiplier.set(chatId, Math.max(1, Math.floor(mult * 0.8)));
+  }
+  const until = draftBackoffUntil.get(chatId);
+  if (until && until > Date.now()) {
+    draftBackoffUntil.set(chatId, Math.min(until, Date.now() + 30_000));
+  }
+}
+
 export function reset429Backoff(chatId: number): void {
   loadFromDbIfNeeded();
   if (draftBackoffUntil.has(chatId) || draftBackoffMultiplier.has(chatId)) {

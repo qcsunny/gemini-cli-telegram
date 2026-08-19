@@ -40,20 +40,23 @@ export interface StockQuote {
     change1Y?: number; // 1 year percentage change
     changeYTD?: number; // Year-to-date (今年以来) percentage change
   };
+  /** Real FMP analyst rating & price-target consensus (absent when FMP key unset or symbol not covered). */
   recommendations?: {
-    consensus: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+    rating: string;
+    ratingScore: number;
     consensusText: string;
-    strongBuy: number;
-    buy: number;
-    hold: number;
-    sell: number;
-    strongSell: number;
-    buyProbability: number;
-    holdProbability: number;
-    sellProbability: number;
     targetPriceMean?: number;
+    targetPriceMedian?: number;
     targetPriceHigh?: number;
     targetPriceLow?: number;
+    scores?: {
+      dcf?: number;
+      roe?: number;
+      roa?: number;
+      debtEquity?: number;
+      pe?: number;
+      pb?: number;
+    };
   };
   /** Recent quarterly financial statements (income statement), newest first. Filled when a stock market API key is configured. */
   financials?: StockFinancial[];
@@ -80,8 +83,8 @@ export interface StockFinancial {
   grossProfit?: number;
   /** Operating income in reported currency. */
   operatingIncome?: number;
-  /** Net income in reported currency. */
-  netIncome: number;
+  /** Net income in reported currency (undefined when the source omits it). */
+  netIncome?: number;
   /** Diluted earnings per share. */
   epsDiluted?: number;
   /** Revenue YoY growth in percent (null when unavailable). */

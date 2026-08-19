@@ -49,8 +49,14 @@ interface PendingResult {
 
 export const pendingResults = new Map<string, PendingResult>();
 const userControllers = new Map<string, AbortController>();
-const pendingStockRequests = new Map<string, { queryStr: string; webAppUrl: string }>();
+const pendingStockRequests = new Map<string, { queryStr: string; webAppUrl: string; createdAt: number }>();
 export const fullInlineOutputs = new Map<string, { prompt: string; output: string; model: string; createdAt: number }>();
+/**
+ * Last inline query payload per result id, kept longer than RESULTS_TTL so a
+ * user who lingers on the result list past the pending TTL can still start the
+ * generation by clicking (the card would otherwise be stuck forever).
+ */
+const recentInlineQueries = new Map<string, { prompt: string; model: string; task?: InlineTask; isInvest?: boolean; investSymbol?: string; investSymbols?: string[]; createdAt: number }>();
 
 function inlineOwnerMatches(resultId: string, userId: number | undefined): boolean {
   // Real Telegram callback queries always include `from`; tolerate missing
@@ -224,6 +230,16 @@ const cleanupTimer = setInterval(() => {
       compareContexts.delete(key);
     }
   }
+  for (const [key, val] of pendingStockRequests) {
+    if (val.createdAt < actionCutoff) {
+      pendingStockRequests.delete(key);
+    }
+  }
+  for (const [key, val] of recentInlineQueries) {
+    if (val.createdAt < actionCutoff) {
+      recentInlineQueries.delete(key);
+    }
+  }
 }, 60_000);
 cleanupTimer.unref();
 
@@ -242,6 +258,10 @@ export class InlineStreamQueue {
   private maxThrottleMs = 4000;
   private lastEditTime = 0;
   private lastSentLen = 0;
+  /** True when the final edit had to be truncated at runtime (server-side
+   *  RICH_MESSAGE_TEXT_TOO_LONG fallback) — the caller can then surface a
+   *  "full document" action for the complete answer. */
+  public lastEditTruncated = false;
 
   constructor(
     private api: any,
@@ -335,22 +355,27 @@ export class InlineStreamQueue {
     if (!this.pendingMarkdown) return false;
 
     let targetMarkdown = this.pendingMarkdown;
+    let targetBlocks = this.pendingBlocks && this.pendingBlocks.length > 0 ? this.pendingBlocks : null;
+    let degraded = false;
     let attempts = 0;
-    const maxAttempts = isFinal ? 5 : 1;
+    // Non-final (streaming) frames also get retries so an oversized frame can
+    // degrade blocks→markdown→truncated instead of silently freezing the card.
+    const maxAttempts = isFinal ? 5 : 3;
 
     while (attempts < maxAttempts) {
       attempts++;
       const now = Date.now();
       if (now < this.nextAllowedTime) {
-        await new Promise((r) => setTimeout(r, (this.nextAllowedTime - now) * this.waitScale));
+        // Cap the backoff wait so a 429 with a long retry_after cannot freeze
+        // the card for minutes; poll in bounded slices instead.
+        const waitMs = Math.min((this.nextAllowedTime - now) * this.waitScale, 10_000);
+        await new Promise((r) => setTimeout(r, waitMs));
       }
 
       try {
         const editPayload: Record<string, unknown> = {
           inline_message_id: this.inlineMessageId,
-          rich_message: this.pendingBlocks && this.pendingBlocks.length > 0
-            ? { blocks: this.pendingBlocks }
-            : { markdown: targetMarkdown },
+          rich_message: targetBlocks ? { blocks: targetBlocks } : { markdown: targetMarkdown },
         };
         if (this.pendingReplyMarkup !== null) {
           editPayload['reply_markup'] = this.pendingReplyMarkup;
@@ -404,6 +429,23 @@ export class InlineStreamQueue {
             logger.warn(`[InlineQueue] Photo URL rejected (${errMsg}); retrying without images on inline_message_id=${this.inlineMessageId}`);
             if (isFinal) continue;
             break;
+          } else if (errMsg.includes('RICH_MESSAGE_TEXT_TOO_LONG')) {
+            if (targetBlocks) {
+              targetBlocks = null;
+              targetMarkdown = this.pendingMarkdown ?? targetMarkdown;
+              logger.warn(`[InlineQueue] Blocks payload too long; retrying as markdown on inline_message_id=${this.inlineMessageId}`);
+              continue;
+            } else if (!degraded) {
+              targetMarkdown = truncateInlineMarkdown(targetMarkdown);
+              degraded = true;
+              this.lastEditTruncated = true;
+              this.pendingMarkdown = targetMarkdown;
+              this.pendingBlocks = null;
+              logger.warn(`[InlineQueue] Markdown too long (${errMsg}); retrying truncated (${targetMarkdown.length} chars) on inline_message_id=${this.inlineMessageId}`);
+              continue;
+            } else {
+              logger.error(`[InlineQueue] Edit still too long after truncation on inline_message_id=${this.inlineMessageId}: len=${targetMarkdown.length}`);
+            }
           } else {
             logger.warn(`[InlineQueue] Edit failed on inline_message_id=${this.inlineMessageId}: ${errMsg}`);
           }
@@ -569,6 +611,26 @@ export function stripInlineImages(markdown: string, mode: 'invalid-only' | 'all'
     return _full;
   });
   return out;
+}
+
+/**
+ * Last-resort shrink for inline edits that exceed the rich-message text cap
+ * (32768 UTF-8 chars). Strips every `<details>` wrapper (thinking/body folds)
+ * and hard-truncates the remaining core, so the answer never leaves the card
+ * stuck on a stale streaming frame. The full answer stays reachable via the
+ * `/start full_<id>` deep link (fullInlineOutputs).
+ */
+export function truncateInlineMarkdown(markdown: string, maxLen = 28000): string {
+  if (!markdown || markdown.length <= maxLen) return markdown;
+  let core = markdown
+    .replace(/<details open[^>]*>[\s\S]*?<\/details>/g, '')
+    .replace(/<details>[\s\S]*?<\/details>/g, '')
+    .replace(/<summary>[\s\S]*?<\/summary>/g, '')
+    .trim();
+  if (core.length > maxLen) {
+    core = core.slice(0, maxLen - 60) + '\n\n…(回答过长已截断，完整内容可用 /start full_ 查看)';
+  }
+  return core;
 }
 
 export function parseInlineModelAndPrompt(
@@ -921,6 +983,34 @@ export function registerInlineHandler(
       }
       ctrl.abort();
       await ctx.answerCallbackQuery({ text: '⏹ Stop requested, stopping...', show_alert: true }).catch(() => {});
+      return;
+    }
+
+    if (data.startsWith('inline_full_doc:')) {
+      const resultId = data.slice('inline_full_doc:'.length);
+      const fullData = fullInlineOutputs.get(resultId);
+      if (!fullData) {
+        await ctx.answerCallbackQuery({ text: '❌ 完整回答已过期，请重新生成。', show_alert: true }).catch(() => {});
+        return;
+      }
+      if (ctx.from?.id === undefined) return;
+      // Inline cards cannot host documents; deliver the full answer as a
+      // Markdown file to the user's private chat (private chat id == user id).
+      const mdDoc = `# 💬 Question\n\n${fullData.prompt}\n\n# 🤖 Answer (${fullData.model})\n\n${fullData.output}`;
+      try {
+        await ctx.api.sendDocument(
+          ctx.from.id,
+          new InputFile(Buffer.from(mdDoc, 'utf8'), `full_answer_${resultId}.md`),
+          { caption: `📄 完整回答（${fullData.output.length} 字符）· ${fullData.model}` },
+        );
+        await ctx.answerCallbackQuery({ text: '📄 完整回答已发送到私聊', show_alert: false }).catch(() => {});
+      } catch (e) {
+        logger.warn(`[InlineFullDoc] sendDocument failed for userId=${ctx.from.id}: ${e}`);
+        await ctx.answerCallbackQuery({
+          text: '⚠️ 请先在私聊中给本 bot 发送任意消息，再点击此按钮。',
+          show_alert: true,
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -1368,7 +1458,7 @@ export function registerInlineHandler(
       }
 
       // Store pending stock request to update when user clicks
-      pendingStockRequests.set(resultId, { queryStr, webAppUrl });
+      pendingStockRequests.set(resultId, { queryStr, webAppUrl, createdAt: Date.now() });
 
       const stockResultCard = {
         type: 'article' as const,
@@ -1537,6 +1627,7 @@ export function registerInlineHandler(
 
     if (!familyMode) {
        pendingResults.set(resultId, { ownerId: fromId, prompt, model: modelToUse, projectPath: targetProjectPath, task, createdAt: Date.now(), lastActiveTime: Date.now(), isInvest, investSymbol, investSymbols });
+       recentInlineQueries.set(resultId, { prompt, model: modelToUse, task, isInvest, investSymbol, investSymbols, createdAt: Date.now() });
     }
 
     try {
@@ -1554,6 +1645,7 @@ export function registerInlineHandler(
         const results = suggestionCandidates.map((candidateModel, idx) => {
           const candidateId = `m-${now}-${idx}`;
            pendingResults.set(candidateId, { ownerId: fromId, prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now });
+           recentInlineQueries.set(candidateId, { prompt, model: candidateModel, task, createdAt: now });
           return {
             type: 'article' as const,
             id: candidateId,
@@ -1601,6 +1693,7 @@ export function registerInlineHandler(
         candidates.forEach((candidateModel, idx) => {
           const candidateId = `m-${now}-${idx}`;
            pendingResults.set(candidateId, { ownerId: fromId, prompt, model: candidateModel, projectPath: targetProjectPath, task, createdAt: now, lastActiveTime: now, isInvest, investSymbol, investSymbols });
+           recentInlineQueries.set(candidateId, { prompt, model: candidateModel, task, isInvest, investSymbol, investSymbols, createdAt: now });
           suggestionCards.push({
             type: 'article' as const,
             id: candidateId,
@@ -1701,15 +1794,40 @@ export function registerInlineHandler(
       return;
     }
 
-    const pending = pendingResults.get(chosen.result_id);
-    if (!pending) {
-      logger.warn(`[ChosenInline] No pending result found for result_id=${chosen.result_id}`);
-      return;
+    let rebuilt: PendingResult | undefined;
+    const rawPending = pendingResults.get(chosen.result_id);
+    if (!rawPending) {
+      // The user lingered on the result list past RESULTS_TTL and the entry
+      // was evicted. Rebuild it from the last known query so the click still
+      // starts the generation instead of leaving the card dead.
+      const recent = recentInlineQueries.get(chosen.result_id);
+      if (!recent) {
+        logger.warn(`[ChosenInline] No pending result found for result_id=${chosen.result_id}`);
+        return;
+      }
+      rebuilt = {
+        ownerId: chosen.from.id,
+        prompt: recent.prompt,
+        model: recent.model,
+        task: recent.task,
+        createdAt: Date.now(),
+        lastActiveTime: Date.now(),
+        isInvest: recent.isInvest,
+        investSymbol: recent.investSymbol,
+        investSymbols: recent.investSymbols,
+      };
+      pendingResults.set(chosen.result_id, rebuilt);
+      logger.info(`[ChosenInline] Rebuilt expired pending result from recent query for result_id=${chosen.result_id}`);
     }
+    const pending: PendingResult = rawPending ?? rebuilt!;
     if (pending.ownerId !== chosen.from.id) {
       logger.warn(`[ChosenInline] Result owner mismatch resultId=${chosen.result_id} owner=${pending.ownerId} chooser=${chosen.from.id}`);
       return;
     }
+    // Restart the TTL clock from the click so slow pre-steps (e.g. /invest
+    // script prefetch up to 60s) are never aborted by the cleanup timer before
+    // the first stream chunk arrives.
+    touchPendingResult(chosen.result_id);
 
     // /invest: run the deterministic analysis script now (no inline-query 10s
     // deadline here), inject the scored data into the prompt, then hand it to
@@ -1922,14 +2040,40 @@ async function runInlineGeneration(
     const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
 
     const parsedOutput = extractThoughtAndContent(stripWholeMessageCodeFence(result.output));
-    const finalThought = inlineThinkingStreaming ? parsedOutput.thought.trim() : '';
+    let finalThought = inlineThinkingStreaming ? parsedOutput.thought.trim() : '';
     // OpenCode can finish with a reasoning-only envelope even though its live
     // text events already delivered the answer. Preserve that answer buffer.
     const streamedContent = getPartialOutput?.().trim() ?? '';
-    const cleanOutput = stripInlineImages(
+    let cleanOutput = stripInlineImages(
       parsedOutput.content.trim() || streamedContent,
       'invalid-only',
     );
+    if (!cleanOutput.trim()) {
+      // Model returned reasoning only, no answer body (or an empty envelope).
+      // Show a proper notice instead of flushing an empty card that Telegram
+      // rejects with RICH_MESSAGE_EMPTY.
+      const reasonText = ctrl.signal.aborted
+        ? '⏹ **生成已停止**'
+        : '⚠️ **未能生成有效回答**\n模型仅返回了推理过程而无正文内容，请重试。';
+      const emptyMarkdown = `**💬 问题：** ${displayPrompt}\n\n${reasonText}\n\n_💡 提示：您可以点击下方按钮重新尝试。_`;
+      await streamQueue.flushFinal(emptyMarkdown, {
+        inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
+      });
+      return;
+    }
+    // Rich messages cap total text at 32768 UTF-8 chars (server-side limit).
+    // Cap the thinking/body folds so the final edit always fits even after
+    // markdown→blocks conversion overhead. The full answer stays available
+    // via the /start full_<id> deep link (fullInlineOutputs).
+    const INLINE_THOUGHT_MAX = 8000;
+    const INLINE_BODY_MAX = 21000;
+    if (finalThought.length > INLINE_THOUGHT_MAX) {
+      finalThought = finalThought.slice(0, INLINE_THOUGHT_MAX) + '\n\n…(思考过程过长已截断)';
+    }
+    const truncated = cleanOutput.length > INLINE_BODY_MAX;
+    if (truncated) {
+      cleanOutput = cleanOutput.slice(0, INLINE_BODY_MAX) + `\n\n…(回答过长已截断，完整内容可用 /start full_${resultId} 查看)`;
+    }
     const rawOutputLen = cleanOutput.length;
 
     let footerParts: string[] = [];
@@ -1963,7 +2107,10 @@ async function runInlineGeneration(
     const foldedBody = `<details><summary>${summaryTitle}</summary>\n\n${cleanOutput}\n\n</details>`;
     const fullMarkdown = `**💬 Question:** ${displayPrompt}\n\n**🤖 Answer (${displayModelName(modelUsed)}):**\n\n${finalThought ? `<details><summary>🧠 Thinking Process</summary>\n\n${finalThought}\n\n</details>\n\n` : ''}${foldedBody}${footerText ? `\n\n_${footerText}${isFallback ? ' (auto-downgraded)' : ''}_` : ''}`;
     const replyMarkup = {
-      inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
+      inline_keyboard: [[
+        { text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` },
+        ...(truncated ? [{ text: '📄 完整文档', callback_data: `inline_full_doc:${resultId}` }] : []),
+      ]],
     };
 
     logger.info(`[InlineResult] Submitting final flush edit: userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length}`);
@@ -1979,6 +2126,30 @@ async function runInlineGeneration(
     const success = await streamQueue.flushFinal(fullMarkdown, replyMarkup, finalBlocks);
     if (success) {
       logger.info(`[InlineResult] Successfully flushed final inline message: inline_message_id=${inlineMessageId} userId=${fromId}`);
+      // Store the full answer so /start full_<id> can surface it (inline cards
+      // may be truncated to fit rich-message limits).
+      fullInlineOutputs.set(resultId, {
+        prompt,
+        output: cleanOutput,
+        model: modelUsed,
+        createdAt: Date.now(),
+      });
+      // If the server rejected the full payload and the runtime fallback had
+      // to truncate (lastEditTruncated), the pre-check above did not attach
+      // the document button — add it via a markup-only edit now.
+      if (!truncated && streamQueue.lastEditTruncated) {
+        await ctx.api.raw.editMessageReplyMarkup({
+          inline_message_id: inlineMessageId,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` },
+              { text: '📄 完整文档', callback_data: `inline_full_doc:${resultId}` },
+            ]],
+          },
+        } as any).catch((e: Error) => logger.warn(`[InlineResult] Attach full-doc button failed: ${e}`));
+      }
+    } else {
+      logger.error(`[InlineResult] Final inline flush FAILED: inline_message_id=${inlineMessageId} userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} truncated=${truncated}`);
     }
   } else {
     const wasStopped = ctrl.signal.aborted;

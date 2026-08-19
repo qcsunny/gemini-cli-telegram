@@ -12,7 +12,7 @@
  */
 
 import { TelegramBot, type TelegramBotOptions } from './channels/telegram/bot.js';
-import { logger } from './utils/logger.js';
+import { logger, flushLogs } from './utils/logger.js';
 import { loadUserConfig, clearConfigCache } from './config/userConfig.js';
 import { clearDefaultModelsCache, restoreHistoriesFromDb } from './agy/agyCli.js';
 import { clearModelOrderCache } from './core/modelRegistry.js';
@@ -73,6 +73,12 @@ export async function startTelegramDaemon(
       closeDb();
     } catch (e) {
       logger.warn(`[shutdown] Error closing database: ${e}`);
+    }
+    // Flush buffered log writes before the process exits.
+    try {
+      await flushLogs();
+    } catch (e) {
+      logger.warn(`[shutdown] Error flushing logs: ${e}`);
     }
     clearTimeout(forceTimer);
     process.exit(0);

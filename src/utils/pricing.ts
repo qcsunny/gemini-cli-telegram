@@ -68,6 +68,13 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 0.60, outputRate: 2.40, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   },
   {
+    // Gemini 3.5 Flash-Lite: $0.25 / $0.03 / $1.50
+    // MUST precede the generic /3.5\s*flash/ rule, otherwise Flash-Lite model
+    // names match the more expensive generic rule first.
+    pattern: /3\.5\s*flash-lite|flash-lite/i,
+    rates: { inputRate: 0.25, outputRate: 1.50, cacheMultiplier: 0.12, thinkingMultiplier: 'none' }
+  },
+  {
     // Gemini 3.6 Flash: $1.50 / $0.15 / $7.50
     pattern: /3\.6\s*flash/i,
     rates: { inputRate: 1.50, outputRate: 7.50, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
@@ -84,11 +91,6 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
       inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none',
       longContextRates: { inputRate: 4.00, outputRate: 18.00 }
     }
-  },
-  {
-    // Gemini 3.5 Flash-Lite: $0.25 / $0.03 / $1.50
-    pattern: /3\.5\s*flash-lite|flash-lite/i,
-    rates: { inputRate: 0.25, outputRate: 1.50, cacheMultiplier: 0.12, thinkingMultiplier: 'none' }
   },
   {
     // Gemini 3.x Flash (generic fallback)
