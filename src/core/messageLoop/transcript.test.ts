@@ -25,7 +25,7 @@ describe('stripTimestampPrefix', () => {
 describe('stripControlCharacters', () => {
   it('strips ANSI escape and other Telegram-forbidden control chars', () => {
     const input = 'ok\x1b[31mred\x07bell\u200Bzwsp\uFEFFbom';
-    expect(stripControlCharacters(input)).toBe('ok[31mredbellzwspbom');
+    expect(stripControlCharacters(input)).toBe('okredbellzwspbom');
   });
 
   it('keeps \\n \\r \\t', () => {
@@ -40,7 +40,7 @@ describe('sanitizeToolResultContent', () => {
   });
 
   it('strips control characters while escaping', () => {
-    expect(sanitizeToolResultContent('a\x1b[0mb')).toBe('a[0mb');
+    expect(sanitizeToolResultContent('a\x1b[0mb')).toBe('ab');
   });
 });
 

@@ -71,7 +71,8 @@ export function stripTimestampPrefix(content: string): string {
 }
 
 export function stripControlCharacters(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF0-\uFFFF\uD800-\uDFFF]/g, '');
+  const withoutAnsi = text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
+  return withoutAnsi.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF0-\uFFFF\uD800-\uDFFF]/g, '');
 }
 
 export function sanitizeToolResultContent(content: string): string {
