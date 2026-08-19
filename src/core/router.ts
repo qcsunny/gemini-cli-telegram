@@ -97,16 +97,17 @@ export async function classifyAndRouteQuery(prompt: string, contextSummary = '',
   }
   fullPrompt += `[用户当前输入: "${prompt.slice(0, 500)}"]\n\n请输出分类级别 (A/B/C):`;
 
+  let timeoutId: NodeJS.Timeout | undefined;
   try {
     const controller = new AbortController();
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
         // Kill the classification subprocess so it can't linger in the
         // background after the race was lost.
         controller.abort();
         reject(new Error('Classifier timeout'));
-      }, CLASSIFIER_TIMEOUT_MS)
-    );
+      }, CLASSIFIER_TIMEOUT_MS);
+    });
 
     const classifyPromise = runAgyPrint({
       prompt: fullPrompt,
@@ -142,5 +143,9 @@ export async function classifyAndRouteQuery(prompt: string, contextSummary = '',
       elapsedMs,
       reason: err instanceof Error ? err.message : String(err),
     };
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }

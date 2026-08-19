@@ -1124,7 +1124,11 @@ export class TelegramBot {
     });
 
     this.bot.catch((err) => {
-      logger.error(`Bot error: ${err.message}`);
+      const ctx = err.ctx;
+      logger.error(
+        err.error,
+        `Bot error in middleware (chatId: ${ctx.chat?.id}, updateId: ${ctx.update.update_id})`,
+      );
     });
   }
 
