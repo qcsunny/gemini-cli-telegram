@@ -196,14 +196,14 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
         }
         if (!polledSessionId) return;
         const rows = partPollDb.prepare(
-          `SELECT p.id, p.data
+          `SELECT p.id, p.data, json_extract(m.data, '$.finish') as finish
              FROM part p
              JOIN message m ON m.id = p.message_id
             WHERE p.session_id = ?
               AND json_extract(m.data, '$.role') = 'assistant'
               AND p.time_created >= ?
             ORDER BY p.time_created, p.id`,
-        ).all(polledSessionId, runStartedAt - 2000) as Array<{ id: string; data: string }>;
+        ).all(polledSessionId, runStartedAt - 2000) as Array<{ id: string; data: string; finish?: string }>;
 
         for (const row of rows) {
           let data: Record<string, any>;
@@ -214,7 +214,12 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
               emitReasoning(row.id, data['text']);
             }
           } else if (type === 'text' && typeof data['text'] === 'string') {
-            emitText(row.id, data['text']);
+            if (row.finish === 'tool-calls') {
+              // Intermediate text emitted during tool calling steps is reasoning/commentary
+              emitReasoning(row.id, data['text']);
+            } else {
+              emitText(row.id, data['text']);
+            }
           } else if (type === 'tool') {
             emitTool(row.id, data);
           }
@@ -251,9 +256,17 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
             stdoutContentBuf += part.text;
             emitText('stdout-text', part.text);
           } else if (part.type === 'tool') {
+            if (stdoutContentBuf) {
+              stdoutThoughtBuf += stdoutContentBuf + '\n';
+              stdoutContentBuf = '';
+            }
             const toolName = part.tool || 'tool';
             emitTool(`stdout-tool-${toolName}`, { tool: toolName, state: part.state });
           } else if (event.type === 'step_finish') {
+            if (part.reason === 'tool-calls' && stdoutContentBuf) {
+              stdoutThoughtBuf += stdoutContentBuf + '\n';
+              stdoutContentBuf = '';
+            }
             stepFinished = part.reason === 'stop';
             opts.onActivity?.();
             if (part.tokens) {
