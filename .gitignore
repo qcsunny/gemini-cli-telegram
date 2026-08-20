@@ -12,6 +12,7 @@ logs/
 *.pid
 .exchange-rate-cache.json
 projects.json
+scheduled-tasks.json
 agy-conversations.json
 *.sqlite*
 test-*.js
