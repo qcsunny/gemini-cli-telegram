@@ -67,7 +67,7 @@ export function findSessionIdByConvId(convId: string): string | null {
 }
 
 export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
-  const { prompt, conversationId: existingConvId, model = '', signal, proxy, allowTools } = opts;
+  const { prompt, conversationId: existingConvId, model = '', signal, proxy, allowTools, extraFiles } = opts;
   const convId = existingConvId || makeOpenCodeConvId();
   const opencode = getOpenCodePath();
   const cwd = opts.cwd || process.cwd();
@@ -89,6 +89,12 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
   // inline /invest path — it bypasses every permission prompt.
   if (allowTools) {
     args.push('--auto');
+  }
+
+  // OpenCode's native file attachment flag is required for vision-capable
+  // models; mentioning a local path in the prompt alone does not attach bytes.
+  for (const file of extraFiles ?? []) {
+    args.push('--file', file);
   }
 
   // Reuse the opencode-native session for multi-turn context: if this convId

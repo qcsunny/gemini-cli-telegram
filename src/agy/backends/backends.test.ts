@@ -348,6 +348,30 @@ describe('opencode session reuse', () => {
     expect(findSessionIdByConvId('conv-x')).toBeNull();
   });
 
+  it('runOpenCode attaches files with --file', async () => {
+    const { runOpenCode } = await import('./opencode.js');
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    const p = runOpenCode({
+      prompt: 'Describe the attached image',
+      cwd: '/tmp',
+      conversationId: 'conv-file',
+      model: 'OpenCode: DeepSeek V4 Flash Free',
+      extraFiles: ['/tmp/example.png', '/tmp/example.pdf'],
+    });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).toEqual(expect.arrayContaining([
+      '--file', '/tmp/example.png',
+      '--file', '/tmp/example.pdf',
+    ]));
+
+    child.stdout.emit('data', JSON.stringify({ type: 'step_finish', part: { reason: 'stop' } }) + '\\n');
+    child.emit('close', 0);
+    await p;
+  });
+
   it('runOpenCode reuses --session when a tagged session exists', async () => {
     const db = new Database(path.join(tmpDir, 'opencode.db'));
     db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, time_updated INTEGER)`);

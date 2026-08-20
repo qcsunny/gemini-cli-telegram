@@ -12,13 +12,23 @@
  *
  * Coverage:
  *  1. Private chat rich-message full path (draft → stream → finalize)
- *  2. Multi-model fallback chain (primary fail → downgrade → succeed)
+ *  2. Multi-model fallback chain (primary fail → downgrade → succeed; the
+ *     Fallback UX (BUG-05/07) suite also exercises the non-agy channel hint
+ *     case as BUG-07)
  *  3. BUG-02: forceReleaseDraft cleans activeDraftIds on error path
  *  4. BUG-01: touchPendingResult is exported and callable
  *  5. BUG-03: DeepSeek backend adds Socket-level setTimeout (via factory mock)
  *  6. BUG-04: History Map caps at 500 entries to prevent OOM
- *  7. BUG-06: GeminiDirect surfaces API error JSON instead of swallowing
- *  8. InlineStreamQueue throttling and 429 backoff
+ *  7. InlineStreamQueue throttling and 429 backoff
+ *
+ * Earlier versions of this file also covered BUG-06 (verifying that the
+ * now-historical GeminiDirect path surfaced API error JSON instead of
+ * swallowing it). Since GeminiDirect never had its own runner — it is only
+ * a Storage-layer enum label that callbackRouter / toStoreBackend fall back
+ * to for models that match neither 'DeepSeek' nor 'Web2API' prefixes (see
+ * src/agy/messageStore.ts and src/channels/telegram/commands/) — the case
+ * no longer has a real backend to exercise, so the suite was dropped. Add
+ * it back here if a GeminiDirect runner is reintroduced.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

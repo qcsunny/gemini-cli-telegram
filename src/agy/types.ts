@@ -29,16 +29,24 @@ export interface AgyRunOptions {
   signal?: AbortSignal;
   /** Extra directories to add (via --add-dir). */
   extraDirs?: string[];
+  /** Files to attach directly to a backend that supports file inputs (e.g. OpenCode --file). */
+  extraFiles?: string[];
   /** Model override */
   model?: string;
   /** Proxy server override */
   proxy?: string;
   /** agy --print-timeout override (e.g. "30m"); defaults to agy's 5m */
   printTimeout?: string;
-  /** Allow the model to use tools (file read / web fetch / shell). For agy this
-   *  passes --dangerously-skip-permissions; for opencode it passes --auto.
-   *  Only enabled for narrow, trusted flows (e.g. inline /invest) where the
-   *  model may need to fetch extra data the pre-scored script could not get. */
+  /** Allow the model to use tools (file read / web fetch / shell). Each
+   *  backend maps this flag to its own permission-bypass flag:
+   *    - agy:        --dangerously-skip-permissions           (agyCli.ts)
+   *    - claude CLI: --dangerously-skip-permissions           (backends/claude.ts)
+   *    - codex:      --dangerously-bypass-approvals-and-sandbox (backends/codex.ts)
+   *    - opencode:   --auto                                   (backends/opencode.ts)
+   *    - deepseek / web2api: HTTP prompt, no CLI flag (handled server-side)
+   *  Only enabled for narrow, trusted flows (e.g. inline /invest and the
+   *  chat-loop `tuning.autoApproveTools` toggle) where the model may need
+   *  to fetch extra data the pre-scored script could not get. */
   allowTools?: boolean;
 }
 

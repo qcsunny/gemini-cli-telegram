@@ -10,8 +10,13 @@
  *   - protobuf.ts: protobuf parsing for agy databases
  *   - eventQueue.ts: serialized streaming-event delivery
  *   - transcriptStream.ts: transcript polling / stream-json shape parsing
- *   - backends/agy (local), deepseek.ts, web2api.ts, opencode.ts,
- *     claude.ts, codex.ts
+ *   - backends/opencode.ts, backends/claude.ts, backends/codex.ts:
+ *     spawn-driven CLI backends (each owns its own session reuse + parsing)
+ *   - backends/sseBackend.ts, backends/web2api.ts, backends/deepseek.ts:
+ *     shared OpenAI-compatible SSE streaming machinery (sseBackend.ts is the
+ *     common base; web2api and deepseek delegate to it)
+ *   - local agy CLI fallback: implemented inline in runAgyPrint below (the
+ *     last branch of the model router)
  */
 
 import { spawn, execFileSync } from 'node:child_process';

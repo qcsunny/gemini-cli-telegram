@@ -14,7 +14,7 @@
  * Strips literal `<thought>`, `<think>`, and `<thinking>` XML tags
  * (both paired and orphaned) from a string, returning the clean body text.
  *
- * This regex set was previously duplicated in 5+ locations:
+ * This regex set was previously duplicated in 3 locations:
  *   - `channelReply.ts` (local function)
  *   - `messageLoop.ts` (flushBlocks + answerBuffer cleanup)
  *   - `messageCache.ts` (extractThoughtAndContent)

@@ -1,8 +1,10 @@
 /**
  * @file backendHealth.ts
  * @description Backend health tracking with exponential backoff cooldown.
- * Each backend channel (agy, deepseek, web2api) carries a failCount and cooldownUntil timestamp.
- * Before attempting a model route, check whether its backend is currently in cooldown.
+ * Each of the six backend channels (agy, deepseek, web2api, opencode, claude,
+ * codex) carries a failCount and cooldownUntil timestamp. Before attempting a
+ * model route, check whether its backend is currently in cooldown. The full
+ * list is exposed by getAllBackendHealthStatus() for status UIs.
  */
 
 import { logger } from '../utils/logger.js';

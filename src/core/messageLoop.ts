@@ -110,15 +110,23 @@ export async function processMessage(
   // 1. Prepare prompt and resolve local multimedia file paths
   let finalPrompt = input.text || '';
   let mediaExtraDirs: string[] = [];
+  let mediaExtraFiles: string[] = [];
   if (input.media && input.media.length > 0) {
     const mediaLines = input.media.map(item => {
       return `[本地关联文件 - 类型: ${item.type}, 物理路径: "${item.path}", 原始文件名: "${item.fileName || '未知'}"]`;
     });
     finalPrompt = `${mediaLines.join('\n')}\n\n${finalPrompt}`;
-    // Give the model tooling access to the directory holding each attachment
-    // so it can actually read the file (e.g. a PDF/文本附件) rather than just
-    // seeing the path string.
+    // Give the agy backend tooling access to the directory holding each
+    // attachment so it can actually read the file (e.g. a PDF/文本附件)
+    // rather than just seeing the path string. This relies on agy's
+    // --add-dir flag and is consumed by the agy fallback path.
     mediaExtraDirs = [...new Set(input.media.map((item) => path.dirname(item.path)))];
+    // Separately, feed the opencode backend the file paths themselves so it
+    // can attach the bytes via its native --file flag. Without this, opencode
+    // vision models only see the path string in the prompt and cannot read
+    // the content. The two channels are mutually supporting: agy uses
+    // extraDirs, opencode uses extraFiles — neither replaces the other.
+    mediaExtraFiles = [...new Set(input.media.map((item) => item.path))];
   }
 
   if (!finalPrompt.trim()) {
@@ -225,9 +233,12 @@ export async function processMessage(
         }
       }
 
-      // Build a capability-tier-aware fallback chain (T0 -> T1 -> T2 -> T3).
-      // Guarantees monotonic downgrade (只降不升). Models that permanently failed
-      // are skipped via skipModels.
+      // Build a capability-tier-aware fallback chain. The actual number of
+      // tiers (T0..Tn) is data-driven from `modelsConfig.tiers` in config (see
+      // src/config/models.json) — the modelOrder resolver returns every model
+      // starting at `initialModel` and walks downward through lower-priority
+      // tiers. Guarantees monotonic downgrade (只降不升). Models that
+      // permanently failed are skipped via skipModels.
       const skipModels = new Set<string>();
       const chain = buildTierAwareChain(initialModel, skipModels);
 
@@ -236,10 +247,11 @@ export async function processMessage(
       //   • On exhausting a model's retries, downgrade to the next-weaker
       //     model in the capability-based fallback chain.
       //   • The chain is walked downward (只降不升): it never upgrades back to higher tiers.
-      //   • Total budget is chain.length * retriesPerModel.
-      //     temporary failures (rate limits, transient errors) where a model
-      //     may recover after a brief cooldown.
-      //   • Total budget is chain.length * retriesPerModel.
+      //   • Retries within a single model are intended for transient failures
+      //     (rate limits, timeouts, etc.) where the same model can recover
+      //     after a brief cooldown — they are NOT meant to mask a permanent
+      //     capability mismatch (that is what downgrade is for).
+      //   • Total budget across the whole run is chain.length * retriesPerModel.
       const retriesPerModel = getTuningConfig().retriesPerModel;
       const maxAttempts = chain.length * retriesPerModel;
 
@@ -268,7 +280,8 @@ export async function processMessage(
         chainIdx++;
         modelToUse = chain[chainIdx];
         failsForModel = 0;
-        // Detect whether the downgrade crosses a channel boundary (agy ↔ deepseek ↔ web2api)
+        // Detect whether the downgrade crosses a channel boundary
+        // (agy ↔ deepseek ↔ web2api ↔ opencode ↔ claude ↔ codex).
         const prevCh = getChannelModel(prevModel);
         const nextCh = getChannelModel(modelToUse);
         const switchedChannel = prevCh && nextCh && prevCh !== nextCh;
@@ -406,6 +419,7 @@ export async function processMessage(
               printTimeout: agyPrintTimeout(),
               signal: runSignal,
               extraDirs: mediaExtraDirs,
+              extraFiles: mediaExtraFiles,
               // Regular chat: auto-approve all tool permissions (web search,
               // bash, file ops) unless explicitly disabled in tuning config.
               // /invest already passes allowTools: true on its own path.
