@@ -264,10 +264,11 @@ export async function processMessage(
       let lastErrorMessage = '';
       let didTimeout = false;
 
-      // Advance to the next model in the fallback chain. The chain is circular:
-      // after the last (weakest) model, it wraps to the first (strongest) model.
-      // Returns true if there is a next model to try, false if we've completed
-      // a full loop and should terminate.
+      // Advance to the next model in the fallback chain. The chain walks
+      // monotonically downward (tier-aware, 只降不升 — see buildTierAwareChain)
+      // and TERMINATES once the last model is exhausted; it never wraps back
+      // to the strongest model. Returns true if a next model was selected,
+      // false if the chain is exhausted and the run should terminate.
       //
       // Also detects channel switches (e.g., agy → deepseek) and logs them
       // with a 🔀 emoji so the user sees the backend change in Telegram.
@@ -625,8 +626,9 @@ export async function processMessage(
       // The HTML path (via sendRich) handles thought→details, blockquote
       // stripping, heading hoisting, and footer formatting internally.
 
-      // Local agy models already return cumulative usage from their database
-       logger.info(`[footer] Calculating footer - exitCode=${finalResult.exitCode}, usage=${JSON.stringify(finalResult.usage)}`);
+      // Footer usage: local agy models return cumulative usage summed from
+      // their database; backends fill it from the streamed/parsed proto.
+      logger.info(`[footer] Calculating footer - exitCode=${finalResult.exitCode}, usage=${JSON.stringify(finalResult.usage)}`);
       const footerText = formatFooterMarker(
         modelToUse || getDefaultModel() || '',
         finalPrompt,

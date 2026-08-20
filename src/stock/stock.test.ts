@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file stock.test.ts
+ * @description Tests for the market data service, quote/candle fetching, and provider fallbacks.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { StockFallbackProvider } from './provider/stockFallback.js';

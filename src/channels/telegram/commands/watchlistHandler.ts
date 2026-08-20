@@ -240,8 +240,8 @@ export async function handleReportGeneration(
   const segmentLabel = segment === 'cn' ? '🇨🇳 A股' : segment === 'hk' ? '🇭🇰 港股' : segment === 'us' ? '🇺🇸 美股' : '🌐 全市场';
 
   // Reuse the same rich-block pipeline as the private-chat message loop:
-  // sendRich / editRichDraft / editRich render native Telegram Bot API 10.2
-  // blocks (tables, <details>, math) instead of raw Markdown V1.
+  // send / edit / editRichDraft render native Telegram Bot API 10.2 blocks
+  // (tables, <details>, math) instead of raw Markdown V1.
   const reply = buildChannelReply(ctx, chatId, 'RichText');
 
   let msgId: number | undefined;
@@ -402,7 +402,7 @@ async function handleUnsubscription(
     return;
   }
 
-  // 2. Cancel by segment (cn, hk, us)
+  // 2. Cancel by segment (cn, hk, us, crypto)
   if (['cn', 'hk', 'us', 'crypto'].includes(target)) {
     const matched = allTasks.filter(t => t.message.endsWith(` ${target}`));
     if (matched.length === 0) {

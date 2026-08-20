@@ -46,7 +46,7 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 0.14, outputRate: 0.28, cacheMultiplier: 0.02, thinkingMultiplier: 'none', currency: 'CNY' }
   },
   {
-    // DeepSeek R1
+    // DeepSeek R1: $0.55 / cache×0.25 / $2.19
     pattern: /deepseek.*r1/i,
     rates: { inputRate: 0.55, outputRate: 2.19, cacheMultiplier: 0.25, thinkingMultiplier: 'none', currency: 'CNY' }
   },
@@ -153,7 +153,7 @@ export interface TokenUsage {
 
 /**
  * Calculate input, output, cached, and thinking costs based on model pricing.
- * - Cache hits are discounted per provider (Claude 10%, Gemini 25%)
+ * - Cache hits are discounted per provider (Claude 10%, Gemini 10%)
  * - Thinking/reasoning tokens billed per provider setting (Claude at output rate)
  */
 export function calculateCost(

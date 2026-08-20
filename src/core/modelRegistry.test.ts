@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file modelRegistry.test.ts
+ * @description Tests for model-order resolution, channel detection, and tier-aware fallback chain construction.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('node:fs', () => ({
@@ -200,7 +208,7 @@ describe('modelRegistry', () => {
       expect(getChannelModel('Gemini 3.6 Flash (High)')).toBe('agy');
     });
 
-    it('should return agy for Claude models', () => {
+    it('should return agy for Claude-named models without the Claude CLI: prefix', () => {
       expect(getChannelModel('Claude Opus 4.6 (Thinking)')).toBe('agy');
     });
   });

@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file settingsHandler.ts
+ * @description Telegram bot handler for user settings (/settings).
+ * Manages parse mode selection, rich draft toggle, and other per-user
+ * preferences via inline keyboard interactions.
+ */
+
 import { InlineKeyboard } from 'grammy';
 import type { Bot, Context } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';

@@ -1,3 +1,10 @@
+/**
+ * @file configHandlers.ts
+ * @description Telegram bot handlers for model selection (/model), help (/help),
+ * status (/status), and system info (/sysinfo). Provides paginated model
+ * picker and backend health dashboard.
+ */
+
 import { Bot, type Context, InlineKeyboard } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';

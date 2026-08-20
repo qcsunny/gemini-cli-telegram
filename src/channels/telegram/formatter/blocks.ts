@@ -55,13 +55,6 @@ type RichTextEntity =
   | { type: 'reference_link'; text: RichText; reference_name: string };
 
 /**
- * Convert markdown-it inline tokens into a native 10.2 `RichText` value
- * (either a plain string, or an array of styled entities). This makes inline
- * styling (bold/italic/code/links) fully native instead of relying on Telegram
- * re-parsing raw markdown — which also renders CJK bold correctly at word
- * boundaries.
- */
-/**
  * Trim leading/trailing whitespace from a `RichText` value. A plain string is
  * trimmed directly; an array of entities is trimmed at its ends (passing
  * through inner entities unchanged).
@@ -96,6 +89,13 @@ function trimRichText(rt: RichText): RichText {
   return out as RichText;
 }
 
+/**
+ * Convert markdown-it inline tokens into a native 10.2 `RichText` value
+ * (either a plain string, or an array of styled entities). This makes inline
+ * styling (bold/italic/code/links) fully native instead of relying on Telegram
+ * re-parsing raw markdown — which also renders CJK bold correctly at word
+ * boundaries.
+ */
 function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, mathStore: string[] = []): RichText {
   if (!inlineTokens || inlineTokens.length === 0) return '';
 
@@ -406,10 +406,12 @@ function extractMath(source: string): { text: string; math: string[] } {
 }
 
 /**
- * Extract standalone `$$...$$` block math and `<a name="...">` / `<aside>` /
- * `<tg-math-block>` HTML blocks that markdown-it emits as `html_block` tokens,
- * converting them into native 10.2 blocks. Returns the block (or null) plus the
- * matched token length so the caller can skip the raw html_block token.
+ * Convert standalone `<a name="...">` / `<aside>` / `<tg-math-block>` and media
+ * HTML tags (`<img>`, `<video>`, `<audio>`, `<tg-slideshow>`, `<tg-collage>`,
+ * `<tg-map>`) that markdown-it emits as `html_block` tokens into native 10.2
+ * blocks. Returns the block (or null) plus the matched token length so the
+ * caller can skip the raw html_block token. (`$$...$$` math is handled by the
+ * separate math extraction path in markdownTokensToRichBlocks.)
  */
 function tryHtmlBlockToRichBlock(
   token: MarkdownToken,
@@ -705,6 +707,8 @@ function parseRichListToken(
  * - `list` / `list_item` (blocks), `table` (RichBlockTableCell[][])
  * - `blockquote`, `pullquote` (from `<aside>`), `details`
  * - `divider`, `mathematical_expression` (LaTeX), `anchor`
+ * - media: `photo`, `video`, `animation`, `audio`, `voice_note`, `document`,
+ *   `slideshow`, `collage`, `map` (from HTML media tags / markdown images)
  *
  * Inline text uses native `RichText` entities (bold/italic/code/link/...) via
  * `inlineToRichText`, so styling — including CJK bold at word boundaries —
@@ -1229,7 +1233,7 @@ export function buildFinalBlocks(
  * Build the native 10.2 footer blocks for a finalized message.
  *
  * Two native blocks are produced (in order):
- *  - `InputRichBlockDetails`: a collapsible "🧠 思考过程" block holding the
+ *  - `InputRichBlockDetails`: a collapsible "🧠 Thinking Process" block holding the
  *    thinking text (rendered natively by Telegram, not hand-rolled <details>).
  *  - `InputRichBlockFooter`: the official info-footer line
  *    ("⚙️ model · In: … · Out: … · Cost: …") — the blocks-mode equivalent of the
@@ -1243,7 +1247,7 @@ export function buildFinalBlocks(
  * blocks, so the footer benefits from the structured blocks path instead of
  * falling back to HTML. Expected HTML shape (produced by markdownToHtml for a
  * `[footer: …]` marker + thought):
- *   <details>…<summary>🧠 思考过程 …</summary>…thinking…</details>
+ *   <details>…<summary>🧠 Thinking Process …</summary>…thinking…</details>
  *   <a href="tg://btn_info_footer|MODEL|IN|OUT|COST[|CACHED|THINKING]">⚙️ …</a>
  */
 export function buildFooterBlocksFromHtml(html: string): RichBlock[] {
@@ -1379,6 +1383,8 @@ function splitRichTextByLength(text: string, maxLen: number): string[] {
  *     are split into multiple details nodes each holding a subset of the inner blocks.
  *  3. As a last resort, a single `paragraph` whose text exceeds maxChars is
  *     split into smaller paragraph nodes at word boundaries.
+ *  4. A single `pre` block whose text exceeds maxChars is split at line
+ *     boundaries (hard-splitting any individual over-long line).
  */
 export function splitRichBlocks(
   blocks: RichBlock[],

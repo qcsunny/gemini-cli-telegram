@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file commands.test.ts
+ * @description Consolidated tests for Telegram command handlers (helpers, callbackRouter, settings, link summarizer, watchlist, invest, private image, sum) plus chat-message persistence.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Bot, Context } from 'grammy';
 import type { Message } from '@grammyjs/types';
@@ -93,7 +101,7 @@ vi.mock('../../../stock/provider/fund.js', () => ({
 }));
 
 /* ========================================================================= */
-/* 1. helpers.test.ts                                                        */
+/* 1. helpers (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('htmlToMarkdown', () => {
   it('should convert bold tags', () => {
@@ -244,7 +252,7 @@ describe('rateLimiter', () => {
 });
 
 /* ========================================================================= */
-/* 2. callbackRouter.test.ts                                                 */
+/* 2. callbackRouter (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('registerCallbackRouter', () => {
   let mockBot: any;
@@ -317,7 +325,7 @@ describe('registerCallbackRouter', () => {
 });
 
 /* ========================================================================= */
-/* 3. settingsHandler.test.ts                                                */
+/* 3. settingsHandler (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('registerSettingsHandler', () => {
   let mockBot: any;
@@ -374,7 +382,7 @@ describe('registerSettingsHandler', () => {
 });
 
 /* ========================================================================= */
-/* 4. linkSummarizerHandler.test.ts                                          */
+/* 4. linkSummarizerHandler (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('linkSummarizerHandler', () => {
   beforeEach(() => {
@@ -414,7 +422,7 @@ describe('linkSummarizerHandler', () => {
 });
 
 /* ========================================================================= */
-/* 5. watchlistHandler.test.ts                                               */
+/* 5. watchlistHandler (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('watchlistHandler', () => {
   beforeEach(() => {
@@ -472,7 +480,7 @@ describe('watchlistHandler', () => {
 });
 
 /* ========================================================================= */
-/* 6. investDataFetcher.test.ts                                              */
+/* 6. investDataFetcher (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('investDataFetcher', () => {
   beforeEach(() => {
@@ -537,7 +545,7 @@ describe('investDataFetcher', () => {
 });
 
 /* ========================================================================= */
-/* 7. investHandler.test.ts                                                  */
+/* 7. investHandler (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('investHandler', () => {
   let commands: Record<string, Function>;
@@ -603,7 +611,7 @@ describe('investHandler', () => {
 });
 
 /* ========================================================================= */
-/* 8. privateImageHandler.test.ts                                            */
+/* 8. privateImageHandler (consolidated into commands.test.ts) */
 /* ========================================================================= */
 describe('privateImageHandler', () => {
   let mockSessionManager: any;
@@ -640,7 +648,7 @@ describe('privateImageHandler', () => {
 });
 
 /* ========================================================================= */
-/* 9. sumHandler.test.ts                                                     */
+/* 9. sumHandler (consolidated into commands.test.ts) */
 /* ========================================================================= */
 function makeMsg(overrides: Partial<Message>): Message {
   return {

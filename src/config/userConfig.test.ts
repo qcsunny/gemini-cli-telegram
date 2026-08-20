@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file userConfig.test.ts
+ * @description Tests for config.json parsing, tuning defaults, and path resolvers.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 

@@ -1,3 +1,10 @@
+/**
+ * @file textUtils.ts
+ * @description Message-loop text normalization utilities.
+ * Strips whole-message code fences, normalizes whitespace, and preprocesses
+ * raw model output before it enters the streaming/render pipeline.
+ */
+
 import { extractThoughtAndContent } from '../../agy/agyCli.js';
 
 export function stripWholeMessageCodeFence(text: string): string {
@@ -10,7 +17,7 @@ export function stripWholeMessageCodeFence(text: string): string {
   if (!opening) return text;
   const fenceTicks = opening[1];
   const lang = (opening[2] || '').toLowerCase();
-  // Allow empty lang tag, or markdown/md/text/plaintext/none
+  // Allow empty lang tag, or markdown/md/text/plaintext/txt/none
   const allowedLangs = new Set(['', 'markdown', 'md', 'text', 'plaintext', 'none', 'txt']);
   if (lang && !allowedLangs.has(lang)) return text;
   const rest = trimmed.slice(opening[0].length);

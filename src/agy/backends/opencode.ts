@@ -1,3 +1,11 @@
+/**
+ * @file opencode.ts
+ * @description OpenCode CLI backend runner.
+ * Spawns the opencode binary in streaming JSON mode, parses its structured
+ * output (tool calls, reasoning, text), and feeds events through the shared
+ * {@link createEventQueue} pipeline.
+ */
+
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import * as fs from 'node:fs';
@@ -84,9 +92,10 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
     args.push('--model', modelId);
   }
 
-  // /invest flow: allow the model to auto-approve tools (web fetch, file read)
-  // so it can supplement missing analysis data. ONLY set from the trusted
-  // inline /invest path — it bypasses every permission prompt.
+  // Tool permissions: when allowTools is set, run opencode with --auto so the
+  // model can auto-approve tools (web fetch, file read, bash) without prompts.
+  // Enabled for regular chat via tuning.autoApproveTools (default true) and
+  // always set on the trusted inline /invest path.
   if (allowTools) {
     args.push('--auto');
   }

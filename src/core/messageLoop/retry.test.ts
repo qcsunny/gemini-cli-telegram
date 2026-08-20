@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file retry.test.ts
+ * @description Tests for message-loop retry-state evaluation (evaluateRetryState) and its classification of failures.
+ */
+
+
+
+
 import { describe, it, expect } from 'vitest';
 import {
   parseErrorMessage,

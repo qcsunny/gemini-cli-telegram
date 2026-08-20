@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file scheduler.test.ts
+ * @description Tests for the persistent task scheduler (scheduling, parsing, run logic).
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';

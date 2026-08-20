@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file utils.test.ts
+ * @description Tests for shared utilities (text processing, pricing, fetch helpers, URL parsing).
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as http from 'node:http';

@@ -1,3 +1,10 @@
+/**
+ * @file automationHandlers.ts
+ * @description Telegram bot handlers for automation commands (/schedule, /autopilot,
+ * /cron, /interval). Manages periodic task creation, listing, pausing, and
+ * removal with user-friendly confirmation prompts.
+ */
+
 import type { Bot, Context } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions, DaemonSession } from '../../../core/types.js';

@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file session.test.ts
+ * @description Tests for session manager, project scanning, and resume helpers.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -246,7 +254,7 @@ describe('SessionManager', () => {
 
 describe('resume', () => {
   describe('listAvailableSessions', () => {
-    it('should return an empty list because agy CLI manages sessions automatically', async () => {
+    it('should return an empty list when no conversation DBs exist in the test env', async () => {
       const { listAvailableSessions } = await import('./resume.js');
       const sessions = await listAvailableSessions();
       expect(sessions).toEqual([]);

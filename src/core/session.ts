@@ -189,9 +189,8 @@ export class ProjectManager {
       return null;
     };
 
-    // Check if dirPath itself is a project (only on top-level call)
-    // We detect top-level call by checking if depth is at its initial value or via a flag,
-    // but here we just check it. Recursion will handle subdirs.
+    // Check whether dirPath itself is a project before descending into subdirs.
+    // This runs at every recursion level, so nested projects are discovered too.
     try {
       const selfProject = await checkProject(dirPath, path.basename(dirPath));
       if (selfProject) {

@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file threading.ts
+ * @description Threading and concurrency utilities for the message loop.
+ * Provides multi-signal abort composition, per-turn timeouts, and
+ * abort-on-timeout helpers used during model fallback retries.
+ */
+
 import { getTuningConfig } from '../../config/userConfig.js';
 
 /**

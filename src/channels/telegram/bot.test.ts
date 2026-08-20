@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file bot.test.ts
+ * @description Unit tests for the Telegram bot wiring: middleware, sequentialization, media handling, and rate-limit helpers.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TelegramBot, buildChannelReply, record429Backoff, reset429Backoff, is429Error, get429RetryAfter } from './bot.js';
 import { processMessage } from '../../core/messageLoop.js';

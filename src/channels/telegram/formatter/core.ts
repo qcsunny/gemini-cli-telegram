@@ -775,9 +775,8 @@ export function safeHtmlSlice(html: string, maxLength: number): { sliced: string
 /**
  * Find a safe cut point in raw markdown text at or before `maxLen` such that the
  * slice is NOT split mid-structure. A cut is only allowed right after a blank
- * line (paragraph boundary) that lies OUTSIDE any fenced code block, table, or
- * run of heading lines. This keeps code blocks, tables and headings intact
- * across streamed-chunk boundaries.
+ * line (paragraph boundary) that lies OUTSIDE any fenced code block. This keeps
+ * code blocks intact across streamed-chunk boundaries.
  */
 export function findSafeCutPoint(markdown: string, maxLen: number): number {
   if (markdown.length <= maxLen) return markdown.length;
@@ -928,14 +927,12 @@ export function normalizeMarkdownFences(markdown: string): string {
 }
 
 /**
- * Fix common markdown structural mistakes produced by LLM output so that
- * markdown-it renders them as intended:
- *  - ATX headings without a space after the hashes (e.g. `###1. 标题`,
- *    `#### 3.1 标题`) are not recognized as headings by the parser; insert the
- *    missing space so they become real headings.
- *  - A horizontal rule `---` on its own line that is missing surrounding blank
- *    lines (so it merges with adjacent text instead of becoming an `<hr>`) is
- *    given the blank lines it needs to be recognized as a separator.
+ * Upgrade the backtick count of nested code fences so markdown-it parses them
+ * as properly nested blocks instead of treating the inner opening fence as the
+ * closing fence of the outer block. Per CommonMark (sec 4.5), a closing fence
+ * must be at least as long as the opening one; when inner content opens a
+ * fence of equal-or-greater length, the outer fence counts are raised so the
+ * nesting stays well-formed.
  */
 export function normalizeNestedCodeFences(markdown: string): string {
   if (!markdown) return markdown;
@@ -1007,6 +1004,22 @@ export function normalizeNestedCodeFences(markdown: string): string {
   return result.join('\n');
 }
 
+/**
+ * Fix common markdown structural mistakes produced by LLM output so that
+ * markdown-it renders them as intended:
+ *  - Ordered-list items missing a space after the dot (e.g. `1.第一阶段`).
+ *  - GFM checklist markers normalized into clean `- [x]` / `- [ ]` items.
+ *  - Model-emitted collapsible prompts (`点击展开…` / `▶` / `▼`) followed by a
+ *    blockquote converted into native `> [details]` containers.
+ *  - ATX headings without a space after the hashes (e.g. `###1. 标题`,
+ *    `#### 3.1 标题`) are not recognized as headings by the parser; insert the
+ *    missing space so they become real headings.
+ *  - A horizontal rule `---` on its own line that is missing surrounding blank
+ *    lines (so it merges with adjacent text instead of becoming an `<hr>`) is
+ *    given the blank lines it needs to be recognized as a separator.
+ *  - LaTeX \[...\] / \(...\) delimiters converted into the LATEX* markers used
+ *    by both the HTML and RichBlocks paths.
+ */
 export function normalizeMarkdownStructure(markdown: string): string {
   if (!markdown) return markdown;
   markdown = normalizeNestedCodeFences(markdown);

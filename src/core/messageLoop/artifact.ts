@@ -1,3 +1,11 @@
+/**
+ * @file artifact.ts
+ * @description Detects and sends newly created artifact files (images, videos,
+ * audio, documents) that an agy session produced during a turn. Scans the
+ * session's artifact directory (and optionally the project cwd) and sends any
+ * file whose mtime falls within the current turn window (turnStartTime − 2s).
+ */
+
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { DaemonSession } from '../types.js';

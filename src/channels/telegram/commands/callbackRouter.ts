@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file callbackRouter.ts
+ * @description Central callback_query router for Telegram inline keyboard actions.
+ * Routes callback data (model selection, session resume, project switch,
+ * settings, stock comparison, image relay, etc.) to their respective handlers
+ * with a prefix-matching dispatch table.
+ */
+
 import { Bot, InlineKeyboard } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';

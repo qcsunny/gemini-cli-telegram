@@ -173,8 +173,9 @@ export async function setConversation(
 
 /**
  * Delete the stored conversation for a chat (and optional topic) (e.g. on /reset).
- * Also deletes the associated `messages` history rows so orphaned records
- * (and the derived knownConversationIds set) do not grow unboundedly.
+ * Also deletes the associated `messages` and `modelOutputs` history rows so
+ * orphaned records (and the derived knownConversationIds set) do not grow
+ * unboundedly.
  */
 export async function deleteConversation(chatId: number, threadId?: number): Promise<void> {
   await migrateLegacyJsonIfNeeded();

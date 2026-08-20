@@ -1,3 +1,10 @@
+/**
+ * @file agyCli.test.ts
+ * @description Unit tests for the agy CLI runner helpers: usage proto
+ * decoding, DB-backed conversation history read-back, and model detection
+ * predicates.
+ */
+
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
 import * as fs from 'node:fs';

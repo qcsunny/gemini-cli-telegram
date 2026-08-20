@@ -170,7 +170,8 @@ export function markBackendHealthy(channel: string | null): void {
 }
 
 /**
- * Clears all backend health state. Used by tests and SIGHUP handler.
+ * Clears all backend health state. Used by tests and the "backends:reset"
+ * inline button in callbackRouter; the SIGHUP config reload does not touch it.
  */
 export function clearBackendHealth(): void {
   backendHealth.clear();

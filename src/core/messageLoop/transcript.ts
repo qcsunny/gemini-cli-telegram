@@ -1,3 +1,11 @@
+/**
+ * @file transcript.ts
+ * @description AgY CLI transcript parser and renderer.
+ * Reads the JSONL transcript file produced by agy CLI sessions, extracts
+ * tool outputs, file writes, and reasoning updates, and formats them
+ * into a structured "Thinking Process" block for Telegram display.
+ */
+
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 

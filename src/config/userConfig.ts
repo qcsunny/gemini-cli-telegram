@@ -104,7 +104,9 @@ const userConfigSchema = z.object({
    *  name in the `projects` list. If unset, falls back to the first project. */
   defaultProject: z.string().optional(),
   /**
-   * Custom file paths (optional). All default to CONFIG_DIR (project root).
+   * Custom file paths (optional). Each path defaults independently (db, log,
+   * and scheduled-tasks default to the project root; answerSaveDir is required;
+   * agyDataDir / opencodeDb / browseRoot default to XDG/standard user dirs).
    * Override any path to store data elsewhere.
    */
    paths: z.object({
@@ -130,18 +132,19 @@ const userConfigSchema = z.object({
     answerSaveDir: z.string().optional(),
   }).optional(),
   /**
-   * Custom model fallback order (optional). When set, overrides the hardcoded
-   * ORDERED_MODELS array in messageLoop.ts. Each entry must be a model display
-   * name as used by the fallback system (e.g. 'Claude Opus 4.6 (Thinking)',
-   * 'Web2API: Gemini 3.5 Flash'). Models not present in this list are still
-   * reachable but won't appear in the fallback chain.
+   * Custom model fallback order (optional). When set, takes highest priority
+   * over the tier-derived order from modelsConfig.tiers / models.json (see
+   * getEffectiveModelOrder in core/modelRegistry.ts). Each entry must be a
+   * model display name as used by the fallback system (e.g. 'Claude Opus 4.6
+   * (Thinking)', 'Web2API: Gemini 3.5 Flash'). Models not present in this list
+   * are still reachable but won't appear in the fallback chain.
    */
   orderedModels: z.array(z.string()).optional(),
   /**
-   * Tiered models configuration (optional). When set, overrides the hardcoded
-   * models.json and provides structured fallback with tier awareness.
-   * Each tier groups models by capability level, and the fallback system
-   * degrades tier-by-tier rather than model-by-model.
+   * Tiered models configuration (optional). When set, overrides the tier/order
+   * definitions in models.json and provides structured fallback with tier
+   * awareness. Each tier groups models by capability level, and the fallback
+   * system degrades tier-by-tier rather than model-by-model.
    */
   modelsConfig: modelsConfigSchema.optional(),
   /**
@@ -180,7 +183,7 @@ const userConfigSchema = z.object({
      * - Lower values (e.g. 500):  Smoother streaming, more API calls, may hit Telegram rate limits.
      * - Higher values (e.g. 3000): Less API traffic, but choppier visual updates.
      *
-     * Default: 1000 (1 second) — balances smoothness and rate-limit safety.
+     * Default: 350 (0.35 seconds) — balances smoothness and rate-limit safety.
      */
     debounceIntervalMs: z.number().positive().optional(),
     /**
@@ -264,7 +267,7 @@ const userConfigSchema = z.object({
      * commands, etc. without manual approval.
      *
      * - true:  models can call any tool (web fetch, bash, file writes) freely.
-     * - false: tools stay disabled in regular chat (current default behavior).
+     * - false: tools stay disabled in regular chat.
      *
      * Default: true — this is a personal bot; the owner wants full tool access.
      */

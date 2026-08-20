@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file formatter.test.ts
+ * @description Tests for the Telegram formatter: markdown-to-HTML/RichBlocks conversion, splitting, and chunking utilities.
+ */
+
+
+
+
 import { describe, it, expect } from 'vitest';
 import { 
   markdownToHtml, 

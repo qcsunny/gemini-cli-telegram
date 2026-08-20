@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file router.test.ts
+ * @description Tests for the Auto-model query classifier and heuristic fallback routing.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../utils/logger.js', () => ({

@@ -3,9 +3,10 @@
  * @description /sum command — summarizes the most recent N messages in a chat.
  *
  * The Telegram Bot API cannot fetch chat history (getChatHistory is a TDLib
- * method), so this module persists every received message into the local
- * chat_messages table as they arrive (see persistChatMessage), and /sum reads
- * back the most recent N rows and asks a model to summarize them.
+ * method), so this module persists incoming text/caption messages (excluding
+ * commands) into the local chat_messages table as they arrive (see
+ * persistChatMessage), and /sum reads back the most recent N rows and asks a
+ * model to summarize them.
  */
 
 import type { Bot, Context } from 'grammy';

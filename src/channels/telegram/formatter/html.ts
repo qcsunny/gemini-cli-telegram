@@ -476,8 +476,9 @@ function markdownToHtmlSnippet(markdown: string): string {
     }
   }
 
-  // Unescape native Telegram Bot API 10.2 HTML tags (<details>, <summary>, <aside>, <tg-thinking>, etc.)
-  // that were escaped by markdown-it when html: false was set.
+  // Re-hydrate native Telegram Bot API 10.2 HTML tags (<details>, <summary>,
+  // <aside>, <tg-thinking>, etc.) that renderIRToHtml escaped via escapeHtml
+  // while passing through the raw html_block/html_inline token content.
   html = html
     .replace(/&lt;details(\s+open)?&gt;/gi, '<details$1>')
     .replace(/&lt;\/details&gt;/gi, '</details>')

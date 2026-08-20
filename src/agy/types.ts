@@ -48,9 +48,10 @@ export interface AgyRunOptions {
    *    - codex:      --dangerously-bypass-approvals-and-sandbox (backends/codex.ts)
    *    - opencode:   --auto                                   (backends/opencode.ts)
    *    - deepseek / web2api: HTTP prompt, no CLI flag (handled server-side)
-   *  Only enabled for narrow, trusted flows (e.g. inline /invest and the
-   *  chat-loop `tuning.autoApproveTools` toggle) where the model may need
-   *  to fetch extra data the pre-scored script could not get. */
+*  Enabled whenever the caller passes it: the chat loop does so via the
+ *  `tuning.autoApproveTools` toggle (default true), and the trusted inline
+ *  /invest path sets it explicitly so the model can fetch extra data the
+ *  pre-scored script could not get. */
   allowTools?: boolean;
 }
 

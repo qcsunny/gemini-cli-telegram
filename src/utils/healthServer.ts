@@ -20,9 +20,10 @@ interface HealthStatus {
 }
 
 /**
- * Starts a minimal HTTP server on the given port serving a /health endpoint.
- * Returns immediately; callers should await a small delay or check readiness
- * before relying on the server.
+ * Starts a minimal HTTP server on the given port serving the /health endpoint,
+ * the /chart TradingView page, and the stock quote/financial API routes (via
+ * handleStockRoutes). Returns immediately; callers should await a small delay or
+ * check readiness before relying on the server.
  */
 export function startHealthServer(port: number): void {
   if (server) {

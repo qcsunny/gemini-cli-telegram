@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file db.test.ts
+ * @description Tests for the SQLite schema and database helpers.
+ */
+
+
+
+
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getDb, closeDb, schema } from './index.js';
 import {

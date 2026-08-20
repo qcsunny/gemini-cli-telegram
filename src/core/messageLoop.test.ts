@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file messageLoop.test.ts
+ * @description Tests for the core message loop: streaming, fallback chains, finalization, and error handling.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processMessage } from './messageLoop.js';
 import { extractThoughtAndContent, normalizeThinkingTags } from '../agy/agyCli.js';

@@ -4,6 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file inlineHandler.test.ts
+ * @description Tests for the inline query handler, InlineStreamQueue throttling, and inline media/stock/model flows.
+ */
+
+
+
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Bot } from 'grammy';
 import { registerInlineHandler, parseInlineModelAndPrompt, fuzzyMatchModels, runModelWithFallbackChain, compareModelName, stripInlineImages, buildInlineStreamingBlocks } from './inlineHandler.js';

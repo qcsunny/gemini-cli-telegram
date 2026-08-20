@@ -1,3 +1,10 @@
+/**
+ * @file rateLimiter.ts
+ * @description Telegram API rate-limit (429) and draft throttle state manager.
+ * Tracks per-chat backoff windows, records 429 retry-after values from the
+ * Telegram API, and provides a cleanup timer for stale backoff entries.
+ */
+
 import { logger } from '../../../utils/logger.js';
 import { getDb, schema } from '../../../db/index.js';
 import { eq } from 'drizzle-orm';

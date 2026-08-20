@@ -251,7 +251,8 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
 }
 
 /**
- * Safely closes active database connection. Used by tests for cleanup.
+ * Safely closes active database connection. Used by tests for cleanup and by
+ * the daemon shutdown path.
  */
 export function closeDb(): void {
   if (sqliteDb) {

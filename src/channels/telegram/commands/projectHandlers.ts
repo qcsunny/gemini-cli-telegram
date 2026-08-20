@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file projectHandlers.ts
+ * @description Telegram bot handlers for project selection (/project, /projects).
+ * Lists available projects with disk usage, lets users switch the active
+ * working directory, and shows project directory info.
+ */
+
 import type { Bot, Context } from 'grammy';
 import * as os from 'node:os';
 import * as path from 'node:path';

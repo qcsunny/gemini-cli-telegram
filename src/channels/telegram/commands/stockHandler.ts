@@ -193,8 +193,11 @@ const cell = (value: string): RichBlockTableCell => ({
 });
 
 /**
- * Builds the four financial report fold blocks (业绩汇总 / 利润表 / 资产负债表 /
- * 现金流量表), one row per reported quarter, sharing period-aligned columns.
+ * Builds the financial report fold blocks (业绩汇总 / 利润表 / 资产负债表 /
+ * 现金流量表). Quarterly sections cover the most recent 4 periods and, when
+ * annual rows exist, additional annual sections are appended — up to 6 folds in
+ * total. Each table is laid out with one row per metric and one column per
+ * reporting period, sharing period-aligned columns within a fold.
  */
 export function buildFinancialBlocks(
   financials: StockFinancial[],

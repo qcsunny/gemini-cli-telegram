@@ -35,14 +35,17 @@ export class StockFallbackProvider implements MarketDataProvider {
   async getQuote(symbol: string): Promise<StockQuote | null> {
     let cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
 
-    // If query is Chinese name or ticker alias (e.g. tcl, 苹果, 阿里巴巴, 贵州茅台)
+    // If query is a plain ticker or name (Chinese name or alias, e.g. tcl,
+    // 苹果, 阿里巴巴, 贵州茅台 — but also plain US tickers like NVDA) that is
+    // not a bare numeric code or exchange-prefixed symbol
     if (/[\u4e00-\u9fa5]/.test(symbol) || (!/^\d{5,6}$/.test(cleanSym) && !/^(SH|SZ|HK)\d+/i.test(cleanSym))) {
       const searchRes = await this.searchSymbols(symbol);
       if (searchRes.length > 0) {
         const item = searchRes[0];
         cleanSym = item.symbol.toUpperCase();
 
-        // Instantly fetch price from Eastmoney API for Chinese query to ensure sub-300ms speed
+        // Fetch the quote from the Eastmoney API directly when the resolved item has a
+        // secid, avoiding a second round-trip through the search provider
         if (item.secid) {
           try {
             const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${item.secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=2`;
@@ -194,7 +197,7 @@ export class StockFallbackProvider implements MarketDataProvider {
       }
     }
 
-    // 2. Ultra-fast US stock lookup via Eastmoney (sub-300ms guaranteed for Inline mode)
+    // 2. US stock lookup via Eastmoney (fast path used by Inline mode)
     try {
       const searchRes = await this.searchSymbols(cleanSym);
       if (searchRes && searchRes.length > 0) {

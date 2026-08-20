@@ -71,7 +71,7 @@ export function resolveModelForCategory(category: QueryComplexityLevel): string 
         return tier1.models[0];
       }
     } else {
-      // Tier 4 (Remote/Free Web2API)
+      // Tier 4 (远程备用 — remote Web2API/DeepSeek backup models)
       const tier4 = tiers.find(t => t.priority === 4);
       if (tier4 && tier4.models.length > 0) {
         const web2api = tier4.models.find(m => m.includes('Flash Lite') || m.includes('3.7 Flash')) || tier4.models[0];

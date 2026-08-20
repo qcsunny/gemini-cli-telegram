@@ -23,7 +23,7 @@ export interface StockQuote {
   volume?: number;
   high52?: number;
   low52?: number;
-  marketCap?: number; // Total market capitalization in USD (US stocks via Eastmoney)
+  marketCap?: number; // Total market capitalization in the quote's market currency (USD for US, CNY for A-shares, HKD for HK)
   pe?: number; // Price-to-earnings ratio (TTM)
   pb?: number; // Price-to-book ratio
   turnoverRate?: number; // Percentage
@@ -58,7 +58,7 @@ export interface StockQuote {
       pb?: number;
     };
   };
-  /** Recent quarterly financial statements (income statement), newest first. Filled when a stock market API key is configured. */
+  /** Recent quarterly financial statements (income statement), newest first. Filled from free Eastmoney APIs for A-shares/HK or the configured FMP key for US stocks. */
   financials?: StockFinancial[];
   /** Recent quarterly balance sheets, newest first. Filled alongside financials when available. */
   balanceSheets?: StockBalanceSheet[];

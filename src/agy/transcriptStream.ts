@@ -73,9 +73,10 @@ function summarize(label: string, value: unknown, depth: number, out: string[]):
 /**
  * Describe the shape of one agy stream-json line for diagnostics.
  *
- * agy's event contract is undocumented, and the code guesses at
- * `event === 'init'` carrying `conversation_id` plus
- * `step_update.step_type === 'tool'` — neither has ever been observed to fire.
+ * agy's event contract is undocumented; the code relies on
+ * `event === 'init'` carrying `conversation_id` (consumed by agyCli for
+ * mid-run conversation discovery) and `step_update.step_type === 'tool'`
+ * for tool-activity notes.
  * This makes the real structure visible without dumping chat content.
  *
  * @returns `null` for blank lines and non-object JSON (the CLI interleaves

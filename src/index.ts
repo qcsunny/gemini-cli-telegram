@@ -47,8 +47,10 @@ export async function startTelegramDaemon(
   }
 
   // Global safety net: log unhandled promise rejections instead of crashing.
-  // For uncaught exceptions, log and exit (the systemd unit restarts the daemon)
-  // rather than keep running in a state Node may have corrupted.
+  // For uncaught exceptions, log and exit cleanly rather than keep running in
+  // a state Node may have corrupted. The systemd unit is Restart=on-failure,
+  // so an abnormal exit is NOT auto-restarted; operators restart the unit
+  // explicitly (e.g. ./start.sh / systemctl --user restart) after fixing the cause.
   const shutdown = async (): Promise<void> => {
     logger.info('Shutting down...');
     // Hard fallback so the process never hangs in a half-closed state.

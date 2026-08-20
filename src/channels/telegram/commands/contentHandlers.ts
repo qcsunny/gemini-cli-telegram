@@ -1,3 +1,10 @@
+/**
+ * @file contentHandlers.ts
+ * @description Telegram bot handlers for content export commands (/export, /send,
+ * /history). Exports conversation history as Markdown/HTML files, sends
+ * recent responses as files, and browses past model outputs from the database.
+ */
+
 import { type Bot, type Context, InputFile } from 'grammy';
 import * as path from 'node:path';
 import * as fsPromises from 'node:fs/promises';

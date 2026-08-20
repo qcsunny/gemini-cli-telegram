@@ -1,3 +1,11 @@
+/**
+ * @file inlineHandler.ts
+ * @description Telegram inline query handler.
+ * Processes @botname queries to run model inference, search stocks, compare
+ * models, and display cached results — all via Telegram's inline mode.
+ * Includes the InlineStreamQueue for progressive rich-message updates.
+ */
+
 import type { Bot, Context } from 'grammy';
 import type { InlineQueryResult } from '@grammyjs/types/inline.js';
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from '@grammyjs/types/markup.js';

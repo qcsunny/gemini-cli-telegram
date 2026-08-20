@@ -40,7 +40,7 @@ import { createEventQueue } from './eventQueue.js';
 import type { AgyRunOptions, AgyRunResult, AgyStreamEvent } from './types.js';
 import { parseAgyTranscriptThoughtUpdates, describeAgyStreamEvent, pickNewConversationId } from './transcriptStream.js';
 
-// Re-export all types and functions for backward compatibility
+// Re-export helper functions for backward compatibility with older call sites
 export { isWeb2ApiModel, isDeepSeekModel, isClaudeCliModel, isCodexModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
 export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearOpenCodeHistory, clearClaudeHistory, clearCodexHistory } from './conversationManager.js';
 export { clearCodexThread } from './backends/codex.js';
@@ -233,9 +233,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     args.push('--print-timeout', printTimeout);
   }
 
-  // /invest flow: allow the model to use tools so it can supplement missing
-  // data via web fetch / file read. This bypasses all permission prompts, so
-  // it is ONLY enabled from the trusted inline /invest path.
+  // Tool permissions: when allowTools is set, run the agy CLI with full tool
+  // access (web fetch / file read / bash) by skipping every permission prompt.
+  // This is enabled for regular chat turns via tuning.autoApproveTools (default
+  // true) and always set on the trusted inline /invest path.
   if (allowTools) {
     args.push('--dangerously-skip-permissions');
   }

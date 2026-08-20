@@ -208,7 +208,7 @@ function tryDecodeNestedProto(bytes: Uint8Array): Record<string, unknown> | null
   return fields > 0 ? result : null;
 }
 
-/** Exported for testing: full metadata protobuf decoder, extracting all known
+/** Full metadata protobuf decoder, extracting all known
  * fields for debugging. Returns a plain object with key/value pairs.
  */
 function extractMetadataFromProto(m: Uint8Array): Record<string, unknown> {
@@ -329,7 +329,7 @@ export function getMaxStepIdx(dbPath: string): number {
 }
 
 /**
- * Exported for testing: reads agy DB and sums usage metadata for steps added
+ * Reads agy DB and sums usage metadata for steps added
  * after `fromIdx` (exclusive). When `fromIdx` is -1, sums every step's usage.
  * This gives the per-reply input/output/cached tokens, since a single reply may
  * span multiple steps (tool-call chains) within the same agy conversation.

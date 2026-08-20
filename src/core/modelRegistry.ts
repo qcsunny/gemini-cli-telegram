@@ -1,14 +1,15 @@
 /**
  * @file modelRegistry.ts
  * @description Model order resolution, channel detection, and tiered fallback chain builder.
- * Config priority: config.json orderedModels → config.json modelsConfig.tiers → models.json defaultOrder.
+ * Config priority: config.json orderedModels → config.json modelsConfig.tiers →
+ * models.json tiers (if present) → models.json defaultOrder.
  */
 
 import * as fssync from 'node:fs';
 import { loadUserConfig } from '../config/userConfig.js';
 import { logger } from '../utils/logger.js';
 
-// ── ModelsConfig (mirrors the structure in agyCli.ts) ────────────────────────
+// ── ModelsConfig (mirrors the modelsConfigSchema in config/userConfig.ts) ────
 
 interface ModelsConfig {
   defaultOrder?: string[];

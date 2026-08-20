@@ -1,3 +1,10 @@
+/**
+ * @file sessionHandlers.ts
+ * @description Telegram bot handlers for session management (/resume, /sessions,
+ * /cancel, /welcome). Handles session resumption from history, listing active
+ * sessions with cost/token stats, cancellation, and the welcome screen.
+ */
+
 import { InputFile, type Bot, type Context } from 'grammy';
 import * as path from 'node:path';
 import * as fs from 'node:fs';

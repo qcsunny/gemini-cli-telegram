@@ -969,10 +969,10 @@ export function registerInvestHandler(
         return;
       }
 
-      // 2. Prefer the deterministic value-invest-analysis script (same code
-      //    path as the inline /invest card). Inject its scored JSON into the
-      //    model prompt and publish the compact verdict card. Fall back to the
-      //    local bot scoring below when the script is unavailable.
+      // 2. Prefer the deterministic value-invest-analysis script (same data
+      //    source as the inline /invest card). Inject its scored JSON into a
+      //    deep-analysis prompt and stream the full report here. Fall back to
+      //    the local bot scoring below when the script is unavailable.
       const investCwd = getInvestProjectPath();
       try {
         const investResult = await fetchInvestAnalysis(symbol, investCwd);

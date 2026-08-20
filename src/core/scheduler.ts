@@ -7,7 +7,8 @@
 /**
  * @file scheduler.ts
  * @description Persistent task scheduler for automated and recurring chat interactions.
- * Persists tasks in ~/.gemini-cli-telegram/scheduled-tasks.json, running periodic checks every 30 seconds.
+ * Persists tasks in the project's scheduled-tasks.json (CONFIG_DIR/scheduled-tasks.json,
+ * configurable via config.json paths.scheduledTasks), running periodic checks every 30 seconds.
  */
 
 import * as fs from 'node:fs/promises';
@@ -27,7 +28,8 @@ export interface ScheduledTask {
   threadId?: number;
   message: string;
   type: 'once' | 'recurring';
-  /** ISO string or cron-like expression */
+  /** When: HH:MM, a relative keyword (now / in Nm/Nh / tomorrow / tonight /
+   * morning / evening), or an ISO date/time string (see parseScheduleTime). */
   schedule: string;
   /** For recurring: interval in minutes */
   intervalMinutes?: number;

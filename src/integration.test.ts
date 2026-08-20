@@ -11,15 +11,14 @@
  *   Telegram event → handler → messageLoop → backend → channelReply → Telegram API
  *
  * Coverage:
- *  1. Private chat rich-message full path (draft → stream → finalize)
- *  2. Multi-model fallback chain (primary fail → downgrade → succeed; the
- *     Fallback UX (BUG-05/07) suite also exercises the non-agy channel hint
- *     case as BUG-07)
- *  3. BUG-02: forceReleaseDraft cleans activeDraftIds on error path
- *  4. BUG-01: touchPendingResult is exported and callable
- *  5. BUG-03: DeepSeek backend adds Socket-level setTimeout (via factory mock)
- *  6. BUG-04: History Map caps at 500 entries to prevent OOM
- *  7. InlineStreamQueue throttling and 429 backoff
+ *  1. Private chat rich-message full path (draft → stream → finalize) [SUITE 1]
+ *  2. Multi-model fallback chain (primary fail → downgrade → succeed) with the
+ *     non-agy channel hint case [SUITE 2]
+ *  3. BUG-02: forceReleaseDraft cleans activeDraftIds on error path [SUITE 3]
+ *  4. BUG-01: touchPendingResult is exported and callable [SUITE 4]
+ *  5. BUG-03: DeepSeek backend adds Socket-level setTimeout (via factory mock) [SUITE 5]
+ *  6. BUG-04: History Map caps at 500 entries to prevent OOM [SUITE 6]
+ *  7. InlineStreamQueue throttling and 429 backoff [SUITE 8]
  *
  * Earlier versions of this file also covered BUG-06 (verifying that the
  * now-historical GeminiDirect path surfaced API error JSON instead of

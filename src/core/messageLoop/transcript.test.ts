@@ -1,3 +1,10 @@
+/**
+ * @file transcript.test.ts
+ * @description Tests for the transcript parser/cleaner helpers (timestamp/ANSI stripping, tool-result sanitization).
+ */
+
+
+
 import { describe, it, expect } from 'vitest';
 import {
   stripTimestampPrefix,

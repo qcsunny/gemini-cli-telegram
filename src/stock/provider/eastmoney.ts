@@ -1,3 +1,11 @@
+/**
+ * @file eastmoney.ts
+ * @description Eastmoney DataCenter provider for A-share financial statements.
+ * Fetches income statements, balance sheets, and cash flow statements from
+ * the Eastmoney datacenter-web API, with field mapping from A-share-specific
+ * column names to the standardized StockFinancial/StockBalanceSheet/StockCashFlow models.
+ */
+
 import type { StockFinancial, StockBalanceSheet, StockCashFlow } from '../types.js';
 import { logger } from '../../utils/logger.js';
 import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
@@ -281,7 +289,9 @@ async function fetchF10Json<T>(path: string, code: string): Promise<T | null> {
   return start === -1 ? null : (JSON.parse(text.slice(start)) as T);
 }
 
-/** Banks / insurers don't report through RPT_F10_FINANCE_GBALANCE; fall back to emweb PC_HSF10 (companyType: bank/security=3, insurance=2). */
+/** Banks / insurers don't report through RPT_F10_FINANCE_GBALANCE; fall back to
+ *  emweb PC_HSF10. The company type is read from the page's hidctype field
+ *  (bank/security/insurance etc.), defaulting to 4 when the field is absent. */
 async function fetchBankOrInsuranceBalanceSheets(symbol: string): Promise<StockBalanceSheet[] | null> {
   const code = `${aShareExchange(symbol)}${symbol}`;
   const page = await fetchF10Text(`Index?type=web&code=${encodeURIComponent(code)}`, code);
@@ -476,9 +486,12 @@ export async function fetchHKCashFlows(symbol: string): Promise<StockCashFlow[] 
 }
 
 /** A-share annual dividend yield via Eastmoney RPT_SHAREBONUS_DET.
- *  Computes (per-share cash dividend) / (current price) * 100. Falls back to the
- *  latest ex-dividend record when the newest plan has no per-10-shares amount.
- *  symbol: 6-digit A-share code e.g. '600519'. Returns null on failure. */
+ *  Computes (per-share cash dividend) / (current price) * 100, summing all
+ *  cash dividends whose ex-dividend date falls within the last 12 months
+ *  (A-shares frequently pay twice a year, so the latest record alone would
+ *  understate the yield). Falls back to the latest record when no 12-month
+ *  window matched. symbol: 6-digit A-share code e.g. '600519'. Returns null on
+ *  failure. */
 export async function fetchADividendYield(symbol: string, price: number): Promise<number | null> {
   try {
     const params = new URLSearchParams({
