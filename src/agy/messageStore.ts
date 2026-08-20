@@ -1,8 +1,9 @@
 /**
  * @file messageStore.ts
- * @description SQLite-backed persistence for web2api / deepseek / gemini-direct
- * conversation histories. Messages are written on stream end (not per chunk)
- * and restored into the in-memory Maps at startup so they survive restarts.
+ * @description SQLite-backed persistence for stateless backend conversation
+ * histories (web2api / deepseek / gemini-direct / opencode / claude / codex).
+ * Messages are written on stream end (not per chunk) and restored into the
+ * in-memory Maps at startup so they survive restarts.
  */
 
 import { eq, and } from 'drizzle-orm';

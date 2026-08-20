@@ -1,13 +1,15 @@
 /**
  * @file exchangeRate.ts
  * @description Real-time USD/CNY exchange rate provider.
- * Fetches from Google Finance, falls back to locally persisted rate.
+ * Fetches from exchangerate-api.com, falls back to a locally persisted rate,
+ * and finally to a hardcoded default when nothing is available.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { logger } from './logger.js';
+import { fetchWithTimeout } from './fetchWithTimeout.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_FILE = path.join(__dirname, '../../.exchange-rate-cache.json');
@@ -47,12 +49,7 @@ function writeCache(rate: number): void {
  */
 async function fetchFromApi(): Promise<number | null> {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD', {
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
+    const res = await fetchWithTimeout('https://api.exchangerate-api.com/v4/latest/USD', {}, FETCH_TIMEOUT_MS);
 
     if (!res.ok) return null;
     const data = await res.json() as { rates?: Record<string, number> };
@@ -100,7 +97,7 @@ export function initExchangeRate(): void {
  * True when the last known rate is older than CACHE_TTL_MS (or never fetched),
  * i.e. the value returned by getCachedUsdToCnyRate() may be outdated.
  */
-export function isExchangeRateStale(): boolean {
+function isExchangeRateStale(): boolean {
   return cachedRate ? Date.now() - cachedRate.fetchedAt > CACHE_TTL_MS : true;
 }
 

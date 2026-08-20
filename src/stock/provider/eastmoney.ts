@@ -1,6 +1,6 @@
-import { fetch as undiciFetch } from 'undici';
 import type { StockFinancial, StockBalanceSheet, StockCashFlow } from '../types.js';
 import { logger } from '../../utils/logger.js';
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 
 const DC_BASE = 'https://datacenter-web.eastmoney.com/api/data/v1/get';
 
@@ -75,13 +75,10 @@ function toHKFinancials(rows: RawFinancialRow[]): StockFinancial[] {
 }
 
 async function fetchRows(params: URLSearchParams): Promise<RawFinancialRow[]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4000);
   try {
-    const res = await undiciFetch(`${DC_BASE}?${params.toString()}`, {
-      signal: controller.signal,
+    const res = await fetchWithTimeout(`${DC_BASE}?${params.toString()}`, {
       headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
-    });
+    }, 4000);
     if (!res.ok) {
       logger.warn(`[EastmoneyFinancials] HTTP ${res.status}`);
       return [];
@@ -91,8 +88,6 @@ async function fetchRows(params: URLSearchParams): Promise<RawFinancialRow[]> {
   } catch (err) {
     logger.warn(`[EastmoneyFinancials] fetch failed: ${err}`);
     return [];
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -261,16 +256,13 @@ export async function fetchABalanceSheets(symbol: string): Promise<StockBalanceS
 }
 
 async function fetchF10Text(path: string, code: string): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await undiciFetch(`${F10_NEW_BASE}/${path}`, {
-      signal: controller.signal,
+    const res = await fetchWithTimeout(`${F10_NEW_BASE}/${path}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
         Referer: `${F10_NEW_BASE}/Index?type=web&code=${encodeURIComponent(code)}`,
       },
-    });
+    }, 5000);
     if (!res.ok) {
       logger.warn(`[EastmoneyF10] ${path} HTTP ${res.status}`);
       return null;
@@ -279,8 +271,6 @@ async function fetchF10Text(path: string, code: string): Promise<string | null> 
   } catch (e) {
     logger.warn(`[EastmoneyF10] ${path} failed: ${(e as Error).message}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -377,13 +367,10 @@ export async function fetchACashFlows(symbol: string): Promise<StockCashFlow[] |
 /** Company profile (ORG_PROFILE) for A-share stocks via Eastmoney F10. symbol: 6-digit code e.g. '600519'. */
 export async function fetchAStockProfile(symbol: string): Promise<string | null> {
   const code = symbol.length === 6 && /^\d{6}$/.test(symbol) ? (symbol.startsWith('6') ? `SH${symbol}` : `SZ${symbol}`) : symbol;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4000);
   try {
-    const res = await undiciFetch(`${F10_BASE}?code=${encodeURIComponent(code)}`, {
-      signal: controller.signal,
+    const res = await fetchWithTimeout(`${F10_BASE}?code=${encodeURIComponent(code)}`, {
       headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
-    });
+    }, 4000);
     if (!res.ok) {
       logger.warn(`[EastmoneyProfile] HTTP ${res.status}`);
       return null;
@@ -394,8 +381,6 @@ export async function fetchAStockProfile(symbol: string): Promise<string | null>
   } catch (err) {
     logger.warn(`[EastmoneyProfile] fetch failed: ${err}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

@@ -1,15 +1,17 @@
 /**
  * @file agyCli.ts
  * @description Subprocess wrapper, proxy client, and execution router for model runs.
- * This is now a thin facade that re-exports from modular files:
+ * Routes each model to its backend and re-exports the shared helpers used by the
+ * rest of the daemon:
  *   - types.ts: shared type definitions
  *   - modelDetection.ts: model routing configuration and detection
  *   - conversationManager.ts: in-memory conversation history management
  *   - thoughtParser.ts: thought/reasoning tag normalization and extraction
  *   - protobuf.ts: protobuf parsing for agy databases
- *   - backends/deepseek.ts: DeepSeek API proxy
- *   - backends/web2api.ts: Web2API proxy
- *   - backends/geminiDirect.ts: Direct Gemini API
+ *   - eventQueue.ts: serialized streaming-event delivery
+ *   - transcriptStream.ts: transcript polling / stream-json shape parsing
+ *   - backends/agy (local), deepseek.ts, web2api.ts, opencode.ts,
+ *     claude.ts, codex.ts
  */
 
 import { spawn, execFileSync } from 'node:child_process';
@@ -34,16 +36,21 @@ import type { AgyRunOptions, AgyRunResult, AgyStreamEvent } from './types.js';
 import { parseAgyTranscriptThoughtUpdates, describeAgyStreamEvent, pickNewConversationId } from './transcriptStream.js';
 
 // Re-export all types and functions for backward compatibility
-export type { AgyRunOptions, AgyRunResult } from './types.js';
-export { isWeb2ApiModel, isDeepSeekModel, isOpenCodeModel, isClaudeCliModel, isCodexModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
+export { isWeb2ApiModel, isDeepSeekModel, isClaudeCliModel, isCodexModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
 export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearOpenCodeHistory, clearClaudeHistory, clearCodexHistory } from './conversationManager.js';
-export { runClaudeCli, getClaudePath } from './backends/claude.js';
-export { runCodex, getCodexPath } from './backends/codex.js';
+export { clearCodexThread } from './backends/codex.js';
 export { extractUsageFromProto, readUsageFromDatabase, readConversationHistory } from './protobuf.js';
 export { normalizeThinkingTags, extractThoughtBlocksAndSegments, extractThoughtAndContent } from './thoughtParser.js';
 export { getConversationsDir } from './protobuf.js';
 
 let _agyPath: string | undefined;
+
+/** Narrow an unknown value to a plain record (never arrays). */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
 
 /** Grace period (ms) between SIGINT and SIGKILL escalation on abort. */
 const ABORT_SIGKILL_GRACE_MS = 5000;
@@ -143,10 +150,12 @@ async function snapshotConversations(): Promise<Set<string>> {
  * Execute a model run by routing to the appropriate backend.
  *
  * Routing priority (checked in order):
- *   1. Web2API models (prefix "Web2API:") → local HTTP proxy at :8081
- *   2. DeepSeek models (prefix "DeepSeek:") → local deepseek-api proxy at :5001
- *   3. Gemini models with API key configured → direct Google AI REST SSE
- *   4. Everything else → native `agy` binary (C++ child process)
+ *   1. Web2API models (prefix "Web2API:") → OpenAI-compatible SSE endpoint
+ *   2. DeepSeek models (prefix "DeepSeek:") → OpenAI-compatible SSE endpoint
+ *   3. OpenCode models (prefix "OpenCode:") → local opencode binary
+ *   4. Claude CLI models (prefix "Claude CLI:" / "ClaudeCode:") → local claude binary
+ *   5. Codex models (prefix "Codex:" / "Codex-CLI:") → local codex binary
+ *   6. Everything else → native `agy` binary (C++ child process)
  */
 export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   const effectiveProxy = opts.proxy || loadUserConfig()?.proxy || process.env['HTTP_PROXY'] || process.env['http_proxy'];
@@ -345,10 +354,10 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       emitEvent({ type: 'thought', content });
     };
 
-    const formatToolNote = (update: Record<string, any>): string => {
+    const formatToolNote = (update: Record<string, unknown>): string => {
       const name = String(update['tool_name'] || 'tool');
-      const info = update['tool_info'] as Record<string, any> | undefined;
-      const parameters = info?.['parameters'] as Record<string, any> | undefined;
+      const info = asRecord(update['tool_info']);
+      const parameters = asRecord(info?.['parameters']);
       const detail = parameters
         ? Object.values(parameters).find((value) => typeof value === 'string' && value.trim())
         : undefined;
@@ -393,7 +402,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
       // Opt-in contract discovery: log each distinct event *shape* once per run.
       if (dumpEventShapes) {
         let name = '?';
-        try { name = String((JSON.parse(line) as any)['event'] ?? '<none>'); } catch { /* non-JSON line */ }
+        try { name = String(asRecord(JSON.parse(line))?.['event'] ?? '<none>'); } catch { /* non-JSON line */ }
         const shape = describeAgyStreamEvent(line);
         if (shape && !seenEventShapes.has(shape.signature)) {
           seenEventShapes.add(shape.signature);
@@ -408,11 +417,12 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
         }
       }
       try {
-        const event = JSON.parse(line) as Record<string, any>;
+        const event = asRecord(JSON.parse(line));
+        if (!event) return;
         if (event['event'] === 'init' && typeof event['conversation_id'] === 'string') {
           transcriptConversationId = event['conversation_id'];
         }
-        const update = event['step_update'] as Record<string, any> | undefined;
+        const update = asRecord(event['step_update']);
         const delta = typeof update?.['text_delta'] === 'string' ? update['text_delta'] : '';
         if (delta) {
           streamJsonText += delta;
@@ -424,7 +434,7 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
           emitThought(`${formatToolNote(update)}\n`);
         }
 
-        const result = event['result'] as Record<string, any> | undefined;
+        const result = asRecord(event['result']);
         if (typeof result?.['response'] === 'string') {
           streamJsonResult = result['response'];
         }

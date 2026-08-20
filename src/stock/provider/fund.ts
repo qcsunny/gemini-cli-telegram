@@ -10,8 +10,8 @@
  * Fetches NAV history, basic info, fees, fund manager tenure, top holdings & peer rank via Eastmoney APIs.
  */
 
-import { fetch as undiciFetch } from 'undici';
 import { logger } from '../../utils/logger.js';
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 
 const LSJZ_API = 'https://api.fund.eastmoney.com/f10/lsjz';
 const F10_BASE = 'https://fundf10.eastmoney.com';
@@ -91,18 +91,11 @@ export interface FundDataset {
 }
 
 async function get<T>(url: string, referer: string): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await undiciFetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': UA, Referer: referer },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return (await res.json()) as T;
-  } finally {
-    clearTimeout(timer);
-  }
+  const res = await fetchWithTimeout(url, {
+    headers: { 'User-Agent': UA, Referer: referer },
+  }, 8000);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as T;
 }
 
 function num(v: unknown): number | null {
@@ -166,10 +159,8 @@ async function fetchETFQuote(code: string): Promise<FundDataset['quote']> {
   const prefix = exchangePrefix(code);
   if (!prefix) return null;
   const url = `https://qt.gtimg.cn/q=${prefix}${code}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await undiciFetch(url, { signal: controller.signal, headers: { 'User-Agent': UA } });
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': UA } }, 5000);
     if (!res.ok) return null;
     const body = decodeGbk(await res.arrayBuffer());
     const m = body.match(/="([^"]*)"/);
@@ -188,8 +179,6 @@ async function fetchETFQuote(code: string): Promise<FundDataset['quote']> {
   } catch (err) {
     logger.warn(`[Fund] fetchETFQuote failed for ${code}: ${err}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -226,14 +215,11 @@ async function fetchFundPeerRank(code: string, type: string): Promise<FundDatase
   if (cached && Date.now() - cached.fetchedAt < RANK_TTL_MS) {
     return buildRank(code, cached.codes, cached.total);
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const url = `https://fund.eastmoney.com/data/rankhandler.aspx?op=ph&dt=kf&ft=${entry.ft}&rs=&gs=0&sc=1nzf&st=desc&pi=1&pn=50000`;
-    const res = await undiciFetch(url, {
-      signal: controller.signal,
+    const res = await fetchWithTimeout(url, {
       headers: { 'User-Agent': UA, Referer: 'https://fund.eastmoney.com/data/fundranking.html' },
-    });
+    }, 15000);
     if (!res.ok) return null;
     const parsed = parseRankData(await res.text());
     if (!parsed) return null;
@@ -241,8 +227,6 @@ async function fetchFundPeerRank(code: string, type: string): Promise<FundDatase
     return buildRank(code, parsed.codes, parsed.total);
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -255,10 +239,8 @@ function buildRank(code: string, codes: string[], total: number): FundDataset['p
 
 async function fetchFundTopHoldings(code: string, topline = 20): Promise<FundTopHolding[]> {
   const url = `${F10_BASE}/FundArchivesDatas.aspx?type=jjcc&code=${code}&topline=${topline}&year=&month=`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await undiciFetch(url, { signal: controller.signal, headers: { 'User-Agent': UA, Referer: `${F10_BASE}/` } });
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': UA, Referer: `${F10_BASE}/` } }, 8000);
     if (!res.ok) return [];
     const text = await res.text();
     const m = text.match(/content:"([\s\S]*?)",arryear/);
@@ -282,8 +264,6 @@ async function fetchFundTopHoldings(code: string, topline = 20): Promise<FundTop
     return rows;
   } catch {
     return [];
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -295,13 +275,10 @@ function htmlEntityDecode(s: string): string {
 const stripTags = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 async function fetchFundFees(code: string): Promise<{ managementFeePct: number | null; custodyFeePct: number | null }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await undiciFetch(`${F10_BASE}/jbgk_${code}.html`, {
-      signal: controller.signal,
+    const res = await fetchWithTimeout(`${F10_BASE}/jbgk_${code}.html`, {
       headers: { 'User-Agent': UA, Referer: `${F10_BASE}/` },
-    });
+    }, 8000);
     if (!res.ok) return { managementFeePct: null, custodyFeePct: null };
     const buf = Buffer.from(await res.arrayBuffer());
     const text = htmlEntityDecode(new TextDecoder('utf-8').decode(buf));
@@ -316,19 +293,14 @@ async function fetchFundFees(code: string): Promise<{ managementFeePct: number |
     return { managementFeePct: mgt ? parseFloat(mgt) : null, custodyFeePct: cast ? parseFloat(cast) : null };
   } catch {
     return { managementFeePct: null, custodyFeePct: null };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 async function fetchManagerTenure(code: string): Promise<ManagerTenure | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await undiciFetch(`${F10_BASE}/jjjl_${code}.html`, {
-      signal: controller.signal,
+    const res = await fetchWithTimeout(`${F10_BASE}/jjjl_${code}.html`, {
       headers: { 'User-Agent': UA, Referer: `${F10_BASE}/` },
-    });
+    }, 8000);
     if (!res.ok) return null;
     const html = await res.text();
     const m = /<td>\s*(\d{4}-\d{2}-\d{2})<\/td>\s*<td[^>]*>\s*至今\s*<\/td>/.exec(html);
@@ -342,18 +314,14 @@ async function fetchManagerTenure(code: string): Promise<ManagerTenure | null> {
     return { since, days, returnPct };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 async function fetchFundInfo(code: string): Promise<FundInfo | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const url = `${MOB_API}?FCODE=${code}&deviceid=Wap&plat=Wap&product=EFund&version=6.2.8`;
     const [res, fees] = await Promise.all([
-      undiciFetch(url, { signal: controller.signal, headers: { 'User-Agent': UA, Referer: `${F10_BASE}/` } }),
+      fetchWithTimeout(url, { headers: { 'User-Agent': UA, Referer: `${F10_BASE}/` } }, 8000),
       fetchFundFees(code),
     ]);
     if (!res.ok) return null;
@@ -388,8 +356,6 @@ async function fetchFundInfo(code: string): Promise<FundInfo | null> {
     };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

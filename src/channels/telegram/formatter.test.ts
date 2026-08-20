@@ -493,7 +493,6 @@ Thanks for reading! 🚀
     expect(html).toContain('This is thinking process.');
   });
 
-
   it('should format completed thought blocks with metadata correctly', () => {
     const input = 'Pre-text\n<thought time="3.4" tokens="1250">\nThinking content\n</thought>\nPost-text';
     const html = markdownToHtml(input);

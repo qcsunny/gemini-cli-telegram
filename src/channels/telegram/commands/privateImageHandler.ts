@@ -52,7 +52,7 @@ export async function handlePrivateImageRequest(
   }
 
   const session = sessionManager.getSession(chatId, threadId);
-  const availableProjects = sessionManager.getProjectsInConfigOrder() as any[];
+  const availableProjects = sessionManager.getProjectsInConfigOrder();
   const defaultModel = session?.model
     || session?.config?.getModel?.()
     || defaultOptions.model

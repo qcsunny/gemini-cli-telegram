@@ -285,7 +285,7 @@ describe('[Integration] Fallback UX (BUG-05/07)', () => {
   beforeEach(() => { vi.mocked(runAgyPrint).mockClear(); });
 
   it('BUG-07: shows non-agy channel hint for web2api failure', async () => {
-    const session = makeSession('Web2API: Gemini Flash Lite');
+    const session = makeSession('Web2API: Gemini 3.5 Flash Lite');
     const reply = makeRichReply();
 
     vi.mocked(runAgyPrint).mockResolvedValue({
@@ -443,8 +443,6 @@ describe('[Integration] BUG-04: History Map size cap prevents OOM', () => {
   });
 
 });
-
-
 
 // =============================================================================
 // SUITE 8: InlineStreamQueue throttling and 429 backoff

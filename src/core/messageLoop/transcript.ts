@@ -53,9 +53,17 @@ function toInlineDetail(value: string): string {
   return value.replace(/\s+/g, ' ').replace(/`/g, "'").trim();
 }
 
-function safeParse(line: string): any {
+type JsonRecord = Record<string, unknown>;
+
+function asJsonRecord(value: unknown): JsonRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as JsonRecord
+    : null;
+}
+
+function safeParse(line: string): JsonRecord | null {
   try {
-    return JSON.parse(line.trim());
+    return asJsonRecord(JSON.parse(line.trim()));
   } catch {
     return null;
   }
@@ -80,24 +88,25 @@ export function sanitizeToolResultContent(content: string): string {
   return cleaned.replace(/</g, '&lt;').replace(/>/g, '&gt;').trim();
 }
 
-export function formatToolCall(tc: any): string | null {
-  if (!tc || typeof tc.name !== 'string') return null;
-  const args = tc.args && typeof tc.args === 'object' ? tc.args : {};
+export function formatToolCall(tc: unknown): string | null {
+  const toolCall = asJsonRecord(tc);
+  if (!toolCall || typeof toolCall['name'] !== 'string') return null;
+  const args = asJsonRecord(toolCall['args']) ?? {};
   const clean = (v: unknown): string =>
     typeof v === 'string' ? stripControlCharacters(v).replace(/^"|"$/g, '').replace(/^'|'$/g, '').trim() : '';
-  const desc = clean(args.toolAction) || clean(args.toolSummary);
+  const desc = clean(args['toolAction']) || clean(args['toolSummary']);
   let detail = '';
   for (const key of TOOL_DETAIL_KEYS) {
     detail = clean(args[key]);
     if (detail) break;
   }
-  let line = `- \`${tc.name}\``;
+  let line = `- \`${toolCall['name']}\``;
   if (desc) line += ` — ${desc}`;
   if (detail) line += `：\`${toInlineDetail(detail)}\``;
   return line;
 }
 
-export interface TurnTranscript {
+interface TurnTranscript {
   /**
    * Every non-body output of the turn, in transcript order: planner reasoning,
    * the tool calls it issued, and what those tools returned.
@@ -134,34 +143,38 @@ export function buildTurnTranscript(lines: string[], turnStartTime: number): Tur
 
   // Filter to this turn first, then stable-sort by step_index (see the JSDoc
   // above: file order is not authoritative, and step_index resets per turn).
-  const turnSteps: { parsed: any; createdAt: number }[] = lines
+  const turnSteps: { parsed: JsonRecord; createdAt: number }[] = lines
     .map(safeParse)
-    .filter((parsed): parsed is any => parsed !== null)
-    .map((parsed) => ({ parsed, createdAt: new Date(parsed.created_at).getTime() }))
+    .filter((parsed): parsed is JsonRecord => parsed !== null)
+    .map((parsed) => ({
+      parsed,
+      createdAt: typeof parsed['created_at'] === 'string' ? new Date(parsed['created_at']).getTime() : NaN,
+    }))
     .filter(({ createdAt }) => !isNaN(createdAt) && createdAt >= turnStartTime)
-    .sort((a, b) => (a.parsed.step_index ?? 0) - (b.parsed.step_index ?? 0));
+    .sort((a, b) => Number(a.parsed['step_index'] ?? 0) - Number(b.parsed['step_index'] ?? 0));
 
   for (const { parsed } of turnSteps) {
-    if (parsed.type === 'PLANNER_RESPONSE') {
-      if (parsed.status !== 'DONE') continue;
-      if (typeof parsed.thinking === 'string' && parsed.thinking.trim()) {
+    if (parsed['type'] === 'PLANNER_RESPONSE') {
+      if (parsed['status'] !== 'DONE') continue;
+      if (typeof parsed['thinking'] === 'string' && parsed['thinking'].trim()) {
         hasThinking = true;
-        push('thinking', parsed.thinking.trim());
+        push('thinking', parsed['thinking'].trim());
       }
-      const calls = (Array.isArray(parsed.tool_calls) ? parsed.tool_calls : [])
+      const calls = (Array.isArray(parsed['tool_calls']) ? parsed['tool_calls'] : [])
         .map(formatToolCall)
         .filter((l: string | null): l is string => Boolean(l));
       if (calls.length) push('tool', `**🔧 工具调用**\n\n${calls.join('\n')}`);
       continue;
     }
 
-    const label = TOOL_RESULT_LABELS[parsed.type];
+    const type = typeof parsed['type'] === 'string' ? parsed['type'] : '';
+    const label = TOOL_RESULT_LABELS[type];
     if (!label) continue;
-    const body = sanitizeToolResultContent(stripTimestampPrefix(String(parsed.content ?? '')));
+    const body = sanitizeToolResultContent(stripTimestampPrefix(String(parsed['content'] ?? '')));
     if (!body) continue;
     // Background tools report RUNNING first and finish in a later step; keep the
     // status so a still-running task is not mistaken for a completed one.
-    const status = parsed.status === 'DONE' ? '' : ` · ${String(parsed.status ?? '')}`;
+    const status = parsed['status'] === 'DONE' ? '' : ` · ${String(parsed['status'] ?? '')}`;
     push('tool', `**${label}${status}**\n\n\`\`\`\n${body}\n\`\`\``);
   }
 
@@ -190,9 +203,10 @@ async function readTranscriptLines(logsDir: string): Promise<{ lines: string[]; 
       const raw = await fs.readFile(filePath, 'utf-8');
       if (!raw.trim()) continue;
       return { lines: raw.trim().split('\n'), filePath };
-    } catch (err: any) {
-      if (err.code !== 'ENOENT') {
-        logger.debug(`[messageLoop] Error reading ${filePath}: ${err.message || err}`);
+    } catch (err: unknown) {
+      const code = typeof err === 'object' && err !== null && 'code' in err ? err.code : undefined;
+      if (code !== 'ENOENT') {
+        logger.debug(`[messageLoop] Error reading ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -234,17 +248,17 @@ export async function readThoughtFromTranscript(
     const transcript = await readTranscriptLines(logsDir);
     if (transcript) {
       const { lines, filePath } = transcript;
-      let foundStep: any = null;
+      let foundStep: JsonRecord | null = null;
       let matchedReason = '';
 
       for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i].trim();
         if (!line) continue;
         try {
-          const parsed = JSON.parse(line);
-          if (parsed.type === 'PLANNER_RESPONSE' && parsed.status === 'DONE') {
+          const parsed = asJsonRecord(JSON.parse(line));
+          if (parsed && parsed['type'] === 'PLANNER_RESPONSE' && parsed['status'] === 'DONE') {
             // Check 1: Recency verification — skip entries that predate this turn
-            const createdAtTime = new Date(parsed.created_at).getTime();
+            const createdAtTime = typeof parsed['created_at'] === 'string' ? new Date(parsed['created_at']).getTime() : NaN;
             if (!isNaN(createdAtTime)) {
               if (createdAtTime < turnStartTime) {
                 matchedReason = 'Entry predates turn start';
@@ -254,7 +268,7 @@ export async function readThoughtFromTranscript(
 
             // Check 2: Content consistency validation on isolated answer body
             if (answerPrefix) {
-              const normContent = normalizeText(parsed.content || '');
+              const normContent = normalizeText(typeof parsed['content'] === 'string' ? parsed['content'] : '');
               if (!normContent.includes(answerPrefix)) {
                 matchedReason = `Content mismatch: prefix "${answerPrefix.slice(0, 20)}..." not in content`;
                 continue;
@@ -284,8 +298,8 @@ export async function readThoughtFromTranscript(
         }
 
         // Priority 2: parsed.content extracted thought, still carrying the tool chain
-        if (foundStep.content && typeof foundStep.content === 'string') {
-          const { thought } = extractThoughtAndContent(foundStep.content);
+        if (typeof foundStep['content'] === 'string' && foundStep['content']) {
+          const { thought } = extractThoughtAndContent(foundStep['content']);
           if (thought.trim()) {
             const recovered = turn.markdown
               ? `${thought.trim()}\n\n---\n\n${turn.markdown}`

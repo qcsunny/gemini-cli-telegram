@@ -1,8 +1,12 @@
 import type { Bot, Context } from 'grammy';
+import type { InlineQueryResult } from '@grammyjs/types/inline.js';
+import type { InlineKeyboardButton, InlineKeyboardMarkup } from '@grammyjs/types/markup.js';
+import type { InputRichMessage } from '@grammyjs/types/rich.js';
 import { InputFile } from 'grammy';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { SessionManager } from '../../../core/session.js';
+import type { StockQuote } from '../../../stock/types.js';
 import type { ProjectInfo, SessionOptions } from '../../../core/types.js';
 import type { AgyRunResult } from '../../../agy/types.js';
 import { runAgyPrint, extractThoughtAndContent } from '../../../agy/agyCli.js';
@@ -10,6 +14,39 @@ import { getAgyDataDir, getDefaultModel, getDefaultModels, getTuningConfig, load
 import { formatTokenCount } from '../formatter/core.js';
 import { buildFinalBlocks, markdownToRichBlocks } from '../formatter/blocks.js';
 import type { RichBlock } from '../richMessage.js';
+
+type InlineArticle = Extract<InlineQueryResult<never>, { type: 'article' }>;
+type InlineEditPayload = {
+  inline_message_id: string;
+  rich_message: InputRichMessage<never>;
+  reply_markup?: InlineKeyboardMarkup;
+};
+type InlineEditApi = {
+  raw: {
+    editMessageText(payload: InlineEditPayload): Promise<unknown>;
+  };
+};
+type InlineRawEditPayload = {
+  inline_message_id: string;
+  rich_message?: InputRichMessage<never> | InputRichMessage<InputFile>;
+  text?: string;
+  parse_mode?: 'HTML';
+  reply_markup?: InlineKeyboardMarkup;
+};
+type InlineReplyMarkupPayload = {
+  inline_message_id: string;
+  reply_markup: InlineKeyboardMarkup;
+};
+
+function editInlineMessage(api: Context['api'], payload: InlineRawEditPayload): Promise<unknown> {
+  const edit = api.raw.editMessageText as unknown as (value: InlineRawEditPayload) => Promise<unknown>;
+  return edit(payload);
+}
+
+function editInlineReplyMarkup(api: Context['api'], payload: InlineReplyMarkupPayload): Promise<unknown> {
+  const edit = api.raw.editMessageReplyMarkup as unknown as (value: InlineReplyMarkupPayload) => Promise<unknown>;
+  return edit(payload);
+}
 import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.js';
 import { buildTierAwareChain, getEffectiveModelOrder, loadModelsConfig, displayModelName } from '../../../core/modelRegistry.js';
 import { logger } from '../../../utils/logger.js';
@@ -240,6 +277,18 @@ const cleanupTimer = setInterval(() => {
       recentInlineQueries.delete(key);
     }
   }
+  const inlinePagesCutoff = Date.now() - INLINE_PAGES_TTL;
+  let inlinePagesDirty = false;
+  for (const [key, val] of Object.entries(_inlinePagesOnDisk)) {
+    if (val.createdAt < inlinePagesCutoff) {
+      delete _inlinePagesOnDisk[key];
+      inlinePages.delete(key);
+      inlinePagesDirty = true;
+    }
+  }
+  if (inlinePagesDirty) {
+    persistInlinePages();
+  }
 }, 60_000);
 cleanupTimer.unref();
 
@@ -249,7 +298,7 @@ cleanupTimer.unref();
 export class InlineStreamQueue {
   private queue: Promise<void> = Promise.resolve();
   private pendingMarkdown: string | null = null;
-  private pendingReplyMarkup: unknown = null;
+  private pendingReplyMarkup: InlineKeyboardMarkup | null = null;
   private pendingBlocks: RichBlock[] | null = null;
   private isProcessing = false;
   private nextAllowedTime = 0;
@@ -264,7 +313,7 @@ export class InlineStreamQueue {
   public lastEditTruncated = false;
 
   constructor(
-    private api: any,
+    private api: InlineEditApi,
     private inlineMessageId: string,
     /** Time scaling factor for backoff/throttle waits. Tests inject a tiny value. */
     private waitScale = 1,
@@ -289,7 +338,7 @@ export class InlineStreamQueue {
    * Attach an inline keyboard to the upcoming edit(s), e.g. the Stop button.
    * Cleared after the next successful edit unless re-set.
    */
-  public setReplyMarkup(markup: unknown): void {
+  public setReplyMarkup(markup: InlineKeyboardMarkup): void {
     this.pendingReplyMarkup = markup;
   }
 
@@ -307,7 +356,7 @@ export class InlineStreamQueue {
    * @param replyMarkup optional inline keyboard attached to the final edit (e.g. regenerate / pagination buttons).
    * @param blocks optional native 10.2 blocks for rich message rendering.
    */
-  public async flushFinal(markdown: string, replyMarkup?: unknown, blocks?: RichBlock[]): Promise<boolean> {
+  public async flushFinal(markdown: string, replyMarkup?: InlineKeyboardMarkup, blocks?: RichBlock[]): Promise<boolean> {
     this.pendingMarkdown = markdown;
     if (replyMarkup !== undefined) this.pendingReplyMarkup = replyMarkup;
     // A final flush without explicit blocks must not inherit stale blocks
@@ -320,7 +369,6 @@ export class InlineStreamQueue {
       });
     });
   }
-
 
   private scheduleProcess(): void {
     if (this.isProcessing) return;
@@ -373,14 +421,12 @@ export class InlineStreamQueue {
       }
 
       try {
-        const editPayload: Record<string, unknown> = {
+        const editPayload: InlineEditPayload = {
           inline_message_id: this.inlineMessageId,
           rich_message: targetBlocks ? { blocks: targetBlocks } : { markdown: targetMarkdown },
+          ...(this.pendingReplyMarkup !== null ? { reply_markup: this.pendingReplyMarkup } : {}),
         };
-        if (this.pendingReplyMarkup !== null) {
-          editPayload['reply_markup'] = this.pendingReplyMarkup;
-        }
-        await this.api.raw.editMessageText(editPayload as any);
+        await this.api.raw.editMessageText(editPayload);
 
         this.lastEditTime = Date.now();
         this.lastSentLen = targetMarkdown.length;
@@ -393,8 +439,8 @@ export class InlineStreamQueue {
         this.currentThrottleMs = Math.max(this.minThrottleMs, Math.floor(this.currentThrottleMs * 0.85));
         return true;
 
-      } catch (err: any) {
-        const errMsg = err?.message || String(err);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         const match429 = errMsg.match(/retry after (\d+)/i);
 
         if (match429) {
@@ -500,7 +546,7 @@ function getFallbackModelSuggestions(): string[] {
  * RichMessage on first send.
  * Falls back to markdown only when the parser yields no blocks.
  */
-function buildInputRichMessage(markdown: string): { blocks: RichBlock[] } | { markdown: string } {
+function buildInputRichMessage(markdown: string): InputRichMessage<never> {
   const blocks = markdownToRichBlocks(markdown);
   return blocks.length > 0 ? { blocks } : { markdown };
 }
@@ -877,8 +923,8 @@ function renderComparePicker(cmp: CompareContext): string {
 }
 
 /** Builds the picker keyboard for a /v selection screen. */
-function buildCompareKeyboard(cmp: CompareContext): unknown {
-  const rows: { text: string; callback_data: string }[][] = [];
+function buildCompareKeyboard(cmp: CompareContext): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = [];
 
   // Add selected models display (compact, no buttons)
   if (cmp.selectedIdx.length > 0) {
@@ -912,7 +958,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
   const endIdx = Math.min(startIdx + COMPARE_MODELS_PER_PAGE, cmp.candidates.length);
   const totalListPages = Math.ceil(cmp.candidates.length / COMPARE_MODELS_PER_PAGE);
 
-  let row: { text: string; callback_data: string }[] = [];
+  let row: InlineKeyboardButton[] = [];
   for (let i = startIdx; i < endIdx; i++) {
     if (cmp.selectedIdx.includes(i)) continue;
     const model = cmp.candidates[i];
@@ -926,7 +972,7 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
   if (row.length > 0) rows.push(row);
 
   // Pagination navigation bar
-  const navRow: { text: string; callback_data: string }[] = [];
+  const navRow: InlineKeyboardButton[] = [];
   if (listPageIndex > 0) {
     navRow.push({ text: '◀️ Prev', callback_data: `inline_cmp_page:${cmp.resultId}:${cmp.currentPage - 1}` });
   } else {
@@ -945,8 +991,6 @@ function buildCompareKeyboard(cmp: CompareContext): unknown {
 
   return { inline_keyboard: rows };
 }
-
-
 
 export function registerInlineHandler(
   bot: Bot,
@@ -1041,11 +1085,11 @@ export function registerInlineHandler(
         };
         compareContexts.set(resultId, cmp);
         await ctx.answerCallbackQuery({ text: '⚖️ Please reselect comparison models', show_alert: false }).catch(() => {});
-        await ctx.api.raw.editMessageText({
+        await editInlineMessage(ctx.api, {
           inline_message_id: inlineMessageId,
           rich_message: { markdown: renderComparePicker(cmp) },
           reply_markup: buildCompareKeyboard(cmp),
-        } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare regenerate edit failed: ${e}`));
+        }).catch((e: Error) => logger.warn(`[InlineResult] Compare regenerate edit failed: ${e}`));
         return;
       }
 
@@ -1055,13 +1099,13 @@ export function registerInlineHandler(
       if (regen.task !== 'image') {
         const displayPrompt = regen.prompt.length > 300 ? regen.prompt.slice(0, 300) + '...' : regen.prompt;
         const initMarkdown = `✨ **AI 推理引擎重新启动中**\n\n**🧠 目标模型：** \`${displayModelName(regen.model)}\`\n\n**💬 问题：**\n> ${displayPrompt}\n\n_🚀 正在重新深度推演，完成后自动刷新…_`;
-        await ctx.api.raw.editMessageText({
+        await editInlineMessage(ctx.api, {
           inline_message_id: inlineMessageId,
           rich_message: { markdown: initMarkdown },
           reply_markup: {
             inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${resultId}` }]],
           },
-        } as any).catch((e: Error) => logger.warn(`[InlineResult] Regenerate initial edit failed: ${e}`));
+        }).catch((e: Error) => logger.warn(`[InlineResult] Regenerate initial edit failed: ${e}`));
       }
 
       const ctrl = new AbortController();
@@ -1152,7 +1196,7 @@ export function registerInlineHandler(
         ? { blocks: targetPage.blocks }
         : { markdown: targetPage.markdown || '' };
       logger.info(`[InlinePage] Editing to page ${pageIdx + 1}/${pages.length} for resultId=${resultId} payloadType=${targetPage.blocks ? 'blocks' : 'markdown'}`);
-      await ctx.api.raw.editMessageText({
+      await editInlineMessage(ctx.api, {
         inline_message_id: inlineMessageId,
         rich_message: richMessagePayload,
         reply_markup: {
@@ -1165,7 +1209,7 @@ export function registerInlineHandler(
             [{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }],
           ],
         },
-      } as any).catch((e: Error) => logger.warn(`[InlinePage] Page edit failed: ${e}`));
+      }).catch((e: Error) => logger.warn(`[InlinePage] Page edit failed: ${e}`));
       return;
     }
 
@@ -1191,11 +1235,11 @@ export function registerInlineHandler(
       }
       cmp.selectedIdx.push(idx);
       await ctx.answerCallbackQuery({ text: `✅ Selected ${compareModelName(cmp.candidates[idx])}`, show_alert: true }).catch(() => {});
-      await ctx.api.raw.editMessageText({
+      await editInlineMessage(ctx.api, {
         inline_message_id: inlineMessageId,
         rich_message: { markdown: renderComparePicker(cmp) },
         reply_markup: buildCompareKeyboard(cmp),
-      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare pick edit failed: ${e}`));
+      }).catch((e: Error) => logger.warn(`[InlineResult] Compare pick edit failed: ${e}`));
       return;
     }
 
@@ -1212,11 +1256,11 @@ export function registerInlineHandler(
       }
       cmp.selectedIdx = [];
       await ctx.answerCallbackQuery().catch(() => {});
-      await ctx.api.raw.editMessageText({
+      await editInlineMessage(ctx.api, {
         inline_message_id: inlineMessageId,
         rich_message: { markdown: renderComparePicker(cmp) },
         reply_markup: buildCompareKeyboard(cmp),
-      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare reset edit failed: ${e}`));
+      }).catch((e: Error) => logger.warn(`[InlineResult] Compare reset edit failed: ${e}`));
       return;
     }
 
@@ -1239,11 +1283,11 @@ export function registerInlineHandler(
       }
       cmp.currentPage = pageIdx;
       await ctx.answerCallbackQuery().catch(() => {});
-      await ctx.api.raw.editMessageText({
+      await editInlineMessage(ctx.api, {
         inline_message_id: inlineMessageId,
         rich_message: { markdown: renderComparePicker(cmp) },
         reply_markup: buildCompareKeyboard(cmp),
-      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare page edit failed: ${e}`));
+      }).catch((e: Error) => logger.warn(`[InlineResult] Compare page edit failed: ${e}`));
       return;
     }
 
@@ -1441,7 +1485,7 @@ export function registerInlineHandler(
 
       // Instant 0ms synchronous check in cache
       const cleanSym = queryStr.toUpperCase().replace(/^\$/, '').trim();
-      const cached = marketCache.get<any>(`quote:${cleanSym}`);
+      const cached = marketCache.get<StockQuote>(`quote:${cleanSym}`);
 
       let title = `📈 查询股票行情: $${queryStr}`;
       let description = `点击获取 $${queryStr} 最新价格、涨跌幅及华尔街机构评级`;
@@ -1460,7 +1504,7 @@ export function registerInlineHandler(
       // Store pending stock request to update when user clicks
       pendingStockRequests.set(resultId, { queryStr, webAppUrl, createdAt: Date.now() });
 
-      const stockResultCard = {
+      const stockResultCard: InlineArticle = {
         type: 'article' as const,
         id: resultId,
         title,
@@ -1468,10 +1512,10 @@ export function registerInlineHandler(
         thumbnail_url: THUMBNAILS.sparkles,
         input_message_content: {
           rich_message: cached
-            ? ({ blocks: buildStockBlocks(cached) } as any)
+            ? { blocks: buildStockBlocks(cached) }
             : { markdown: quoteText },
-        } as any,
-        reply_markup: {
+        },
+          reply_markup: {
           inline_keyboard: [
             [
               { text: '📊 View details', url: webAppUrl },
@@ -1490,7 +1534,7 @@ export function registerInlineHandler(
 
     if (!prompt && task !== 'image') {
       const projectHelpList = allProjects.slice(0, 5).map((p, idx) => `• <code>/p${idx + 1} ask</code> — ${escapeHtmlText(p.name)}`).join('\n');
-      const results = [
+      const results: InlineArticle[] = [
         {
           type: 'article' as const,
           id: 'help-main',
@@ -1607,16 +1651,15 @@ export function registerInlineHandler(
         selectedIdx: [],
         createdAt: Date.now(),
       });
-      const results = [{
+      const results: InlineArticle[] = [{
         type: 'article' as const,
         id: resultId,
         title: '⚖️ Click to select models to compare',
         description: `Compare the same question with 2-${MAX_COMPARE_MODELS} models in parallel`,
         thumbnail_url: THUMBNAILS.sparkles,
         input_message_content: {
-          rich_message: buildInputRichMessage(`**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n_After clicking, select up to ${MAX_COMPARE_MODELS} models for parallel comparison._`),
-        } as any,
-        reply_markup: {
+          rich_message: buildInputRichMessage(`**⚖️ Multi-model comparison**\n\n**💬 Question:**\n> ${displayPrompt}\n\n_After clicking, select up to ${MAX_COMPARE_MODELS} models for parallel comparison._`),          },
+          reply_markup: {
           inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${resultId}` }]],
         },
       }];
@@ -1654,7 +1697,7 @@ export function registerInlineHandler(
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
               rich_message: buildInputRichMessage(`${taskLabel ? taskLabel + '\n\n' : ''}**🧠 Target model:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:** ${displayPrompt}\n\n_🚀 Reasoning in progress; answer updates in place._`),
-            } as any,
+            },
             // An inline keyboard is REQUIRED for Telegram to return
             // inline_message_id on chosen_inline_result, which is the handle used
             // to stream/update the message in-place (BUGFIX: removed 1056263).
@@ -1686,7 +1729,7 @@ export function registerInlineHandler(
         initMarkdown = `${taskLabel ? taskLabel + '\n\n' : ''}✨ **AI inference engine started**\n\n${modelLine}**💬 Question:** ${displayPrompt}\n\n_🚀 Reasoning in progress; answer updates in place._`;
       }
 
-      const suggestionCards: any[] = [];
+      const suggestionCards: InlineArticle[] = [];
       {
         const candidates = suggestionCandidates.filter((m) => m !== modelToUse);
         const now = Date.now();
@@ -1702,7 +1745,7 @@ export function registerInlineHandler(
             thumbnail_url: THUMBNAILS.sparkles,
             input_message_content: {
               rich_message: buildInputRichMessage(`**🧠 Model switch:** \`${displayModelName(candidateModel)}\`\n\n**💬 Question:** ${displayPrompt}\n\n_🚀 Reasoning in progress; answer updates in place._`),
-            } as any,
+            },
             reply_markup: {
               inline_keyboard: [[
                 { text: '⏹ Stop', callback_data: `inline_stop:${candidateId}` }
@@ -1712,7 +1755,7 @@ export function registerInlineHandler(
         });
       }
 
-      const results = [
+      const results: InlineArticle[] = [
         {
           type: 'article' as const,
           id: resultId,
@@ -1721,7 +1764,7 @@ export function registerInlineHandler(
           thumbnail_url: task === 'image' ? THUMBNAILS.sparkles : THUMBNAILS.thinking,
           input_message_content: {
             rich_message: buildInputRichMessage(initMarkdown),
-          } as any,
+          },
           // An inline keyboard is REQUIRED for Telegram to return
           // inline_message_id on chosen_inline_result, which is the handle used
           // to stream/update the message in-place (BUGFIX: removed 1056263).
@@ -1734,7 +1777,7 @@ export function registerInlineHandler(
         ...suggestionCards,
       ];
 
-      logger.info(`[InlineQuery] Sending ${results.length} result(s) family="${family || ''}" primary="${modelToUse}" suggestions=${suggestionCandidates.length} ids=${results.map((r) => (r as any).id).join(',')}`);
+      logger.info(`[InlineQuery] Sending ${results.length} result(s) family="${family || ''}" primary="${modelToUse}" suggestions=${suggestionCandidates.length} ids=${results.map((r) => r.id).join(',')}`);
       await ctx.answerInlineQuery(results, { cache_time: 0, is_personal: true });
     } catch (e) {
       logger.error(`Error answering inline query: ${e}`);
@@ -1764,7 +1807,7 @@ export function registerInlineHandler(
         const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
         const webAppUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
-        await ctx.api.raw.editMessageText({
+        await editInlineMessage(ctx.api, {
           inline_message_id: chosen.inline_message_id,
           rich_message: {
             blocks: buildStockBlocks(quote),
@@ -1777,7 +1820,7 @@ export function registerInlineHandler(
               ],
             ],
           },
-        } as any).catch((e: Error) => logger.warn(`[ChosenInlineStock] Edit message failed: ${e}`));
+        }).catch((e: Error) => logger.warn(`[ChosenInlineStock] Edit message failed: ${e}`));
       }
       return;
     }
@@ -1786,11 +1829,11 @@ export function registerInlineHandler(
     if (cmp) {
       cmp.inlineMessageId = chosen.inline_message_id;
       logger.info(`[ChosenInline] Compare mode selected: userId=${chosen.from.id} resultId=${chosen.result_id} candidates=${cmp.candidates.length}`);
-      await ctx.api.raw.editMessageText({
+      await editInlineMessage(ctx.api, {
         inline_message_id: chosen.inline_message_id,
         rich_message: { markdown: renderComparePicker(cmp) },
         reply_markup: buildCompareKeyboard(cmp),
-      } as any).catch((e: Error) => logger.warn(`[InlineResult] Compare picker initial edit failed: ${e}`));
+      }).catch((e: Error) => logger.warn(`[InlineResult] Compare picker initial edit failed: ${e}`));
       return;
     }
 
@@ -1910,7 +1953,7 @@ export function registerInlineHandler(
       inline_keyboard: [[{ text: '⏹ Stop', callback_data: `inline_stop:${chosen.result_id}` }]],
     });
     const placeholderRich = buildInputRichMessage(placeholderMarkdown);
-    streamQueue.setBlocks('blocks' in placeholderRich ? placeholderRich.blocks : null);
+    streamQueue.setBlocks('blocks' in placeholderRich ? placeholderRich.blocks ?? null : null);
     streamQueue.enqueueStream(placeholderMarkdown);
     logger.info('[ChosenInline] Enqueued rich placeholder (blocks) through streamQueue path');
 
@@ -2138,7 +2181,7 @@ async function runInlineGeneration(
       // to truncate (lastEditTruncated), the pre-check above did not attach
       // the document button — add it via a markup-only edit now.
       if (!truncated && streamQueue.lastEditTruncated) {
-        await ctx.api.raw.editMessageReplyMarkup({
+        await editInlineReplyMarkup(ctx.api, {
           inline_message_id: inlineMessageId,
           reply_markup: {
             inline_keyboard: [[
@@ -2146,7 +2189,7 @@ async function runInlineGeneration(
               { text: '📄 完整文档', callback_data: `inline_full_doc:${resultId}` },
             ]],
           },
-        } as any).catch((e: Error) => logger.warn(`[InlineResult] Attach full-doc button failed: ${e}`));
+        }).catch((e: Error) => logger.warn(`[InlineResult] Attach full-doc button failed: ${e}`));
       }
     } else {
       logger.error(`[InlineResult] Final inline flush FAILED: inline_message_id=${inlineMessageId} userId=${fromId} rawOutputLen=${rawOutputLen} fullMarkdownLen=${fullMarkdown.length} truncated=${truncated}`);
@@ -2277,13 +2320,13 @@ async function runCompareGeneration(
     const failText = wasStopped
       ? `**💬 Question:** ${displayPrompt}\n\n⏹ **Comparison stopped**\nTask was manually stopped.`
       : `**💬 Question:** ${displayPrompt}\n\n⚠️ **Comparison failed**\nAll models returned no valid output, please retry.`;
-    await ctx.api.raw.editMessageText({
+    await editInlineMessage(ctx.api, {
       inline_message_id: inlineMessageId,
       rich_message: { markdown: failText },
       reply_markup: {
         inline_keyboard: [[{ text: '🔄 Re-compare', callback_data: `inline_regenerate:${resultId}` }]],
       },
-    } as any).catch(() => {});
+    }).catch(() => {});
     return;
   }
 
@@ -2350,18 +2393,18 @@ async function finalizeImageResult(
   const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
 
   if (!result?.conversationId) {
-    await ctx.api.raw.editMessageText({
+    await editInlineMessage(ctx.api, {
       inline_message_id: inlineMessageId,
       text: `<b>🎨 Image generation failed</b>\nThe model returned no session info, please retry.`,
       parse_mode: 'HTML',
-    } as any).catch(() => {});
+    }).catch(() => {});
     return;
   }
 
   const images = await findNewImageArtifacts(result.conversationId, Date.now() - (result.durationMs || 60_000));
   if (images.length === 0) {
     const output = (result.output || '').trim();
-    await ctx.api.raw.editMessageText({
+    await editInlineMessage(ctx.api, {
       inline_message_id: inlineMessageId,
       rich_message: {
         markdown: `**🎨 Image generation result**\n\n**💬 Prompt:** ${displayPrompt}\n\n${output || 'The model did not generate image files.'}`,
@@ -2369,7 +2412,7 @@ async function finalizeImageResult(
       reply_markup: {
         inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
       },
-    } as any).catch(() => {});
+    }).catch(() => {});
     return;
   }
 
@@ -2400,16 +2443,31 @@ async function finalizeImageResult(
     });
     relayMessageId = sentMsg?.message_id ?? null;
     // Collect photo blocks recursively (they may be nested inside a collage block).
-    const collectPhotos = (blocks: Array<Record<string, any>> | undefined, out: Array<Record<string, any>>) => {
-      for (const b of blocks ?? []) {
-        if (b?.['type'] === 'photo') out.push(b);
-        else if (Array.isArray(b?.['blocks'])) collectPhotos(b['blocks'], out);
+    interface RelayPhotoSize {
+      file_id: string;
+      file_size?: number;
+    }
+    const isRecord = (value: unknown): value is Record<string, unknown> =>
+      typeof value === 'object' && value !== null;
+    const collectPhotos = (blocks: unknown, out: RelayPhotoSize[][]): void => {
+      if (!Array.isArray(blocks)) return;
+      for (const rawBlock of blocks) {
+        if (!isRecord(rawBlock)) continue;
+        if (rawBlock['type'] === 'photo' && Array.isArray(rawBlock['photo'])) {
+          const sizes = rawBlock['photo'].filter((size): size is RelayPhotoSize =>
+            isRecord(size) && typeof size['file_id'] === 'string',
+          ).map((size) => ({
+            file_id: size['file_id'],
+            file_size: typeof size['file_size'] === 'number' ? size['file_size'] : undefined,
+          }));
+          out.push(sizes);
+        }
+        collectPhotos(rawBlock['blocks'], out);
       }
     };
-    const photoBlocks: Array<Record<string, any>> = [];
-    collectPhotos(sentMsg?.rich_message?.blocks as Array<Record<string, any>> | undefined, photoBlocks);
-    for (const block of photoBlocks) {
-      const sizes: Array<{ file_id: string; file_size?: number }> = block?.['photo'] ?? [];
+    const photoBlocks: RelayPhotoSize[][] = [];
+    collectPhotos(sentMsg?.rich_message?.blocks, photoBlocks);
+    for (const sizes of photoBlocks) {
       const largest = sizes.slice().sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
       if (largest?.file_id) fileIds.push(largest.file_id);
     }
@@ -2441,23 +2499,23 @@ async function finalizeImageResult(
       .map((chunk, ci) => `<tg-collage>\n${chunk.map((_, i) => `![generated image](tg://photo?id=med${ci}_${i})`).join('\n')}\n</tg-collage>`)
       .join('\n\n')}\n\n${caption}\n\n_🖼️ Image generated, tap 🔄 to regenerate._`;
     const media = chunks.flatMap((chunk, ci) =>
-      chunk.map((fileId, i) => ({ id: `med${ci}_${i}`, media: { type: 'photo', media: fileId } })),
+      chunk.map((fileId, i) => ({ id: `med${ci}_${i}`, media: { type: 'photo' as const, media: fileId } })),
     );
-    await ctx.api.raw.editMessageText({
+    await editInlineMessage(ctx.api, {
       inline_message_id: inlineMessageId,
       rich_message: {
         markdown: richMarkdown,
         media,
       },
       reply_markup: regenButton,
-    } as any).catch((e: Error) => {
+    }).catch((e: Error) => {
       logger.error(`[InlineResult] rich_message media edit failed, falling back to text: ${e}`);
       const fallbackText = `**🖼️ Image generated**\n\n${caption}\n\n_⚠️ In-place rendering failed._`;
-      return ctx.api.raw.editMessageText({
+      return editInlineMessage(ctx.api, {
         inline_message_id: inlineMessageId,
         rich_message: { markdown: fallbackText },
         reply_markup: regenButton,
-      } as any).catch(() => {});
+      }).catch(() => {});
     });
     return;
   }
@@ -2465,11 +2523,11 @@ async function finalizeImageResult(
   // No file_id (relay upload failed): describe the images as text.
   const filesText = images.map((p) => path.basename(p)).join(', ');
   const finalText = `**🖼️ Image generated**\n\n${caption}\n\n_⚠️ Could not render via upload (message the bot first to enable DM)_\n\n_Files: ${filesText}_`;
-  await ctx.api.raw.editMessageText({
+  await editInlineMessage(ctx.api, {
     inline_message_id: inlineMessageId,
     rich_message: { markdown: finalText },
     reply_markup: regenButton,
-  } as any).catch(() => {});
+  }).catch(() => {});
 }
 
 function escapeHtmlText(str: string): string {

@@ -15,16 +15,7 @@ import { getTuningConfig } from '../config/userConfig.js';
 import { getDb } from '../db/index.js';
 import { modelOutputs } from '../db/schema.js';
 import { logger } from '../utils/logger.js';
-
-function extractThoughtAndContent(text: string): { thought: string; content: string } {
-  const match = text.match(/<thought[^>]*>([\s\S]*?)<\/thought>/i) || text.match(/<think[^>]*>([\s\S]*?)<\/think>/i);
-  if (match) {
-    const thought = match[1].trim();
-    const content = text.replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '').trim();
-    return { thought, content };
-  }
-  return { thought: '', content: text };
-}
+import { extractSimpleThought } from './textUtils.js';
 
 /**
  * Contextual metadata associated with a saved message reply, including title and separate thinking/answer blocks.
@@ -92,7 +83,7 @@ export class MessageCache {
   ): void {
     let finalContext = replyContext;
     if (!finalContext && text) {
-      const parsed = extractThoughtAndContent(text);
+      const parsed = extractSimpleThought(text);
       finalContext = {
         answerMarkdown: parsed.content,
         thinkingMarkdown: parsed.thought,

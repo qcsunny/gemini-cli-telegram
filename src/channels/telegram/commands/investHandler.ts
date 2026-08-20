@@ -16,7 +16,9 @@
  * flow), Greenblatt (Magic Formula), Damodaran (growth) and Peter Lynch (PEG).
  */
 
-import type { Bot } from 'grammy';
+import type { Bot, Context } from 'grammy';
+import type { RichBlockTableCell, RichText } from '@grammyjs/types/rich.js';
+import type { RichBlock } from '../richMessage.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import type {
@@ -560,8 +562,8 @@ function analyzeInvest(quote: StockQuote): InvestResult {
 
 // ── Rich-message rendering ──
 
-function buildInvestBlocks(result: InvestResult): Array<Record<string, any>> {
-  const blocks: Array<Record<string, any>> = [
+function buildInvestBlocks(result: InvestResult): RichBlock[] {
+  const blocks: RichBlock[] = [
     {
       type: 'paragraph',
       text: [
@@ -573,8 +575,8 @@ function buildInvestBlocks(result: InvestResult): Array<Record<string, any>> {
   ];
 
   // Dimension table
-  const dimRows: Array<Array<Record<string, any>>> = [];
-  const mkCell = (label: string, value: string): Array<Record<string, any>> => [
+  const dimRows: RichBlockTableCell[][] = [];
+  const mkCell = (label: string, value: string): RichBlockTableCell[] => [
     { text: { type: 'bold', text: [label] }, align: 'left', valign: 'middle' },
     { text: value, align: 'center', valign: 'middle' },
   ];
@@ -695,16 +697,19 @@ function buildDeepReportPrompt(result: InvestResult, quote: StockQuote): string 
   ].filter(Boolean).join('\n');
 }
 
-function buildFundBlocks(result: FundAnalysisResult, ds: FundDataset): Array<Record<string, any>> {
+function buildFundBlocks(result: FundAnalysisResult, ds: FundDataset): RichBlock[] {
   const info = ds.info;
-  const blocks: Array<Record<string, any>> = [];
+  const blocks: RichBlock[] = [];
 
-  const dimText: Array<Record<string, any> | string> = result.dimensions.flatMap((d, i) => [
+  const dimText: RichText[] = result.dimensions.flatMap<RichText>((d, i) => [
     ...(i > 0 ? ['\n\n'] : []),
-    '• ',
-    { type: 'bold', text: [`${d.name}`] },
+    '• ',        { type: 'bold', text: [`${d.name}`] },
     ` (${d.score}分 - 权重${(d.weight * 100).toFixed(0)}%)\n  ${d.notes.join('；')}`,
   ]);
+
+  const riskText: RichText[] = result.redFlags.length
+    ? ['\n\n⚠️ ', { type: 'bold', text: ['关注风险'] }, `：${result.redFlags.join('；')}`]
+    : [];
 
   blocks.push({
     type: 'paragraph',
@@ -715,9 +720,7 @@ function buildFundBlocks(result: FundAnalysisResult, ds: FundDataset): Array<Rec
       ` | 综合得分：`,
       { type: 'bold', text: [`${result.totalScore.toFixed(1)}/100`] },
       `\n\n成立日期：${info?.establishedDate || '未知'} | 规模：${info?.scaleB ? info.scaleB.toFixed(2) + ' 亿元' : '未知'}\n基金经理：${info?.manager || '未知'}${info?.managerTenure ? ` (任期 ${info.managerTenure.days} 天，任职回报 ${info.managerTenure.returnPct != null ? (info.managerTenure.returnPct >= 0 ? '+' : '') + info.managerTenure.returnPct.toFixed(2) + '%' : '--'})` : ''}\n费率：管理费 ${info?.managementFeePct != null ? info.managementFeePct + '%' : '--'} / 托管费 ${info?.custodyFeePct != null ? info.custodyFeePct + '%' : '--'}`,
-      ...(result.redFlags.length
-        ? ['\n\n⚠️ ', { type: 'bold', text: ['关注风险'] }, `：${result.redFlags.join('；')}`]
-        : []),
+      ...riskText,
     ],
   });
 
@@ -728,18 +731,18 @@ function buildFundBlocks(result: FundAnalysisResult, ds: FundDataset): Array<Rec
   });
 
   if (ds.topHoldings?.length) {
-    const rows: Array<Array<Record<string, any>>> = [
+    const rows: RichBlockTableCell[][] = [
       [
-        { text: { type: 'bold', text: ['股票名称'] }, align: 'center' },
-        { text: { type: 'bold', text: ['代码'] }, align: 'center' },
-        { text: { type: 'bold', text: ['占净值比'] }, align: 'center' },
+        { text: { type: 'bold', text: ['股票名称'] }, align: 'center', valign: 'middle' },
+        { text: { type: 'bold', text: ['代码'] }, align: 'center', valign: 'middle' },
+        { text: { type: 'bold', text: ['占净值比'] }, align: 'center', valign: 'middle' },
       ],
     ];
     for (const h of ds.topHoldings.slice(0, 10)) {
       rows.push([
-        { text: h.stockName, align: 'center' },
-        { text: h.stockCode, align: 'center' },
-        { text: `${h.ratioPct != null ? h.ratioPct.toFixed(2) + '%' : '--'}`, align: 'center' },
+        { text: h.stockName, align: 'center', valign: 'middle' },
+        { text: h.stockCode, align: 'center', valign: 'middle' },
+        { text: `${h.ratioPct != null ? h.ratioPct.toFixed(2) + '%' : '--'}`, align: 'center', valign: 'middle' },
       ]);
     }
     blocks.push({
@@ -823,18 +826,18 @@ async function runInvestModel(opts: {
  * blocks send fails — mirroring the channelReply rich-message pipeline so
  * `**bold**` and tables render instead of showing literal asterisks.
  */
-async function sendInvestDeepReport(ctx: any, chatId: number, markdown: string): Promise<void> {
+async function sendInvestDeepReport(ctx: Context, chatId: number, markdown: string): Promise<void> {
   try {
     const blocks = markdownToRichBlocks(markdown);
     if (blocks.length > 0) {
       const parts = splitRichBlocks(blocks, TELEGRAM_RICH_MAX_LENGTH);
       for (const part of parts) {
-        await ctx.api.sendRichMessage(chatId, { blocks: part as any });
+        await ctx.api.sendRichMessage(chatId, { blocks: part });
       }
       return;
     }
-  } catch (err: any) {
-    logger.warn(`sendInvestDeepReport blocks failed: ${err.message || err}. Falling back to rich markdown`);
+  } catch (err: unknown) {
+    logger.warn(`sendInvestDeepReport blocks failed: ${err instanceof Error ? err.message : String(err)}. Falling back to rich markdown`);
   }
   await ctx.api.sendRichMessage(chatId, { markdown });
 }
@@ -844,16 +847,16 @@ export function registerInvestHandler(
   sessionManager: SessionManager,
   defaultOptions: SessionOptions,
 ): void {
-  const handleInvest = async (ctx: any, symbolOverride?: string): Promise<void> => {
+  const handleInvest = async (ctx: Context, symbolOverride?: string): Promise<void> => {
     const rawArgs = symbolOverride ?? ctx.match;
     const trimmed = typeof rawArgs === 'string' ? rawArgs.trim() : '';
     const targetChatId = ctx.chat?.id ?? ctx.from?.id;
 
-    const reply = async (text: string, other?: any) => {
+    const reply = async (text: string, other?: Parameters<Context['reply']>[1]): Promise<unknown> => {
       if (ctx.reply) {
         try {
           return await ctx.reply(text, other);
-        } catch (err: any) {
+        } catch (err: unknown) {
           if (targetChatId && ctx.api?.sendMessage) {
             return await ctx.api.sendMessage(targetChatId, text, other);
           }
@@ -862,6 +865,7 @@ export function registerInvestHandler(
       } else if (targetChatId && ctx.api?.sendMessage) {
         return await ctx.api.sendMessage(targetChatId, text, other);
       }
+      return undefined;
     };
 
     if (!trimmed) {
@@ -942,7 +946,7 @@ export function registerInvestHandler(
       if (fundDataset && (fundDataset.info || fundDataset.nav.length > 0)) {
         const fundResult = analyzeFund(fundDataset);
         const fundBlocks = buildFundBlocks(fundResult, fundDataset);
-        await ctx.api.sendRichMessage(targetChatId, { blocks: fundBlocks as any });
+        await ctx.api.sendRichMessage(targetChatId, { blocks: fundBlocks });
 
         const model = getDefaultModel();
         if (model) {
@@ -1030,7 +1034,7 @@ export function registerInvestHandler(
       const detailUrl = `https://www.tradingview.com/symbols/${tvSymbol.replace(':', '-')}/`;
       const chartUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
-      await ctx.api.sendRichMessage(targetChatId, { blocks: [...blocks, ...finBlocks] as any }, {
+      await ctx.api.sendRichMessage(targetChatId, { blocks: [...blocks, ...finBlocks] }, {
         reply_markup: {
           inline_keyboard: [
             [

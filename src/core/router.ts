@@ -7,7 +7,7 @@
 /**
  * @file router.ts
  * @description Smart Complexity & Semantic Intent Router.
- * Uses Web2API: Gemini Flash Lite as a fast zero-cost pre-classifier with local heuristic fallback.
+ * Uses Web2API: Gemini 3.5 Flash Lite as a fast zero-cost pre-classifier with local heuristic fallback.
  */
 
 import { runAgyPrint } from '../agy/agyCli.js';
@@ -16,9 +16,9 @@ import { getEffectiveTiers } from './modelRegistry.js';
 
 export const AUTO_MODEL_NAME = '🤖 Auto (智能分流)';
 
-export type QueryComplexityLevel = 'A' | 'B' | 'C';
+type QueryComplexityLevel = 'A' | 'B' | 'C';
 
-export interface RouteDecision {
+interface RouteDecision {
   targetModel: string;
   category: QueryComplexityLevel;
   method: 'llm' | 'heuristic';
@@ -26,7 +26,7 @@ export interface RouteDecision {
   reason?: string;
 }
 
-const CLASSIFIER_MODEL = 'Web2API: Gemini Flash Lite';
+const CLASSIFIER_MODEL = 'Web2API: Gemini 3.5 Flash Lite';
 const CLASSIFIER_TIMEOUT_MS = 2500;
 
 const SYSTEM_PROMPT = `你是一个大模型任务复杂度智能路由器。请根据用户的问题（及上下文），评估其任务复杂度并【只输出单个大写字母 A、B 或 C】：
@@ -82,7 +82,7 @@ export function resolveModelForCategory(category: QueryComplexityLevel): string 
   // Fallback defaults
   if (category === 'A') return 'Claude CLI: Claude Opus 5';
   if (category === 'B') return 'Gemini 3.7 Flash (High)';
-  return 'Web2API: Gemini Flash Lite';
+  return 'Web2API: Gemini 3.5 Flash Lite';
 }
 
 /**

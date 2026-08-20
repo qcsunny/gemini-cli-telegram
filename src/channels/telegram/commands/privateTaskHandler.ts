@@ -66,7 +66,7 @@ async function handlePrivateTask(
   // Reuse the shared prefix parser: pass `/task <payload>` so /p /@ /task
   // tokens are honored and the task instruction is injected automatically.
   const session = sessionManager.getSession(chatId, threadId);
-  const availableProjects = sessionManager.getProjectsInConfigOrder() as any[];
+  const availableProjects = sessionManager.getProjectsInConfigOrder();
   const defaultModel =
     session?.model || session?.config?.getModel?.() || defaultOptions.model || getDefaultModels()?.taskModel || '';
 

@@ -184,7 +184,6 @@ describe('runModelWithFallbackChain', () => {
   });
 });
 
-
 describe('parseInlineModelAndPrompt', () => {
   it('should parse any @keyword as family search', () => {
     const res = parseInlineModelAndPrompt('@flash 什么是量子计算', 'Gemini 3.5 Flash (Medium)');

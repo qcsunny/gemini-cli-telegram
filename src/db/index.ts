@@ -195,17 +195,18 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       })();
       logger.info(`[db] Migrated 'messages' table to allow all backends (${names.length} columns, data preserved)`);
     }
-  } catch (e: any) {
-    logger.warn(`[db] messages CHECK constraint migration failed: ${e.message}`);
+  } catch (e: unknown) {
+    logger.warn(`[db] messages CHECK constraint migration failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // Dynamically add usage column to messages table if it doesn't exist in legacy databases
   try {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN usage TEXT;`);
     logger.info(`[db] Successfully added 'usage' column to 'messages' table.`);
-  } catch (e: any) {
-    if (!e.message?.includes('duplicate column name')) {
-      logger.warn(`[db] Notice on adding 'usage' column: ${e.message}`);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!message.includes('duplicate column name')) {
+      logger.warn(`[db] Notice on adding 'usage' column: ${message}`);
     }
   }
 
@@ -213,9 +214,10 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   try {
     sqlite.exec(`ALTER TABLE chat_messages ADD COLUMN sender_username TEXT;`);
     logger.info(`[db] Successfully added 'sender_username' column to 'chat_messages' table.`);
-  } catch (e: any) {
-    if (!e.message?.includes('duplicate column name')) {
-      logger.warn(`[db] Notice on adding 'sender_username' column: ${e.message}`);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!message.includes('duplicate column name')) {
+      logger.warn(`[db] Notice on adding 'sender_username' column: ${message}`);
     }
   }
 
@@ -224,8 +226,8 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
     try {
       sqlite.exec(`DROP TABLE IF EXISTS alerts;`);
       logger.info('[db] Dropped legacy alerts table (feature removed)');
-    } catch (e: any) {
-      logger.warn(`[db] alerts table drop failed: ${e.message}`);
+    } catch (e: unknown) {
+      logger.warn(`[db] alerts table drop failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

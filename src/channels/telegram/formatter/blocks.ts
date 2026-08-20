@@ -25,6 +25,12 @@ import { mediaStore, nextMediaId, resetMediaStore } from './media.js';
 import type { MarkdownToken } from './core.js';
 import { logger } from '../../../utils/logger.js';
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 // ── Rich Text Blocks (Bot API 10.2) ──
 
 type RichTextEntity =
@@ -89,7 +95,6 @@ function trimRichText(rt: RichText): RichText {
   if (out.length === 1 && typeof out[0] === 'string') return out[0];
   return out as RichText;
 }
-
 
 function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, mathStore: string[] = []): RichText {
   if (!inlineTokens || inlineTokens.length === 0) return '';
@@ -374,7 +379,6 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
   return out as RichText;
 }
 
-
 // --- Math placeholder extraction (RichBlocks path) -------------------------
 // DeepSeek Pro Thinking emits standard LaTeX delimiters \(...\) / \[...\].
 // markdown-it's inline tokenizer splits formula internals containing ( ) { }
@@ -432,7 +436,7 @@ function tryHtmlBlockToRichBlock(
   // `<aside>...</aside>` → native pullquote block.
   const asideMatch = content.match(/<aside>([\s\S]*?)<\/aside>/i);
   if (asideMatch) {
-    const inner = trimRichText(inlineToRichText(md.parseInline(asideMatch[1].trim(), {}) as any as MarkdownToken[]));
+    const inner = trimRichText(inlineToRichText(md.parseInline(asideMatch[1].trim(), {}) as unknown as MarkdownToken[]));
     if (inner) {
       return { block: { type: 'pullquote', text: inner }, advance: 1 };
     }
@@ -521,7 +525,7 @@ function parseMediaBlocksFromHtml(html: string): RichBlock[] {
   const mdImgRe = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
   while ((m = mdImgRe.exec(html)) !== null) {
     const src = m[1];
-    if (!blocks.some(b => b.type === 'photo' && (b as any).photo?.media === src)) {
+    if (!blocks.some(b => b.type === 'photo' && typeof b.photo === 'object' && b.photo !== null && 'media' in b.photo && b.photo.media === src)) {
       blocks.push(mediaBlockFromUrl('img', src));
     }
   }
@@ -885,7 +889,7 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
         if (cells.length > 0) {
           blocks.push({
             type: 'table',
-            cells: cells as any,
+            cells,
             is_bordered: true,
             is_striped: true,
           });
@@ -909,7 +913,7 @@ export function markdownToRichBlocks(markdown: string): RichBlock[] {
   let result: RichBlock[];
   try {
     const fenced = normalizeMarkdownFences(placeholderText);
-    const tokens = md.parse(normalizeMarkdownStructure(fenced), {}) as any as MarkdownToken[];
+    const tokens = md.parse(normalizeMarkdownStructure(fenced), {}) as unknown as MarkdownToken[];
     const blocks = markdownTokensToRichBlocks(tokens, math);
 
     result = blocks.length === 0 && markdown.trim()
@@ -964,7 +968,8 @@ const MAX_DEPTH = 16;
 
 function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
   if (depth > MAX_DEPTH) return false;
-  const b = blk as unknown as Record<string, unknown>;
+  const b = asRecord(blk);
+  if (!b) return false;
   const type = b['type'] as string;
   if (type === 'paragraph' || type === 'heading') {
     const text = b['text'];
@@ -1011,11 +1016,11 @@ function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
     return true;
   }
   if (type === 'photo' || type === 'video' || type === 'animation' || type === 'audio' || type === 'voice_note') {
-    const media = (b['photo'] ?? b['video'] ?? b['animation'] ?? b['audio'] ?? b['voice_note']) as Record<string, unknown> | undefined;
+    const media = asRecord(b['photo'] ?? b['video'] ?? b['animation'] ?? b['audio'] ?? b['voice_note']);
     return !!(media && typeof media['media'] === 'string' && media['media'].trim());
   }
   if (type === 'map') {
-    const loc = b['location'] as Record<string, unknown> | undefined;
+    const loc = asRecord(b['location']);
     return !!(loc && typeof b['zoom'] === 'number');
   }
   return !!(type === 'anchor' || type === 'divider' || type === 'mathematical_expression' || type === 'table' || type === 'thinking' || type === 'pullquote');
@@ -1024,34 +1029,29 @@ function isMeaningfulBlock(blk: RichBlock, depth: number): boolean {
 function flattenDepth(blk: RichBlock, depth: number): RichBlock {
   if (depth < MAX_DEPTH) return blk;
   if (blk.type === 'list') {
-    const items = (blk as any).items as InputRichBlockListItem<never>[];
-    for (const item of items) {
+    for (const item of blk.items) {
       item.blocks = item.blocks.flatMap(child => {
         if (child.type === 'list') {
-          const nestedItems = (child as any).items as InputRichBlockListItem<never>[];
-          return nestedItems.flatMap(ni => ni.blocks);
+          return child.items.flatMap(nestedItem => nestedItem.blocks);
         }
         return [flattenDepth(child, depth + 1)];
       });
     }
   }
   if (blk.type === 'blockquote' || blk.type === 'details') {
-    const inner = (blk as any).blocks as RichBlock[];
-    (blk as any).blocks = inner.flatMap(child => {
-      if (child.type === 'blockquote') return (child as any).blocks as RichBlock[];
+    blk.blocks = blk.blocks.flatMap(child => {
+      if (child.type === 'blockquote') return child.blocks;
       return [flattenDepth(child, depth + 1)];
     });
   }
   if (blk.type === 'slideshow' || blk.type === 'collage') {
-    const inner = (blk as any).blocks as RichBlock[];
-    (blk as any).blocks = inner.flatMap(child => {
-      if (child.type === 'slideshow' || child.type === 'collage') return (child as any).blocks as RichBlock[];
+    blk.blocks = blk.blocks.flatMap(child => {
+      if (child.type === 'slideshow' || child.type === 'collage') return child.blocks;
       return [flattenDepth(child, depth + 1)];
     });
   }
   return blk;
 }
-
 
 /**
  * Extract footnote definitions from model output and rewrite [^id] markers
@@ -1311,39 +1311,35 @@ function richTextLength(rt: unknown): number {
   if (Array.isArray(rt)) {
     return rt.reduce((sum, item) => sum + richTextLength(item), 0);
   }
-  if (typeof rt === 'object' && 'text' in (rt as any)) {
-    return richTextLength((rt as any).text);
+  if (typeof rt === 'object' && 'text' in rt) {
+    return richTextLength(rt.text);
   }
   return 0;
 }
 
 function getBlockLength(block: RichBlock): number {
-  const b = block as any;
   switch (block.type) {
     case 'paragraph':
     case 'heading':
-      return richTextLength(b.text);
+    case 'thinking':
+    case 'pullquote':
+      return richTextLength(block.text);
     case 'pre':
     case 'footer':
-      return (b.text || '').length;
+      return richTextLength(block.text);
     case 'blockquote':
-      return (b.blocks || []).reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
     case 'slideshow':
     case 'collage':
-      return (b.blocks || []).reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
+      return block.blocks.reduce((sum, child) => sum + getBlockLength(child), 0);
     case 'details':
-      return richTextLength(b.summary) + (b.blocks || [])
-        .reduce((s: number, child: RichBlock) => s + getBlockLength(child), 0);
-    case 'thinking':
-      return richTextLength(b.text);
+      return richTextLength(block.summary) + block.blocks
+        .reduce((sum, child) => sum + getBlockLength(child), 0);
     case 'list':
-      return (b.items || []).reduce((s: number, item: any) =>
-        s + (item.blocks || []).reduce((s2: number, child: RichBlock) => s2 + getBlockLength(child), 0), 0);
-    case 'table': {
-      const cells: any[][] = b.cells || [];
-      return cells.reduce((s: number, row: any[]) =>
-        s + row.reduce((s2: number, cell: any) => s2 + richTextLength(cell.text), 0), 0);
-    }
+      return block.items.reduce((sum, item) =>
+        sum + item.blocks.reduce((itemSum, child) => itemSum + getBlockLength(child), 0), 0);
+    case 'table':
+      return block.cells.reduce((sum, row) =>
+        sum + row.reduce((rowSum, cell) => rowSum + richTextLength(cell.text), 0), 0);
     case 'photo':
     case 'video':
     case 'animation':
@@ -1353,7 +1349,6 @@ function getBlockLength(block: RichBlock): number {
     case 'divider':
     case 'anchor':
     case 'mathematical_expression':
-    default:
       return 1;
   }
 }
@@ -1404,8 +1399,8 @@ export function splitRichBlocks(
 
     // Rule 2: details node with oversized inner blocks
     if (block.type === 'details' && blockLen > maxChars) {
-      const d = block as any;
-      const inner = (d.blocks as RichBlock[]) || [];
+      const inner = block.blocks;
+      const summary = block.summary;
 
       // Partition inner blocks into multiple groups, each within maxChars
       const groups: RichBlock[][] = [[]];
@@ -1422,21 +1417,21 @@ export function splitRichBlocks(
         gLen += ibLen;
       }
 
-      const detailsBlocks = groups
+      const detailsBlocks: RichBlock[] = groups
         .filter((g): g is RichBlock[] => g.length > 0)
-        .map((g, idx, arr) => ({
-          type: 'details' as const,
+        .map((g, idx, arr): RichBlock => ({
+          type: 'details',
           blocks: g,
           summary: arr.length > 1
             ? `🧠 Thinking Process (${idx + 1}/${arr.length})`
-            : d.summary,
+            : summary,
         }));
 
       // Distribute resulting details blocks across parts
       for (const db of detailsBlocks) {
-        const dbLen = getBlockLength(db as unknown as RichBlock);
+        const dbLen = getBlockLength(db);
         if (currentLen + dbLen > maxChars) finishPart();
-        parts[parts.length - 1].push(db as unknown as RichBlock);
+        parts[parts.length - 1].push(db);
         currentLen += dbLen;
       }
       continue;
@@ -1444,8 +1439,7 @@ export function splitRichBlocks(
 
     // Rule 3: single paragraph that alone exceeds maxChars
     if (block.type === 'paragraph' && blockLen > maxChars) {
-      const p = block as any;
-      const raw = extractStringFromRichText(p.text);
+      const raw = extractStringFromRichText(block.text);
       const chunks = splitRichTextByLength(raw, maxChars);
       for (const chunk of chunks) {
         if (currentLen + chunk.length > maxChars) finishPart();
@@ -1457,9 +1451,8 @@ export function splitRichBlocks(
 
     // Rule 4: single pre block that alone exceeds maxChars — split by lines
     if (block.type === 'pre' && blockLen > maxChars) {
-      const p = block as any;
-      const lines = (p.text || '').split('\n');
-      const lang = p.language;
+      const lines = extractStringFromRichText(block.text).split('\n');
+      const lang = block.language;
       let currentLines: string[] = [];
       let currentPreLen = 0;
       for (const line of lines) {

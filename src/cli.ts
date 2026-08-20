@@ -8,7 +8,6 @@
  * detached processes vs running in foreground (--live).
  */
 
-
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -134,7 +133,6 @@ program
         throw err;
       }
     }
-
 
     // Atomic PID lock: only one process can ever hold it
     if (isLive) {
@@ -271,14 +269,17 @@ program
           console.log(`[PID CHECK] Process ${pid} is running (verified)`);
           console.log(`[PID CHECK] Daemon is running. Use 'gemini-cli-telegram stop' to stop it.`);
           process.exit(0);
-        } catch (killErr: any) {
-          if (killErr.code === 'ESRCH') {
+        } catch (killErr: unknown) {
+          const errorCode = typeof killErr === 'object' && killErr !== null && 'code' in killErr
+            ? (killErr.code as string | undefined)
+            : undefined;
+          if (errorCode === 'ESRCH') {
             console.error(`[PID CHECK] Process ${pid} is not running (ESRCH)`);
             console.error(`[PID CHECK] Stale pid file detected. Remove it manually: rm ${pidPath}`);
             console.error(`[PID CHECK] Or run: gemini-cli-telegram stop`);
             process.exit(1);
           } else {
-            console.error(`[PID CHECK] Failed to check process status: ${killErr.code}`);
+            console.error(`[PID CHECK] Failed to check process status: ${errorCode ?? 'unknown error'}`);
             process.exit(1);
           }
         }

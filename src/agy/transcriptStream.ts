@@ -1,10 +1,24 @@
-export interface AgyTranscriptThoughtUpdate {
+/**
+ * @file transcriptStream.ts
+ * @description Diagnostics and polling helpers for agy's stream-json stdout and
+ * transcript logs: event-shape discovery, new-conversation detection, and
+ * extracting completed planner thinking from transcript_full.jsonl.
+ */
+
+interface AgyTranscriptThoughtUpdate {
   stepIndex: number;
   content: string;
 }
 
+/** Narrow an unknown value to a plain record (never arrays). */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 /** One distinct event *shape* observed on agy's stream-json stdout. */
-export interface AgyStreamEventShape {
+interface AgyStreamEventShape {
   /**
    * Structural fingerprint, stable across events of the same kind. Used to log
    * each shape once per run instead of once per event (a single turn emits
@@ -117,6 +131,11 @@ export function pickNewConversationId(before: ReadonlySet<string>, after: Iterab
   return added.length === 1 ? added[0] : undefined;
 }
 
+/**
+ * Extract completed planner-reasoning updates from a transcript file's raw
+ * JSONL. Skips already-processed steps, non-DONE statuses, and entries that
+ * predate the current run; tolerates a partially written trailing line.
+ */
 export function parseAgyTranscriptThoughtUpdates(
   raw: string,
   processedSteps: Set<number>,
@@ -125,8 +144,13 @@ export function parseAgyTranscriptThoughtUpdates(
   const updates: AgyTranscriptThoughtUpdate[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let event: Record<string, unknown>;
-    try { event = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+    let event: Record<string, unknown> | undefined;
+    try {
+      event = asRecord(JSON.parse(line));
+    } catch {
+      continue;
+    }
+    if (!event) continue;
     const stepIndex = Number(event['step_index']);
     if (!Number.isFinite(stepIndex) || processedSteps.has(stepIndex)) continue;
     if (event['status'] !== 'DONE') continue;

@@ -29,7 +29,7 @@ const MAX_TRACKED_CONVERSATIONS = 500;
 const CHUNK_LOG_LIMIT = 5;
 
 /** The pieces a backend can use to assemble its final output string. */
-export interface SseOutputParts {
+interface SseOutputParts {
   /** Reasoning + content interleaved exactly as it was streamed, tags included. */
   stream: string;
   /** Reasoning text only, tags excluded. */
@@ -41,7 +41,7 @@ export interface SseOutputParts {
 }
 
 /** Everything that differs between two OpenAI-compatible SSE backends. */
-export interface SseBackendSpec {
+interface SseBackendSpec {
   /** Backend id — selects the configured URL and namespaces stored history. */
   backend: 'deepseek' | 'web2api';
   /** Human-readable name used in error strings (`DeepSeek HTTP 500: ...`). */

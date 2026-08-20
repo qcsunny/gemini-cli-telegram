@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-
 import { getTuningConfig } from '../../config/userConfig.js';
 
 /**
@@ -60,7 +59,7 @@ export async function withTimeout<T>(
   const { modelRunHardTimeoutMs: HARD_MS, modelRunInactivityMs: INACT_MS } = getTuningConfig();
   let hardTimer: NodeJS.Timeout | undefined;
   let inactTimer: NodeJS.Timeout | undefined;
-  let reject: (reason?: any) => void;
+  let reject: (reason?: unknown) => void;
 
   // Per-attempt abort controller: aborted on timeout so the child process is
   // killed WITHOUT touching the session-level signal (user-cancel semantics).

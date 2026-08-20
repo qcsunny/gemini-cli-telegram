@@ -194,7 +194,6 @@ export function clearBackendHealth(): void {
   lastPersistedKeys.clear();
 }
 
-
 // ── Error Classification ────────────────────────────────────────────────────
 
 /** Returns true if the error indicates the backend service itself is unreachable. */
@@ -206,7 +205,7 @@ export function isConnectionError(err: unknown): boolean {
   return msg.includes('socket hang up') || msg.includes('connection refused') || msg.includes('econnrefused');
 }
 
-export interface ChannelHealthStatus {
+interface ChannelHealthStatus {
   channel: string;
   isHealthy: boolean;
   failCount: number;

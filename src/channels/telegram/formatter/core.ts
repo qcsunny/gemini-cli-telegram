@@ -13,6 +13,7 @@
 import MarkdownIt from 'markdown-it';
 import markdownItCjkFriendly from 'markdown-it-cjk-friendly';
 import { escapeHtml } from '../ui.js';
+import type { RichText } from '@grammyjs/types/rich.js';
 
 export const TELEGRAM_HTML_MAX_LENGTH = 4096;
 export const TELEGRAM_RICH_MAX_LENGTH = 30000;
@@ -71,7 +72,6 @@ function getAlignAttr(token: MarkdownToken): string | null {
   if (align) return align;
   return null;
 }
-
 
 // ── HTML escaping ──
 // escapeHtml is imported from ui.ts; escapeHtmlAttr extends it with quote escaping.
@@ -214,7 +214,6 @@ function handleLinkClose(state: RenderState) {
     state.links.push({ start, end, href: link.href.trim() });
   }
 }
-
 
 const MAX_TOKEN_DEPTH = 64;
 
@@ -484,7 +483,7 @@ export function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
     processed = processed.replace(/\\\(([\s\S]+?)\\\)/g, 'LATEXINLINESTART$1LATEXINLINEEND');
   }
   processed = normalizeMarkdownStructure(processed);
-  const tokens = md.parse(processed, {}) as any as MarkdownToken[];
+  const tokens = md.parse(processed, {}) as unknown as MarkdownToken[];
   const state: RenderState = {
     text: '',
     styles: [],
@@ -495,7 +494,7 @@ export function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
     tables: isHtml ? [] : undefined,
   };
 
-  renderTokens(tokens as MarkdownToken[], state, 0);
+  renderTokens(tokens, state, 0);
 
   // Close any remaining open styles
   for (let i = state.openStyles.length - 1; i >= 0; i--) {
@@ -512,7 +511,6 @@ export function markdownToIR(markdown: string, isHtml = false): MarkdownIR {
   const trimmed = state.text.trimEnd();
   return { text: trimmed, styles: state.styles, links: state.links, tables: state.tables };
 }
-
 
 // ── IR → Telegram HTML ──
 
@@ -678,7 +676,6 @@ export function renderIRToHtml(ir: MarkdownIR): string {
     false,
   );
 }
-
 
 export function formatTokenCount(count: string | number): string {
   const num = Number(count);
@@ -1203,7 +1200,7 @@ export function normalizeMarkdownStructure(markdown: string): string {
   return text;
 }
 
-export function extractStringFromRichText(rt: any): string {
+export function extractStringFromRichText(rt: unknown): string {
   if (!rt) return '';
   if (typeof rt === 'string') return rt;
   if (Array.isArray(rt)) return rt.map(extractStringFromRichText).join('');
@@ -1211,7 +1208,7 @@ export function extractStringFromRichText(rt: any): string {
   return '';
 }
 
-export function isEligibleMainHeading(blk: { type: string; size?: number; text?: any } | undefined): boolean {
+export function isEligibleMainHeading(blk: { type: string; size?: number; text?: RichText } | undefined): boolean {
   if (!blk || blk.type !== 'heading') return false;
   // 1. Only H1 and H2 (size 1 or 2) can be main titles. H3..H6 (size >= 3) are sub-headings.
   if ((blk.size ?? 0) > 2) return false;

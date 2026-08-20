@@ -23,8 +23,6 @@ export const conversations = sqliteTable('conversations', {
   updatedAt: text('updated_at'),
 });
 
-
-
 /**
  * Messages table persists web2api / deepseek conversation history across restarts.
  * Each row is one user or assistant turn in a backend conversation.

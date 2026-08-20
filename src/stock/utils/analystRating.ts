@@ -11,16 +11,16 @@
  * callers simply omit the rating section.
  */
 
-import { fetch as undiciFetch } from 'undici';
 import { marketCache } from '../cache.js';
 import { logger } from '../../utils/logger.js';
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 
 const FMP_BASE = 'https://financialmodelingprep.com/stable';
 const FETCH_TIMEOUT_MS = 3000;
 /** 24h cache for rating/target data (moves slowly). */
 const RATING_TTL_MS = 24 * 60 * 60 * 1000;
 
-export interface AnalystRatingData {
+interface AnalystRatingData {
   /** FMP letter rating, e.g. 'A+', 'B', 'C-'. */
   rating: string;
   /** FMP overall score 0..5 (5 = best). */
@@ -46,11 +46,15 @@ const num = (v: unknown): number | undefined => {
   return Number.isFinite(n) ? n : undefined;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 async function fetchJson(url: string, apiKey: string): Promise<unknown[]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await undiciFetch(`${url}&apikey=${encodeURIComponent(apiKey)}`, { signal: controller.signal });
+    const res = await fetchWithTimeout(`${url}&apikey=${encodeURIComponent(apiKey)}`, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) {
       logger.warn(`[FMP] Rating request failed: HTTP ${res.status}`);
       return [];
@@ -60,8 +64,6 @@ async function fetchJson(url: string, apiKey: string): Promise<unknown[]> {
   } catch (err) {
     logger.warn(`[FMP] Rating request error: ${err}`);
     return [];
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -88,8 +90,8 @@ export async function fetchFmpRating(
     fetchJson(`${FMP_BASE}/price-target-consensus?symbol=${encodeURIComponent(cleanSym)}`, apiKey),
   ]);
 
-  const snapshot = snapshotRaw[0] as Record<string, unknown> | undefined;
-  const target = targetRaw[0] as Record<string, unknown> | undefined;
+  const snapshot = asRecord(snapshotRaw[0]);
+  const target = asRecord(targetRaw[0]);
   if (!snapshot && !target) return null;
 
   const rating = typeof snapshot?.['rating'] === 'string' ? snapshot['rating'] : '';

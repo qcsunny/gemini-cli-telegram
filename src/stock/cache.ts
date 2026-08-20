@@ -15,7 +15,7 @@ interface CacheEntry<T> {
 }
 
 class MarketCache {
-  private cache = new Map<string, CacheEntry<any>>();
+  private cache = new Map<string, CacheEntry<unknown>>();
   private readonly maxEntries: number;
 
   constructor(maxEntries = 2000) {

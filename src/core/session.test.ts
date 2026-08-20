@@ -220,6 +220,28 @@ describe('SessionManager', () => {
       expect(sessionManager.getSession(chatId)).toBeUndefined();
     });
   });
+
+  describe('evictIdleSessions', () => {
+    it('should evict idle sessions older than maxIdleAgeMs and preserve busy or active ones', async () => {
+      const s1 = await sessionManager.getOrCreate(101, { cwd: '/test/1' });
+      const s2 = await sessionManager.getOrCreate(102, { cwd: '/test/2' });
+      const s3 = await sessionManager.getOrCreate(103, { cwd: '/test/3' });
+
+      // s1 is idle (accessed 25h ago)
+      s1.lastAccessedAt = Date.now() - 25 * 3600 * 1000;
+      // s2 is idle but marked busy (generating)
+      s2.lastAccessedAt = Date.now() - 25 * 3600 * 1000;
+      s2.busy = true;
+      // s3 is active (accessed recently)
+      s3.lastAccessedAt = Date.now() - 1000;
+
+      const evicted = sessionManager.evictIdleSessions(24 * 3600 * 1000);
+      expect(evicted).toBe(1);
+      expect(sessionManager.getSession(101)).toBeUndefined();
+      expect(sessionManager.getSession(102)).toBeDefined();
+      expect(sessionManager.getSession(103)).toBeDefined();
+    });
+  });
 });
 
 describe('resume', () => {

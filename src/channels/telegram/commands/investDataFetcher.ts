@@ -27,7 +27,7 @@ const REPORT_ENTRY = 'dist/bin/json.js';
  */
 const MAX_CONCURRENCY = 2;
 
-export interface InvestDataFetchResult {
+interface InvestDataFetchResult {
   ok: boolean;
   symbol?: string;
   data?: string;

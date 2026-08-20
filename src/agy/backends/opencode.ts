@@ -28,6 +28,13 @@ function getOpenCodePath(): string {
 
 const SESSION_TITLE_PREFIX = 'gemini-cli-telegram:';
 
+/** Narrow an unknown value to a plain record (never arrays). */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 /** Grace period (ms) between SIGINT and SIGKILL escalation on abort. */
 const ABORT_SIGKILL_GRACE_MS = 5000;
 /** OpenCode persists live part text before its JSON CLI emits the completed part. */
@@ -169,11 +176,11 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
       events.emit({ type: 'text', content: delta });
     };
 
-    const emitTool = (partId: string, data: Record<string, any>): void => {
+    const emitTool = (partId: string, data: Record<string, unknown>): void => {
       if (emittedToolParts.has(partId)) return;
       emittedToolParts.add(partId);
-      const state = data['state'] as Record<string, any> | undefined;
-      const input = state?.['input'] as Record<string, any> | undefined;
+      const state = asRecord(data['state']);
+      const input = asRecord(state?.['input']);
       const toolName = String(data['tool'] ?? 'tool');
       const description = state?.['title'] ?? input?.['command'] ?? input?.['filePath'] ?? input?.['url'] ?? '';
       const note = `[${toolName}]${description ? ` ${description}` : ''}`;
@@ -208,7 +215,7 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
         ).all(polledSessionId, runStartedAt - 2000) as Array<{ id: string; data: string; finish?: string }>;
 
         for (const row of rows) {
-          let data: Record<string, any>;
+          let data: Record<string, unknown>;
           try { data = JSON.parse(row.data); } catch { continue; }
           const type = data['type'];
           if (type === 'reasoning' && typeof data['text'] === 'string') {
@@ -260,10 +267,14 @@ export async function runOpenCode(opts: AgyRunOptions): Promise<AgyRunResult> {
           if (part.type === 'reasoning' && part.text) {
             logger.debug(`[TRACE opencode] reasoning event: text.length=${part.text.length} preview="${part.text.slice(0, 80).replace(/\n/g, '\\n')}"`);
             stdoutThoughtBuf += part.text + '\n';
-            emitReasoning('stdout-reasoning', part.text);
+            if (emittedPartLengths.size === 0) {
+              emitReasoning('stdout-reasoning', part.text);
+            }
           } else if (part.type === 'text' && part.text) {
             stdoutContentBuf += part.text;
-            emitText('stdout-text', part.text);
+            if (emittedTextParts.size === 0) {
+              emitText('stdout-text', part.text);
+            }
           } else if (part.type === 'tool') {
             if (stdoutContentBuf) {
               stdoutThoughtBuf += stdoutContentBuf + '\n';

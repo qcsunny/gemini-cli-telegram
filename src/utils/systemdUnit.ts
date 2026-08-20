@@ -14,7 +14,7 @@
 
 import * as fs from 'node:fs';
 
-export interface SystemdOwner {
+interface SystemdOwner {
   /** Unit name owning the process, e.g. `gemini-cli-telegram.service`. */
   unit: string;
   /** `'--user '` for a per-user manager unit, `''` for a system unit. Ready to splice into a systemctl command. */

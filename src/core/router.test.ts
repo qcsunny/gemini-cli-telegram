@@ -21,7 +21,7 @@ import { runAgyPrint } from '../agy/agyCli.js';
 const MOCK_TIERS = [
   { name: '旗舰', priority: 0, models: ['Codex: GPT-5.6 Sol', 'Claude CLI: Claude Opus 5'] },
   { name: '高级', priority: 1, models: ['Gemini 3.7 Flash (High)', 'OpenCode: Big Pickle'] },
-  { name: '远程备用', priority: 4, models: ['Web2API: Gemini Flash Lite', 'Web2API: Gemini 3.7 Flash'] },
+  { name: '远程备用', priority: 4, models: ['Web2API: Gemini 3.5 Flash Lite', 'Web2API: Gemini 3.7 Flash'] },
 ];
 
 function mockTiers() {
@@ -85,7 +85,7 @@ describe('router', () => {
     });
 
     it('should map C to a free tier-4 Web2API model', () => {
-      expect(resolveModelForCategory('C')).toBe('Web2API: Gemini Flash Lite');
+      expect(resolveModelForCategory('C')).toBe('Web2API: Gemini 3.5 Flash Lite');
     });
   });
 
@@ -103,7 +103,7 @@ describe('router', () => {
       expect(decision.category).toBe('A');
       expect(decision.targetModel).toBe('Codex: GPT-5.6 Sol');
       expect(runAgyPrint).toHaveBeenCalledWith(
-        expect.objectContaining({ model: 'Web2API: Gemini Flash Lite', allowTools: false })
+        expect.objectContaining({ model: 'Web2API: Gemini 3.5 Flash Lite', allowTools: false })
       );
     });
 
@@ -114,7 +114,7 @@ describe('router', () => {
 
       expect(decision.method).toBe('heuristic');
       expect(decision.category).toBe('C');
-      expect(decision.targetModel).toBe('Web2API: Gemini Flash Lite');
+      expect(decision.targetModel).toBe('Web2API: Gemini 3.5 Flash Lite');
       expect(decision.reason).toBe('Classifier timeout');
     });
 

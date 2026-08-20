@@ -13,7 +13,7 @@ import { runSseBackend } from './sseBackend.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
 /** Used when the model alias has no routing entry. */
-const FALLBACK_MODEL_ID = 'gemini-3.5-flash';
+const FALLBACK_MODEL_ID = 'gemini-3.1-pro';
 
 export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
   return runSseBackend(opts, {

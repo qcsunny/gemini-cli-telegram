@@ -209,6 +209,8 @@ export interface StockSearchResult {
   exchange: string;
   type: string;
   currency: string;
+  /** Provider-specific security identifier used by Eastmoney endpoints. */
+  secid?: string;
 }
 
 export interface MarketDataProvider {

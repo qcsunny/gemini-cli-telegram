@@ -19,5 +19,5 @@ export interface ParsedLinkContent {
   publishedAt?: string;
   abstract?: string;
   content: string; // Cleaned Markdown / plain text
-  extra?: Record<string, any>;
+  extra?: Record<string, unknown>;
 }

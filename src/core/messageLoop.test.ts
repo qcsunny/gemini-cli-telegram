@@ -248,8 +248,9 @@ describe('processMessage', () => {
   it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
     // Chain from Web2API: Gemini Auto is 7 models long under the
     // monotonic downgrade tier system (T4 远程备用: Gemini Auto →
-    // Gemini 3.5 Flash Thinking Lite → Gemini Flash Lite → DeepSeek: Pro
-    // Thinking → DeepSeek: Pro → DeepSeek: Flash Thinking → DeepSeek: Flash).
+    // DeepSeek: Flash Thinking Search → DeepSeek: Flash Search →
+    // DeepSeek: Pro Thinking → DeepSeek: Pro → DeepSeek: Flash Thinking →
+    // DeepSeek: Flash).
     // Each model is retried 3x, then downgraded. When the LAST model in the chain
     // (DeepSeek: Flash) also fails its 3 retries, the session must
     // terminate — it must NOT wrap back to higher tiers.

@@ -18,21 +18,28 @@ import type { InputRichMessage } from '@grammyjs/types/rich.js';
 import type { RichBlock } from '../richMessage.js';
 import { markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks, buildFinalBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
 import { logger } from '../../../utils/logger.js';
+import { stripThoughtTags } from '../../../utils/textUtils.js';
 import { extractThoughtAndContent } from '../../../agy/thoughtParser.js';
 import { messageCache } from '../../../utils/messageCache.js';
 import { draftBackoffUntil, record429Backoff, recordBackoffSuccess, is429Error, get429RetryAfter } from './rateLimiter.js';
 import { getTuningConfig } from '../../../config/userConfig.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
 
-export interface TelegramApiError {
+interface TelegramApiError {
   error_code?: number;
   description?: string;
   message: string;
 }
 
-export function asApiError(err: unknown): TelegramApiError {
-  if (typeof err === 'object' && err !== null) {
-    const e = err as Record<string, unknown>;
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function asApiError(err: unknown): TelegramApiError {
+  const e = asRecord(err);
+  if (e) {
     return {
       error_code: typeof e['error_code'] === 'number' ? e['error_code'] : undefined,
       description: typeof e['description'] === 'string' ? e['description'] : undefined,
@@ -58,17 +65,6 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
   return typeof text === 'string'
     ? text
     : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
-}
-
-/** Strips literal <thought>/<think>/<thinking> XML so the typewriter render never shows raw tags. */
-function stripThoughtTags(s: string): string {
-  return s
-    .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
-    .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
-    .replace(/<\/?thought[^>]*>/gi, '')
-    .replace(/<\/?thinking[^>]*>/gi, '')
-    .replace(/<\/?think[^>]*>/gi, '')
-    .trim();
 }
 
 /**
@@ -400,9 +396,9 @@ function validateBlocksPayload(blocks: unknown[]): boolean {
     return false;
   }
   for (let i = 0; i < blocks.length; i++) {
-    const b = blocks[i] as Record<string, unknown>;
-    if (!b || typeof b !== 'object') {
-      logger.warn(`[BLOCK VALIDATION] Block ${i} is not an object: ${typeof b}`);
+    const b = asRecord(blocks[i]);
+    if (!b) {
+      logger.warn(`[BLOCK VALIDATION] Block ${i} is not an object: ${typeof blocks[i]}`);
       return false;
     }
     const type = b['type'];
@@ -456,7 +452,7 @@ function validateBlocksPayload(blocks: unknown[]): boolean {
       case 'animation':
       case 'audio':
       case 'voice_note': {
-        const mediaField = (b['photo'] ?? b['video'] ?? b['animation'] ?? b['audio'] ?? b['voice_note']) as Record<string, unknown> | undefined;
+        const mediaField = asRecord(b['photo'] ?? b['video'] ?? b['animation'] ?? b['audio'] ?? b['voice_note']);
         if (!mediaField || typeof mediaField['media'] !== 'string' || !mediaField['media'].trim()) {
           logger.warn(`[BLOCK VALIDATION] Block ${i} (${type}) missing media URL`);
           return false;
@@ -496,7 +492,7 @@ function getHtmlPayload(originalText: string | StructuredMessage, isStreaming = 
  *   thought appended as a collapsible `details` block at the end.
  * Returns an empty array when there is nothing renderable (caller falls back to HTML).
  */
-function getBlocksPayload(originalText: string | StructuredMessage): any[] {
+function getBlocksPayload(originalText: string | StructuredMessage): RichBlock[] {
   if (typeof originalText === 'string') {
     // A footer is sent as `___RAW_HTML___` + (thinking <details> + tg://btn_info_footer
     // anchor). Convert it to native 10.2 blocks (details + footer) instead of HTML.
@@ -1129,7 +1125,7 @@ const safeEdit = async (messageId: number, text: string | StructuredMessage, htm
           : (!!originalText.thought && originalText.thought.trim().length > 0);
 
         const contentText = typeof originalText === 'string'
-          ? originalText.replace(/<thought[^>]*>[\s\S]*?<\/thought[^>]*>/gi, '').replace(/<think[^>]*>[\s\S]*?<\/think[^>]*>/gi, '').trim()
+          ? stripThoughtTags(originalText)
           : (originalText.content || '').trim();
 
         const suffix = (isStreaming && !hasThought && !contentText)

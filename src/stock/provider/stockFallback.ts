@@ -5,14 +5,29 @@
  */
 
 /**
- * @file yahooFallback.ts
- * @description Fallback stock market data provider for US equities (NVDA, AAPL, TSLA, etc.).
- * Provides reliable fallback quote data.
+ * @file stockFallback.ts
+ * @description Fallback market data provider covering A-shares, HKEX, and US
+ * equities via Sina / Eastmoney / Nasdaq endpoints when the primary provider
+ * cannot resolve a symbol.
  */
 
-import { fetch as undiciFetch } from 'undici';
 import type { MarketDataProvider, StockQuote, StockCandles, StockSearchResult, CandleDataPoint } from '../types.js';
 import { logger } from '../../utils/logger.js';
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
+
+type JsonRecord = Record<string, unknown>;
+
+/** Narrow an unknown value to a plain record (never arrays). */
+function asRecord(value: unknown): JsonRecord | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as JsonRecord
+    : undefined;
+}
+
+/** Keep only string entries of an array (used for Eastmoney kline rows). */
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
 
 export class StockFallbackProvider implements MarketDataProvider {
   readonly name = 'GlobalMarketData';
@@ -24,26 +39,25 @@ export class StockFallbackProvider implements MarketDataProvider {
     if (/[\u4e00-\u9fa5]/.test(symbol) || (!/^\d{5,6}$/.test(cleanSym) && !/^(SH|SZ|HK)\d+/i.test(cleanSym))) {
       const searchRes = await this.searchSymbols(symbol);
       if (searchRes.length > 0) {
-        const item = searchRes[0] as any;
+        const item = searchRes[0];
         cleanSym = item.symbol.toUpperCase();
 
         // Instantly fetch price from Eastmoney API for Chinese query to ensure sub-300ms speed
         if (item.secid) {
           try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 1200);
             const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${item.secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=2`;
-            const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+            const res = await fetchWithTimeout(url, {}, 1200);
             if (res.ok) {
-              const json = (await res.json()) as any;
-              const klines = json?.data?.klines;
-              if (Array.isArray(klines) && klines.length > 0) {
+              const json = asRecord(await res.json());
+              const data = asRecord(json?.['data']);
+              const klines = stringArray(data?.['klines']);
+              if (klines.length > 0) {
                 const last = klines[klines.length - 1].split(',');
                 const price = parseFloat(last[2]) || 0;
                 const open = parseFloat(last[1]) || price;
                 const high = parseFloat(last[3]) || price;
                 const low = parseFloat(last[4]) || price;
-                const prevClose = json?.data?.preKPrice || open;
+                const prevClose = typeof data?.['preKPrice'] === 'number' ? data['preKPrice'] : open;
                 const change = price - prevClose;
                 const changePercent = prevClose ? (change / prevClose) * 100 : 0;
 
@@ -95,13 +109,10 @@ export class StockFallbackProvider implements MarketDataProvider {
       }
 
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4000);
         const url = `http://hq.sinajs.cn/list=${sinaCode}`;
-        const res = await undiciFetch(url, {
+        const res = await fetchWithTimeout(url, {
           headers: { 'Referer': 'http://finance.sina.com.cn' },
-          signal: controller.signal,
-        }).finally(() => clearTimeout(timer));
+        }, 4000);
 
         if (res.ok) {
           const buf = await res.arrayBuffer();
@@ -187,22 +198,21 @@ export class StockFallbackProvider implements MarketDataProvider {
     try {
       const searchRes = await this.searchSymbols(cleanSym);
       if (searchRes && searchRes.length > 0) {
-        const item = searchRes[0] as any;
+        const item = searchRes[0];
         if (item.secid) {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 1000);
           const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${item.secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=2`;
-          const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+          const res = await fetchWithTimeout(url, {}, 1000);
           if (res.ok) {
-            const json = (await res.json()) as any;
-            const klines = json?.data?.klines;
-            if (Array.isArray(klines) && klines.length > 0) {
+            const json = asRecord(await res.json());
+            const data = asRecord(json?.['data']);
+            const klines = stringArray(data?.['klines']);
+            if (klines.length > 0) {
               const last = klines[klines.length - 1].split(',');
               const price = parseFloat(last[2]) || 0;
               const open = parseFloat(last[1]) || price;
               const high = parseFloat(last[3]) || price;
               const low = parseFloat(last[4]) || price;
-              const prevClose = json?.data?.preKPrice || open;
+              const prevClose = typeof data?.['preKPrice'] === 'number' ? data['preKPrice'] : open;
               const change = price - prevClose;
               const changePercent = prevClose ? (change / prevClose) * 100 : 0;
 
@@ -212,18 +222,16 @@ export class StockFallbackProvider implements MarketDataProvider {
                 let pb: number | undefined;
                 let turnoverRate: number | undefined;
                 try {
-                  const snapController = new AbortController();
-                  const snapTimer = setTimeout(() => snapController.abort(), 800);
                   const snapUrl = `https://push2.eastmoney.com/api/qt/stock/get?secid=${item.secid}&fields=f43,f57,f84,f116,f163,f167,f168`;
-                  const snapRes = await undiciFetch(snapUrl, { signal: snapController.signal }).finally(() => clearTimeout(snapTimer));
+                  const snapRes = await fetchWithTimeout(snapUrl, {}, 800);
                   if (snapRes.ok) {
-                    const snapJson = (await snapRes.json()) as any;
-                    const d = snapJson?.data;
+                    const snapJson = asRecord(await snapRes.json());
+                    const d = asRecord(snapJson?.['data']);
                     if (d) {
-                      if (typeof d.f116 === 'number') marketCap = d.f116;
-                      if (typeof d.f163 === 'number') pe = d.f163 / 100;
-                      if (typeof d.f167 === 'number') pb = d.f167 / 100;
-                      if (typeof d.f168 === 'number') turnoverRate = d.f168 / 100;
+                      if (typeof d['f116'] === 'number') marketCap = d['f116'];
+                      if (typeof d['f163'] === 'number') pe = d['f163'] / 100;
+                      if (typeof d['f167'] === 'number') pb = d['f167'] / 100;
+                      if (typeof d['f168'] === 'number') turnoverRate = d['f168'] / 100;
                     }
                   }
                 } catch {
@@ -262,29 +270,27 @@ export class StockFallbackProvider implements MarketDataProvider {
 
     // 3. Fallback to US stock lookup (api.nasdaq.com)
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1000);
       const url = `https://api.nasdaq.com/api/quote/${cleanSym}/info?assetclass=stocks`;
-      const res = await undiciFetch(url, {
+      const res = await fetchWithTimeout(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
           'Accept': 'application/json, text/plain, */*',
         },
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timer));
+      }, 1000);
 
       if (res.ok) {
-        const json = (await res.json()) as any;
-        const data = json?.data;
-        if (data && data.primaryData) {
-          const rawPrice = String(data.primaryData.lastSalePrice || '').replace(/[^0-9.]/g, '');
+        const json = asRecord(await res.json());
+        const data = asRecord(json?.['data']);
+        const primaryData = asRecord(data?.['primaryData']);
+        if (primaryData) {
+          const rawPrice = String(primaryData['lastSalePrice'] || '').replace(/[^0-9.]/g, '');
           const price = parseFloat(rawPrice) || 0;
-          const rawChange = String(data.primaryData.netChange || '').replace(/[^0-9.-]/g, '');
+          const rawChange = String(primaryData['netChange'] || '').replace(/[^0-9.-]/g, '');
           const change = parseFloat(rawChange) || 0;
-          const rawPct = String(data.primaryData.percentageChange || '').replace(/[^0-9.-]/g, '');
+          const rawPct = String(primaryData['percentageChange'] || '').replace(/[^0-9.-]/g, '');
           const changePercent = parseFloat(rawPct) || 0;
-          const companyName = data.companyName || `${cleanSym} Inc.`;
-          const exchange = (data.exchange || 'NASDAQ').replace('-GS', '').replace('-NGS', '');
+          const companyName = typeof data?.['companyName'] === 'string' ? data['companyName'] : `${cleanSym} Inc.`;
+          const exchange = (typeof data?.['exchange'] === 'string' ? data['exchange'] : 'NASDAQ').replace('-GS', '').replace('-NGS', '');
 
           if (price > 0) {
             return {
@@ -297,7 +303,7 @@ export class StockFallbackProvider implements MarketDataProvider {
               high: price + Math.abs(change),
               low: price - Math.abs(change),
               previousClose: price - change,
-              volume: parseInt(String(data.primaryData.volume || '0').replace(/,/g, ''), 10) || 0,
+              volume: parseInt(String(primaryData['volume'] || '0').replace(/,/g, ''), 10) || 0,
               market: exchange,
               currency: 'USD',
               timestamp: Math.floor(Date.now() / 1000),
@@ -335,19 +341,17 @@ export class StockFallbackProvider implements MarketDataProvider {
         const s = symbol.toLowerCase();
         secid = s.startsWith('6') || s.startsWith('9') ? `1.${symbol}` : `0.${symbol}`;
       }
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 800);
       const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f43,f57,f116,f163,f167,f168`;
-      const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      const res = await fetchWithTimeout(url, {}, 800);
       if (!res.ok) return null;
-      const json = (await res.json()) as any;
-      const d = json?.data;
+      const json = asRecord(await res.json());
+      const d = asRecord(json?.['data']);
       if (!d) return null;
       return {
-        marketCap: typeof d.f116 === 'number' ? d.f116 : undefined,
-        pe: typeof d.f163 === 'number' ? d.f163 / 100 : undefined,
-        pb: typeof d.f167 === 'number' ? d.f167 / 100 : undefined,
-        turnoverRate: typeof d.f168 === 'number' ? d.f168 / 100 : undefined,
+        marketCap: typeof d['f116'] === 'number' ? d['f116'] : undefined,
+        pe: typeof d['f163'] === 'number' ? d['f163'] / 100 : undefined,
+        pb: typeof d['f167'] === 'number' ? d['f167'] / 100 : undefined,
+        turnoverRate: typeof d['f168'] === 'number' ? d['f168'] / 100 : undefined,
       };
     } catch {
       return null;
@@ -362,8 +366,8 @@ export class StockFallbackProvider implements MarketDataProvider {
       const searchRes = await this.searchSymbols(cleanSym);
       let secid = '';
       if (searchRes && searchRes.length > 0) {
-        const item = searchRes[0] as any;
-        secid = item.secid;
+        const item = searchRes[0];
+        secid = item.secid ?? '';
       }
       if (!secid) {
         const isAshare = /^(SH|SZ)?\d{6}$/i.test(cleanSym);
@@ -377,15 +381,14 @@ export class StockFallbackProvider implements MarketDataProvider {
         }
       }
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1500);
       const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=365`;
-      const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      const res = await fetchWithTimeout(url, {}, 1500);
 
       if (res.ok) {
-        const json = (await res.json()) as any;
-        const klines = json?.data?.klines;
-        if (Array.isArray(klines) && klines.length > 0) {
+        const json = asRecord(await res.json());
+        const data = asRecord(json?.['data']);
+        const klines = stringArray(data?.['klines']);
+        if (klines.length > 0) {
           const data: CandleDataPoint[] = klines.map((line: string) => {
             const parts = line.split(',');
             const dateStr = parts[0]; // e.g. "2025-08-07"
@@ -424,22 +427,25 @@ export class StockFallbackProvider implements MarketDataProvider {
     if (!cleanQ) return [];
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1000);
       const url = `https://searchapi.eastmoney.com/api/suggest/get?type=14&token=D4357F9D2955B90757E0A343A8FA71E9&input=${encodeURIComponent(cleanQ)}`;
-      const res = await undiciFetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      const res = await fetchWithTimeout(url, {}, 1000);
       if (res.ok) {
-        const json = (await res.json()) as any;
-        const list = json?.QuotationCodeTable?.Data || [];
+        const json = asRecord(await res.json());
+        const quotationTable = asRecord(json?.['QuotationCodeTable']);
+        const list = Array.isArray(quotationTable?.['Data']) ? quotationTable['Data'] : [];
         if (list.length > 0) {
-          return list.slice(0, 5).map((item: any) => ({
-            symbol: item.Code,
-            name: item.Name,
-            exchange: item.JYS || item.Classify || 'STOCKS',
+          return list.slice(0, 5).map((rawItem: unknown): StockSearchResult | null => {
+            const item = asRecord(rawItem);
+            if (!item) return null;
+            return {
+            symbol: typeof item['Code'] === 'string' ? item['Code'] : '',
+            name: typeof item['Name'] === 'string' ? item['Name'] : '',
+            exchange: typeof item['JYS'] === 'string' ? item['JYS'] : typeof item['Classify'] === 'string' ? item['Classify'] : 'STOCKS',
             type: 'stock',
             currency: 'USD',
-            secid: item.QuoteID || item.ID,
-          }));
+            secid: typeof item['QuoteID'] === 'string' ? item['QuoteID'] : typeof item['ID'] === 'string' ? item['ID'] : undefined,
+            };
+          }).filter((item): item is StockSearchResult => item !== null);
         }
       }
     } catch (err) {

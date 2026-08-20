@@ -20,7 +20,7 @@ import { logger } from '../utils/logger.js';
 import type { DaemonSession, SessionOptions, SendMediaFn, SendMediaGroupFn, ProjectInfo } from './types.js';
 import { ChatScheduler } from './scheduler.js';
 import { getConversationId, deleteConversation, getStoredModel, setConversation, getCwd, getSessionKey } from '../agy/conversationStore.js';
-import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory, clearClaudeHistory, clearCodexHistory } from '../agy/agyCli.js';
+import { clearWeb2ApiHistory, clearDeepSeekHistory, clearOpenCodeHistory, clearClaudeHistory, clearCodexHistory, clearCodexThread } from '../agy/agyCli.js';
 import { loadUserConfig, saveUserConfig, getDefaultModel, getDefaultProjectName, CONFIG_DIR } from '../config/userConfig.js';
 
 /** Factory function type for building chat-bound media sender functions */
@@ -31,6 +31,11 @@ type SendMediaGroupFactory = (chatId: number) => SendMediaGroupFn;
 
 /** Grace period (ms) before force-killing a lingering model child during destroy/shutdown. */
 const SHUTDOWN_SIGKILL_GRACE_MS = 3000;
+
+/** Default idle TTL before an inactive DaemonSession is evicted from memory (24 hours). */
+const IDLE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+/** Interval between idle session sweep checks (1 hour). */
+const IDLE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * Utility class for discovering, caching, and managing local software projects/workspaces.
@@ -283,6 +288,7 @@ export class SessionManager {
   private sendMediaGroupFactory?: SendMediaGroupFactory;
   private projectManager: ProjectManager;
   private chatScheduler: ChatScheduler;
+  private idleEvictTimer?: NodeJS.Timeout;
 
   constructor(sendMediaFactory?: SendMediaFactory, sendMediaGroupFactory?: SendMediaGroupFactory) {
     this.sendMediaFactory = sendMediaFactory;
@@ -290,6 +296,8 @@ export class SessionManager {
     this.projectManager = new ProjectManager();
     this.chatScheduler = new ChatScheduler();
     this.projectManager.initialize().catch(e => logger.error(`Failed to initialize project manager: ${e}`));
+    this.idleEvictTimer = setInterval(() => this.evictIdleSessions(), IDLE_SWEEP_INTERVAL_MS);
+    this.idleEvictTimer.unref?.();
   }
 
   getChatScheduler(): ChatScheduler {
@@ -300,6 +308,30 @@ export class SessionManager {
     return this.projectManager;
   }
 
+  /**
+   * Evicts idle DaemonSession instances from in-memory Map.
+   * Does NOT delete underlying database conversations; re-accessing a chat
+   * seamlessly rehydrates the session from SQLite on demand.
+   */
+  evictIdleSessions(maxIdleAgeMs: number = IDLE_SESSION_TTL_MS): number {
+    const now = Date.now();
+    let evicted = 0;
+    for (const [key, session] of this.sessions) {
+      if (session.busy) continue;
+      const lastActive = session.lastAccessedAt || session.createdAt.getTime();
+      if (now - lastActive > maxIdleAgeMs) {
+        if (session.typingInterval) {
+          clearInterval(session.typingInterval);
+          session.typingInterval = undefined;
+        }
+        this.sessions.delete(key);
+        evicted++;
+        logger.info(`[SessionManager] Evicted idle session ${session.sessionId} for chat ${key} (idle for ${((now - lastActive) / 3600000).toFixed(1)}h)`);
+      }
+    }
+    return evicted;
+  }
+
   async getOrCreate(
     chatId: number,
     options: SessionOptions,
@@ -308,6 +340,7 @@ export class SessionManager {
     const key = getSessionKey(chatId, threadId);
     const existing = this.sessions.get(key);
     if (existing) {
+      existing.lastAccessedAt = Date.now();
       if (existing.abortController.signal.aborted) {
         logger.debug(`Reusing session ${existing.sessionId} but signal was aborted. Resetting.`);
         existing.abortController = new AbortController();
@@ -357,6 +390,9 @@ export class SessionManager {
         }, SHUTDOWN_SIGKILL_GRACE_MS);
         killTimer.unref?.();
       }
+      if (session.typingInterval) {
+        clearInterval(session.typingInterval);
+      }
       this.sessions.delete(key);
       logger.info(`Session destroyed for chat ${key}`);
     }
@@ -369,6 +405,7 @@ export class SessionManager {
         clearOpenCodeHistory(convId);
         clearClaudeHistory(convId);
         clearCodexHistory(convId);
+        clearCodexThread(convId);
       }
     } catch (e) {
       logger.warn(`Error deleting conversation for chat ${key}: ${e}`);
@@ -376,6 +413,10 @@ export class SessionManager {
   }
 
   async destroyAll(): Promise<void> {
+    if (this.idleEvictTimer) {
+      clearInterval(this.idleEvictTimer);
+      this.idleEvictTimer = undefined;
+    }
     const keys = Array.from(this.sessions.keys());
     for (const key of keys) {
       const [chatIdStr, threadIdStr] = key.split(':');
@@ -477,6 +518,7 @@ export class SessionManager {
       busy: false,
       turnCount: 0,
       createdAt: new Date(),
+      lastAccessedAt: Date.now(),
       currentProject: project,
       settings: {
         telegram: {

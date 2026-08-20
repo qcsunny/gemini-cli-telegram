@@ -6,7 +6,7 @@
 
 /**
  * @file watchlist.ts
- * @description Watchlist and Alert services backed by SQLite database.
+ * @description Watchlist service backed by SQLite database.
  */
 
 import { getDb } from '../../db/index.js';

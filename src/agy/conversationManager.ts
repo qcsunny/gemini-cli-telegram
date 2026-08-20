@@ -1,7 +1,9 @@
 /**
  * @file conversationManager.ts
- * @description In-memory conversation history management for web2api, deepseek, and gemini-direct backends.
- * These services are stateless, so we must replay the full message history on every request.
+ * @description In-memory conversation history management for every backend that
+ * keeps no server-side session (web2api, deepseek, opencode, claude, codex).
+ * These services are stateless, so we must replay the full message history on
+ * every request.
  */
 
 import { restoreAllHistories } from './messageStore.js';
@@ -14,7 +16,6 @@ interface Web2ApiMessage {
 
 export const web2apiHistories = new Map<string, Web2ApiMessage[]>();
 export const deepseekHistories = new Map<string, Web2ApiMessage[]>();
-
 
 export const opencodeHistories = new Map<string, Web2ApiMessage[]>();
 export const claudeHistories = new Map<string, Web2ApiMessage[]>();
@@ -65,5 +66,3 @@ export function clearDeepSeekHistory(conversationId: string): void {
 export function clearWeb2ApiHistory(conversationId: string): void {
   web2apiHistories.delete(conversationId);
 }
-
-

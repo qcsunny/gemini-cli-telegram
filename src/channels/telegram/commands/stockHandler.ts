@@ -10,6 +10,8 @@
  */
 
 import type { Bot } from 'grammy';
+import type { RichBlockTableCell, RichText } from '@grammyjs/types/rich.js';
+import type { RichBlock } from '../richMessage.js';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import type {
@@ -43,7 +45,7 @@ import { logger } from '../../../utils/logger.js';
 
 import { buildTradingViewSymbol } from '../../../stock/utils/symbolHelper.js';
 
-export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> {
+export function buildStockBlocks(quote: StockQuote): RichBlock[] {
   const sign = quote.change >= 0 ? '+' : '';
   const icon = quote.change >= 0 ? '📈' : '📉';
   const delayBadge = quote.isDelayed ? '(Delayed ~15m)' : '(Real-time)';
@@ -73,18 +75,18 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
   };
 
   const rec = quote.recommendations;
-  const recSection = rec ? [
+  const recSection: RichText[] = rec ? [
     { type: 'bold', text: ['🏦 分析师评级（FMP）：'] },
     `\n• ${rec.consensusText}` +
     (rec.targetPriceMean ? `\n• 机构目标均价：$${rec.targetPriceMean} (最高:$${rec.targetPriceHigh} / 最低:$${rec.targetPriceLow})\n\n` : '\n\n')
   ] : [];
 
-  const mkCell = (label: string, value: string): Array<Record<string, any>> => [
+  const mkCell = (label: string, value: string): RichBlockTableCell[] => [
     { text: { type: 'bold', text: [label] }, align: 'left', valign: 'middle' },
     { text: value, align: 'center', valign: 'middle' },
   ];
 
-  const perfCells: Array<Array<Record<string, any>>> = [];
+  const perfCells: RichBlockTableCell[][] = [];
   if (perf) {
     perfCells.push(mkCell('近1个月', fmtPerf(perf.change1M)));
     perfCells.push(mkCell('近3个月', fmtPerf(perf.change3M)));
@@ -93,7 +95,7 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
     perfCells.push(mkCell('今年以来 (YTD)', fmtPerf(perf.changeYTD)));
   }
 
-  const quotePairs: Array<Array<Record<string, any>>> = [];
+  const quotePairs: RichBlockTableCell[][] = [];
   const addRow = (label: string, value?: string) => {
     if (value !== undefined && value !== '--') quotePairs.push(mkCell(label, value));
   };
@@ -109,57 +111,61 @@ export function buildStockBlocks(quote: StockQuote): Array<Record<string, any>> 
   addRow('换手率', quote.turnoverRate !== undefined ? `${quote.turnoverRate.toFixed(2)}%` : undefined);
   addRow('52周最高', quote.high52 && quote.low52 ? fmtPrice(quote.high52) : undefined);
   addRow('52周最低', quote.high52 && quote.low52 ? fmtPrice(quote.low52) : undefined);
-  const quoteCells: Array<Array<Record<string, any>>> = [];
+  const quoteCells: RichBlockTableCell[][] = [];
   for (let i = 0; i < quotePairs.length; i += 2) {
-    const row: Array<Record<string, any>> = [...quotePairs[i]];
+    const row: RichBlockTableCell[] = [...quotePairs[i]];
     if (quotePairs[i + 1]) row.push(...quotePairs[i + 1]);
     quoteCells.push(row);
   }
 
-  return [
-    {
-      type: 'paragraph',
-      text: [
-        { type: 'bold', text: [`${icon} ${quote.name}`] },
-        '\n\n代号：',
-        { type: 'cashtag', text: [`$${quote.symbol}`], cashtag: quote.symbol },
-        '\n\n',
-        { type: 'bold', text: ['当前价格：'] },
-        `${quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$'}${quote.price.toFixed(2)}\n`,
-        { type: 'bold', text: ['当日涨跌：'] },
-        `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n`,
-      ]
-    },
+  const paragraph = (text: RichText): RichBlock => ({ type: 'paragraph', text });
+  const table = (cells: RichBlockTableCell[][]): RichBlock => ({
+    type: 'table',
+    cells,
+    is_bordered: true,
+    is_striped: true,
+  });
+  const details = (summary: RichText, nestedBlocks: RichBlock[]): RichBlock => ({
+    type: 'details',
+    summary,
+    blocks: nestedBlocks,
+  });
+
+  const blocks: RichBlock[] = [
+    paragraph([
+      { type: 'bold', text: [`${icon} ${quote.name}`] },
+      '\n\n代号：',
+      { type: 'cashtag', text: [`$${quote.symbol}`], cashtag: quote.symbol },
+      '\n\n',
+      { type: 'bold', text: ['当前价格：'] },
+      `${quote.currency === 'CNY' ? '¥' : quote.currency === 'HKD' ? 'HK$' : '$'}${quote.price.toFixed(2)}\n`,
+      { type: 'bold', text: ['当日涨跌：'] },
+      `${sign}${quote.change.toFixed(2)} (${sign}${quote.changePercent.toFixed(2)}%)\n`,
+    ]),
     ...(quoteCells.length ? [
-      { type: 'paragraph', text: [{ type: 'bold', text: ['📋 当日行情：'] }] },
-      { type: 'table', cells: quoteCells, is_bordered: true, is_striped: true },
+      paragraph([{ type: 'bold', text: ['📋 当日行情：'] }]),
+      table(quoteCells),
     ] : []),
     ...(perfCells.length ? [
-      { type: 'paragraph', text: [{ type: 'bold', text: ['📊 阶段涨跌表现：'] }] },
-      { type: 'table', cells: perfCells, is_bordered: true, is_striped: true },
+      paragraph([{ type: 'bold', text: ['📊 阶段涨跌表现：'] }]),
+      table(perfCells),
     ] : []),
-    ...(recSection.length ? [{ type: 'paragraph', text: recSection }] : []),
+    ...(recSection.length ? [paragraph(recSection)] : []),
     ...(quote.financials?.length
       ? buildFinancialBlocks(quote.financials, quote.balanceSheets, quote.cashFlows, quote.currency)
       : []),
     ...(quote.profile ? [
-      {
-        type: 'details',
-        summary: { type: 'bold', text: ['🏢 公司简介'] },
-        blocks: [{ type: 'paragraph', text: [quote.profile] }],
-      },
+      details({ type: 'bold', text: ['🏢 公司简介'] }, [paragraph([quote.profile])]),
     ] : []),
-    {
-      type: 'paragraph',
-      text: [
-        { type: 'bold', text: ['市场：'] },
-        `${quote.market}\n`,
-        { type: 'bold', text: ['数据时间：'] },
-        `${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} `,
-        { type: 'italic', text: [delayBadge] },
-      ]
-    }
+    paragraph([
+      { type: 'bold', text: ['市场：'] },
+      `${quote.market}\n`,
+      { type: 'bold', text: ['数据时间：'] },
+      `${new Date(quote.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)} `,
+      { type: 'italic', text: [delayBadge] },
+    ]),
   ];
+  return blocks;
 }
 
 const fmtAmount = (val: number | undefined, currency?: string): string => {
@@ -173,14 +179,14 @@ const fmtAmount = (val: number | undefined, currency?: string): string => {
 const fmtPct = (val?: number | null): string =>
   val === undefined || val === null || isNaN(val) ? '--' : `${val > 0 ? '+' : ''}${val.toFixed(2)}%`;
 
-const header = (label: string): Record<string, any> => ({
+const header = (label: string): RichBlockTableCell => ({
   text: { type: 'bold', text: [label] },
   is_header: true,
   align: 'center',
   valign: 'middle',
 });
 
-const cell = (value: string): Record<string, any> => ({
+const cell = (value: string): RichBlockTableCell => ({
   text: value,
   align: 'center',
   valign: 'middle',
@@ -195,10 +201,10 @@ export function buildFinancialBlocks(
   balanceSheets: StockBalanceSheet[] | undefined,
   cashFlows: StockCashFlow[] | undefined,
   currency?: string,
-): Array<Record<string, any>> {
+): RichBlock[] {
   if (!financials?.length) return [];
 
-  const blocks: Array<Record<string, any>> = [];
+  const blocks: RichBlock[] = [];
 
   const recentQuarters = financials.slice(0, 4);
   const annuals = financials.filter((f) => f.isAnnual || f.date.endsWith('-12-31')).slice(0, 5);
@@ -294,9 +300,9 @@ function buildIncomeTableBlocks(
   currency: string | undefined,
   summary: string,
   metrics: Array<[string, (f: StockFinancial) => string]>,
-): Record<string, any> | null {
+): RichBlock | null {
   if (!financials.length) return null;
-  const rows: Array<Array<Record<string, any>>> = [
+  const rows: RichBlockTableCell[][] = [
     [
       header('指标'),
       ...financials.map((f) => header(`${f.period || ''}\n${f.date}`)),
@@ -324,9 +330,9 @@ function buildBalanceSheetFold(
   sheets: StockBalanceSheet[],
   currency?: string,
   title?: string,
-): Record<string, any> | null {
+): RichBlock | null {
   if (!sheets.length) return null;
-  const rows: Array<Array<Record<string, any>>> = [
+  const rows: RichBlockTableCell[][] = [
     [
       header('指标'),
       ...sheets.map((s) => header(`${s.date.slice(0, 7)}`)),
@@ -368,8 +374,8 @@ function buildBalanceSheetFold(
 function buildCashFlowFold(
   flows: StockCashFlow[],
   currency?: string,
-): Record<string, any> {
-  const rows: Array<Array<Record<string, any>>> = [
+): RichBlock {
+  const rows: RichBlockTableCell[][] = [
     [
       header('指标'),
       ...flows.map((f) => header(`${f.date.slice(0, 7)}`)),
@@ -448,8 +454,8 @@ export async function ensureQuoteFinancials(quote: StockQuote): Promise<StockQuo
         financials = await fetchRecentFinancials(quote.symbol, apiKey);
         balanceSheets = await fetchRecentBalanceSheets(quote.symbol, apiKey);
         cashFlows = await fetchRecentCashFlows(quote.symbol, apiKey);
-      } catch (err: any) {
-        if (err?.message?.includes('429')) quote.fmpRateLimited = true;
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message.includes('429')) quote.fmpRateLimited = true;
       }
       if (!financials && !balanceSheets) {
         quote.fmpRateLimited = true;
@@ -534,7 +540,7 @@ export function registerStockHandler(
       const detailUrl = `https://www.tradingview.com/symbols/${tvSymbol.replace(':', '-')}/`;
       const chartUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
-      await ctx.api.sendRichMessage(ctx.chat.id, { blocks: blocksPayload as any }, {
+      await ctx.api.sendRichMessage(ctx.chat.id, { blocks: blocksPayload }, {
         reply_markup: {
           inline_keyboard: [
             [

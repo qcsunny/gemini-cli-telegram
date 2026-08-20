@@ -111,7 +111,7 @@ function formatShortRelativeTime(date: Date): string {
 /**
  * List available sessions
  */
-export async function listAvailableSessions(config?: any): Promise<SessionListEntry[]> {
+export async function listAvailableSessions(_config?: unknown): Promise<SessionListEntry[]> {
   const sessions = getAgySessions();
   const entries = sessions.map((s) => {
     const meta = getSessionMetadata(s.uuid, s.mtime);

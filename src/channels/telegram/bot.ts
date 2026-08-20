@@ -14,16 +14,18 @@
  * Sub-modules:
  *   bot/rateLimiter.ts   — HTTP 429 backoff functions
  *   bot/channelReply.ts  — buildChannelReply + rich message pipeline
+ *   bot/withSession.ts   — session acquisition / typing indicator / cleanup
+ *   media/               — media extraction, download, single & album handling
  */
 
-import { Bot, Context, InputFile } from 'grammy';
+import { Bot, Context, InputFile, type ApiClientOptions } from 'grammy';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
+import type { RequestInit as UndiciRequestInit } from 'undici';
 import { run, sequentialize } from '@grammyjs/runner';
 import * as fs from 'fs/promises';
 import * as fssync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import * as crypto from 'crypto';
 import * as http from 'http';
 import { SessionManager } from '../../core/session.js';
 import { processMessage } from '../../core/messageLoop.js';
@@ -41,22 +43,39 @@ import { telegramFormatter } from './formatter.js';
 import { logger } from '../../utils/logger.js';
 import { ICONS, formatWelcome, buildMainKeyboard, escapeHtml } from './ui.js';
 import { messageCache } from '../../utils/messageCache.js';
-import { CONFIG_PATH, getBackendUrl, getTuningConfig, loadUserConfig } from '../../config/userConfig.js';
-import { buildChannelReply, clearDraftThrottleState } from './bot/channelReply.js';
+import { CONFIG_PATH, getBackendUrl, loadUserConfig } from '../../config/userConfig.js';
+import { buildChannelReply } from './bot/channelReply.js';
 import { startBackoffCleanup, reset429Backoff } from './bot/rateLimiter.js';
 
-const TYPING_KEEPALIVE_MS = 3000;
+import {
+  withSession,
+  resetStuckSession,
+  MAX_MESSAGE_PROCESSING_MS,
+} from './bot/withSession.js';
+import {
+  type TelegramMediaType,
+  type TelegramMediaInfo,
+  extractMediaInfo,
+  extractMediaFromMessage,
+  handleSingleMediaMessage,
+  flushAlbumBuffer,
+} from './media/mediaHandler.js';
+import { downloadTelegramFile } from './media/mediaDownloader.js';
+import type { MarketSegment } from '../../stock/service/dailyBriefing.js';
 
 export { record429Backoff, reset429Backoff, is429Error, get429RetryAfter } from './bot/rateLimiter.js';
 export { buildChannelReply } from './bot/channelReply.js';
 
 // ── Constants ──
 
-const TYPING_TTL_MS = 3_600_000;
-const DOWNLOAD_MAX_RETRIES = 3;
-const DOWNLOAD_RETRY_BASE_MS = 1000;
-const MAX_MESSAGE_PROCESSING_MS = 960_000;
 const HEALTH_CHECK_INTERVAL_MS = 60_000;
+const WATCHLIST_SEGMENTS: readonly MarketSegment[] = ['all', 'cn', 'hk', 'us', 'crypto'];
+
+function parseMarketSegment(value: string | undefined): MarketSegment {
+  return value && WATCHLIST_SEGMENTS.includes(value as MarketSegment)
+    ? value as MarketSegment
+    : 'all';
+}
 
 // Runner must subscribe to the same update types on every (re)start, otherwise
 // an auto-restart after a dropped getUpdates connection would silently lose
@@ -70,29 +89,6 @@ const RUNNER_ALLOWED_UPDATES = {
     'chosen_inline_result',
   ] as const,
 };
-
-// ── Media caption task instruction injection (#3) ──
-
-const MEDIA_CAPTION_TASK_MAP: Record<string, string> = {
-  '/translate': 'Translate the content in the image/document below between Chinese and English (or to the target language if one is specified), preserving the original meaning and formatting:\n\n',
-  '/summarize': 'Summarize the content in the image/document below concisely and list the key points. Reply in the same language as the user\'s message:\n\n',
-};
-
-/**
- * If a media caption starts with a supported task command (/translate, /summarize),
- * strip the command token and inject the corresponding task instruction as the
- * text prompt — while leaving the actual attachment pipeline untouched.
- * Returns undefined when no task command is present.
- */
-function injectMediaCaptionTask(caption?: string): string | undefined {
-  if (!caption) return undefined;
-  const trimmed = caption.trim();
-  const lowerToken = trimmed.split(/\s+/)[0]?.toLowerCase() ?? '';
-  const instruction = MEDIA_CAPTION_TASK_MAP[lowerToken];
-  if (!instruction) return undefined;
-  const rest = trimmed.slice(trimmed.indexOf(' ') + 1).trim();
-  return `${instruction}${rest}`;
-}
 
 // ── Types ──
 
@@ -147,330 +143,6 @@ function combineSignals(
   return { signal: ctrl.signal, cleanup };
 }
 
-/**
- * Gracefully kill any hung child process and reset the busy state of a stuck session.
- */
-function resetStuckSession(session: DaemonSession, reason: string): void {
-  logger.warn(`Resetting stuck session (childPid=${session.childPid ?? 'none'}): ${reason}`);
-  if (session.childPid !== undefined) {
-    try {
-      process.kill(session.childPid, 'SIGKILL');
-      logger.info(`Stuck session cleanup: sent SIGKILL to agy pid ${session.childPid}`);
-    } catch (killErr) {
-      logger.warn(`Stuck session cleanup: failed to kill pid ${session.childPid}: ${killErr}`);
-    }
-  }
-  session.abortController.abort(reason);
-  session.abortController = new AbortController();
-  session.busy = false;
-  session._busySince = undefined;
-  session.childPid = undefined;
-}
-
-/**
- * Wrap a handler with session acquisition, typing indicator, and cleanup.
- */
-async function withSession(
-  sessionManager: SessionManager,
-  ctx: Context,
-  defaultOptions: SessionOptions,
-  handler: (session: DaemonSession, channelReply: ChannelReply) => Promise<void>,
-  replyToMessageId?: number,
-): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-  const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
-
-  let session: DaemonSession;
-  try {
-    session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
-  } catch (e) {
-    logger.error(`Failed to create session for chat ${chatId}: ${e}`);
-    await ctx.reply(`${ICONS.error} Failed to initialize session: ${e}`);
-    return;
-  }
-
-  // Check if session appears stuck (busy for too long)
-  if (session.busy) {
-    const now = Date.now();
-    const busySince = session._busySince;
-    if (busySince && now - busySince > MAX_MESSAGE_PROCESSING_MS) {
-      resetStuckSession(session, 'Session timeout (stuck)');
-      try {
-        await ctx.reply(`${ICONS.warning} Previous operation timed out and was cancelled. Please try again.`);
-      } catch { /* ignore */ }
-      return;
-    }
-    
-    await ctx.reply(
-      `${ICONS.warning} Still processing your previous message. Use /cancel to abort it.`,
-    );
-    return;
-  }
-
-  // Ensure we have a fresh abort controller if the previous one was aborted
-  if (session.abortController.signal.aborted) {
-    logger.debug(`Session for chat ${chatId} had an aborted signal. Resetting abort controller.`);
-    session.abortController = new AbortController();
-  }
-
-  session.busy = true;
-  (session as { _busySince?: number })._busySince = Date.now();
-
-  // Reset circuit breaker for rich drafts on each new user-initiated session interaction
-  if (session.draftsDisabled || (session.consecutiveDraftFailures && session.consecutiveDraftFailures > 0)) {
-    logger.info(`Resetting drafts circuit breaker for chat ${chatId} as a new user message session has started.`);
-    session.draftsDisabled = false;
-    session.consecutiveDraftFailures = 0;
-  }
-
-  session.typingInterval = setInterval(() => {
-    ctx.replyWithChatAction('typing').catch(() => {});
-  }, TYPING_KEEPALIVE_MS);
-  ctx.replyWithChatAction('typing').catch(() => {});
-
-  const typingTtl = setTimeout(() => {
-    logger.warn(
-      `Chat ${chatId}: typing TTL exceeded (${TYPING_TTL_MS}ms), auto-clearing`,
-    );
-    if (session.typingInterval) {
-      clearInterval(session.typingInterval);
-      session.typingInterval = undefined;
-    }
-  }, TYPING_TTL_MS);
-
-  const parseMode = session.settings?.telegram?.parseMode || 'RichText';
-  const reply = buildChannelReply(ctx, chatId, parseMode, session, replyToMessageId);
-
-
-  try {
-    await handler(session, reply);
-  } catch (e: any) {
-    logger.error(`Error in handler for chat ${chatId}: ${e}`);
-    const isBlocked = e?.description?.includes('bot was blocked by the user') || e?.error_code === 403;
-    if (isBlocked) {
-      logger.warn(`Bot was blocked by user in chat ${chatId}. Cleaning up session.`);
-      // Cleanup must not mask the original handler error, so swallow its own failure.
-      await sessionManager.destroy(chatId, threadId).catch((err: unknown) => {
-        logger.warn(`Session cleanup failed for chat ${chatId}: ${err}`);
-      });
-      return;
-    }
-    try {
-      await ctx.reply(
-        `${ICONS.error} <b>Operation failed:</b>\n<i>${e instanceof Error ? e.message : String(e)}</i>`,
-        { parse_mode: 'HTML' }
-      );
-    } catch {
-      // ignore reply failures
-    }
-  } finally {
-    clearTimeout(typingTtl);
-    if (session.typingInterval) {
-      clearInterval(session.typingInterval);
-      session.typingInterval = undefined;
-    }
-    session.busy = false;
-    (session as { _busySince?: number })._busySince = undefined;
-    // Drop per-chat draft pacing/backoff state so the next turn starts fresh.
-    clearDraftThrottleState(chatId);
-  }
-}
-
-/**
- * Download a file from Telegram with retry + exponential backoff.
- * Uses ctx.api.token instead of env var so --token flag works.
- */
-async function downloadTelegramFile(
-  ctx: Context,
-  fileId: string,
-  proxyAgent?: ProxyAgent,
-): Promise<string> {
-  const file = await ctx.api.getFile(fileId);
-  if (!file.file_path) {
-    throw new Error('Telegram file_path not found.');
-  }
-
-  const fileUrl = `https://api.telegram.org/file/bot${ctx.api.token}/${file.file_path}`;
-
-  let lastError: Error | undefined;
-  for (let attempt = 1; attempt <= DOWNLOAD_MAX_RETRIES; attempt++) {
-    try {
-      const response = await undiciFetch(fileUrl, {
-        dispatcher: proxyAgent,
-      });
-      if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: ${response.statusText}`,
-        );
-      }
-
-      const tempDir = path.join(os.tmpdir(), 'gemini-cli-telegram-media');
-      await fs.mkdir(tempDir, { recursive: true });
-
-      // Use unique filename to avoid collisions from concurrent downloads
-      const ext = path.extname(file.file_path) || '';
-      const localFilePath = path.join(
-        tempDir,
-        `${crypto.randomUUID()}${ext}`,
-      );
-
-      const maxBytes = getTuningConfig().maxDownloadBytes;
-      const contentLength = Number(response.headers?.get?.('content-length') || 0);
-      if (contentLength > maxBytes) {
-        throw new Error(`Telegram file is too large (${contentLength} bytes, limit ${maxBytes})`);
-      }
-      if (!response.body) {
-        const arrayBuffer = await response.arrayBuffer();
-        if (arrayBuffer.byteLength > maxBytes) throw new Error(`Telegram file exceeded the ${maxBytes}-byte download limit`);
-        await fs.writeFile(localFilePath, Buffer.from(arrayBuffer));
-        return localFilePath;
-      }
-      const fileHandle = await fs.open(localFilePath, 'wx');
-      let received = 0;
-      try {
-        for await (const chunk of response.body) {
-          const buffer = Buffer.from(chunk);
-          received += buffer.length;
-          if (received > maxBytes) {
-            throw new Error(`Telegram file exceeded the ${maxBytes}-byte download limit`);
-          }
-          await fileHandle.write(buffer);
-        }
-      } catch (error) {
-        await fileHandle.close().catch(() => {});
-        await fs.unlink(localFilePath).catch(() => {});
-        throw error;
-      }
-      await fileHandle.close();
-
-      return localFilePath;
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      if (attempt < DOWNLOAD_MAX_RETRIES) {
-        const delay = DOWNLOAD_RETRY_BASE_MS * Math.pow(2, attempt - 1);
-        logger.warn(
-          `File download attempt ${attempt} failed: ${lastError.message}. Retrying in ${delay}ms...`,
-        );
-        await new Promise((r) => setTimeout(r, delay));
-      }
-    }
-  }
-
-  throw new Error(
-    `Failed to download file after ${DOWNLOAD_MAX_RETRIES} attempts: ${lastError?.message}`,
-  );
-}
-
-/** Supported Telegram media types for extraction. */
-type TelegramMediaType = 'photo' | 'voice' | 'audio' | 'video' | 'document' | 'sticker' | 'animation' | 'video_note';
-
-/** Extracted info from a Telegram media message. */
-interface TelegramMediaInfo {
-  fileId: string;
-  mimeType: string;
-  caption?: string;
-  fileName?: string;
-}
-
-/** Extract media info from a Telegram message if it carries one. */
-function extractMediaFromMessage(
-  msg: any
-): {
-  type: TelegramMediaType;
-  fileId: string;
-  mimeType: string;
-  fileName?: string;
-  caption?: string;
-} | undefined {
-  if (!msg) return undefined;
-  if (msg.photo && msg.photo.length > 0) {
-    const photo = msg.photo[msg.photo.length - 1];
-    return { type: 'photo', fileId: photo.file_id, mimeType: 'image/jpeg', caption: msg.caption };
-  }
-  if (msg.voice) {
-    return { type: 'voice', fileId: msg.voice.file_id, mimeType: msg.voice.mime_type || 'audio/ogg', caption: msg.caption };
-  }
-  if (msg.audio) {
-    return { type: 'audio', fileId: msg.audio.file_id, mimeType: msg.audio.mime_type || 'audio/mpeg', caption: msg.caption, fileName: msg.audio.file_name };
-  }
-  if (msg.video) {
-    return { type: 'video', fileId: msg.video.file_id, mimeType: msg.video.mime_type || 'video/mp4', caption: msg.caption, fileName: msg.video.file_name };
-  }
-  if (msg.document) {
-    return { type: 'document', fileId: msg.document.file_id, mimeType: msg.document.mime_type || 'application/octet-stream', caption: msg.caption, fileName: msg.document.file_name };
-  }
-  if (msg.sticker) {
-    return { type: 'sticker', fileId: msg.sticker.file_id, mimeType: msg.sticker.mime_type || 'image/webp', caption: msg.caption, fileName: msg.sticker.emoji };
-  }
-  if (msg.animation) {
-    return { type: 'animation', fileId: msg.animation.file_id, mimeType: msg.animation.mime_type || 'video/mp4', caption: msg.caption, fileName: msg.animation.file_name };
-  }
-  if (msg.video_note) {
-    return { type: 'video_note', fileId: msg.video_note.file_id, mimeType: 'video/mp4', caption: msg.caption, fileName: 'video_note.mp4' };
-  }
-  return undefined;
-}
-
-/**
- * Extract file ID, MIME type, and optional file name from a Telegram media message.
- */
-function extractMediaInfo(
-  ctx: Context,
-  mediaType: TelegramMediaType,
-): TelegramMediaInfo | undefined {
-  const msg = ctx.message as {
-    caption?: string;
-    photo?: { file_id: string }[];
-    voice?: { file_id: string; mime_type?: string };
-    audio?: { file_id: string; mime_type?: string; file_name?: string };
-    video?: { file_id: string; mime_type?: string; file_name?: string };
-    document?: { file_id: string; mime_type?: string; file_name?: string };
-    sticker?: { file_id: string; mime_type?: string; emoji?: string };
-    animation?: { file_id: string; mime_type?: string; file_name?: string };
-    video_note?: { file_id: string };
-  } | undefined;
-  if (!msg) return undefined;
-  const caption = msg.caption;
-
-  if (mediaType === 'photo') {
-    const photos = msg.photo;
-    if (!photos || photos.length === 0) return undefined;
-    const photo = photos[photos.length - 1];
-    if (!photo) return undefined;
-    return { fileId: photo.file_id, mimeType: 'image/jpeg', caption };
-  } else if (mediaType === 'voice') {
-    const voice = msg.voice;
-    if (!voice) return undefined;
-    return { fileId: voice.file_id, mimeType: voice.mime_type || 'audio/ogg', caption };
-  } else if (mediaType === 'audio') {
-    const audio = msg.audio;
-    if (!audio) return undefined;
-    return { fileId: audio.file_id, mimeType: audio.mime_type || 'audio/mpeg', caption, fileName: audio.file_name };
-  } else if (mediaType === 'video') {
-    const video = msg.video;
-    if (!video) return undefined;
-    return { fileId: video.file_id, mimeType: video.mime_type || 'video/mp4', caption, fileName: video.file_name };
-  } else if (mediaType === 'document') {
-    const doc = msg.document;
-    if (!doc) return undefined;
-    return { fileId: doc.file_id, mimeType: doc.mime_type || 'application/octet-stream', caption, fileName: doc.file_name };
-  } else if (mediaType === 'sticker') {
-    const sticker = msg.sticker;
-    if (!sticker) return undefined;
-    return { fileId: sticker.file_id, mimeType: sticker.mime_type || 'image/webp', caption, fileName: sticker.emoji };
-  } else if (mediaType === 'animation') {
-    const animation = msg.animation;
-    if (!animation) return undefined;
-    return { fileId: animation.file_id, mimeType: animation.mime_type || 'video/mp4', caption, fileName: animation.file_name };
-  } else if (mediaType === 'video_note') {
-    const videoNote = msg.video_note;
-    if (!videoNote) return undefined;
-    return { fileId: videoNote.file_id, mimeType: 'video/mp4', caption, fileName: 'video_note.mp4' };
-  }
-  return undefined;
-}
-
 export class TelegramBot {
   private bot: Bot;
   private runner: ReturnType<typeof run> | undefined;
@@ -490,7 +162,7 @@ export class TelegramBot {
   private static readonly ALBUM_FLUSH_MS = 800;
 
   constructor(token: string, options: TelegramBotOptions = {}) {
-    const clientConfig: any = {};
+    const clientConfig: ApiClientOptions = {};
     if (options.proxy) {
       this.proxyAgent = new ProxyAgent({
         uri: options.proxy,
@@ -507,8 +179,16 @@ export class TelegramBot {
       clientConfig.baseFetchConfig = {
         compress: true,
       };
-      clientConfig.fetch = async (url: any, init: any) => {
-        const urlStr = (typeof url === 'string' ? url : url?.href ?? '');
+      clientConfig.fetch = async (url: unknown, init: unknown) => {
+        const requestUrl = (() => {
+          if (typeof url === 'string' || url instanceof URL) return url;
+          if (typeof url === 'object' && url !== null && 'url' in url && typeof url.url === 'string') {
+            return url.url;
+          }
+          throw new TypeError('Telegram API fetch received an invalid URL');
+        })();
+        const requestInit = (init && typeof init === 'object' ? init : {}) as UndiciRequestInit;
+        const urlStr = requestUrl.toString();
         const isGetUpdates = urlStr.includes('/getUpdates');
         const isInlineAnswer = urlStr.includes('/answerInlineQuery');
 
@@ -516,19 +196,19 @@ export class TelegramBot {
         if (isGetUpdates) {
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort('pollAgent timeout (60s)'), 60000);
-          const combined = init?.signal
-            ? combineSignals(ctrl.signal, init.signal)
+          const combined = requestInit.signal
+            ? combineSignals(ctrl.signal, requestInit.signal)
             : undefined;
           try {
             const signal = combined ? combined.signal : ctrl.signal;
-            const r = await undiciFetch(url, { ...init, dispatcher: this.pollAgent, signal });
+            const r = await undiciFetch(requestUrl, { ...requestInit, dispatcher: this.pollAgent, signal });
             clearTimeout(timer);
             combined?.cleanup();
             return r;
-          } catch (e: any) {
+          } catch (e: unknown) {
             clearTimeout(timer);
             combined?.cleanup();
-            logger.warn(`[pollAgent] getUpdates connection reset or timeout: ${e?.message || e}`);
+            logger.warn(`[pollAgent] getUpdates connection reset or timeout: ${e instanceof Error ? e.message : String(e)}`);
             throw e;
           }
         }
@@ -540,12 +220,12 @@ export class TelegramBot {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), 4000);
             try {
-              return await undiciFetch(url, {
-                ...init,
+              return await undiciFetch(requestUrl, {
+                ...requestInit,
                 dispatcher: inlineAgent,
                 signal: ctrl.signal,
               });
-            } catch (e: any) {
+            } catch (e: unknown) {
               clearTimeout(timer);
               if (attempt === 1) throw e;
             }
@@ -553,27 +233,27 @@ export class TelegramBot {
         }
 
         // Normal API calls: keep grammy's signal, add 25s safety timeout
-        let lastErr: any;
+        let lastErr: unknown;
         for (let attempt = 0; attempt < 3; attempt++) {
           let combined: ReturnType<typeof combineSignals> | undefined;
           try {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), 25000);
-            combined = init?.signal
-              ? combineSignals(ctrl.signal, init.signal)
+            combined = requestInit.signal
+              ? combineSignals(ctrl.signal, requestInit.signal)
               : undefined;
             const signal = combined ? combined.signal : ctrl.signal;
-            const res = await undiciFetch(url, {
-              ...init,
+            const res = await undiciFetch(requestUrl, {
+              ...requestInit,
               dispatcher: this.proxyAgent,
               signal,
             });
             clearTimeout(timer);
             combined?.cleanup();
             return res;
-          } catch (e: any) {
+          } catch (e: unknown) {
             combined?.cleanup();
-            if (init?.signal?.aborted) throw e;
+            if (requestInit.signal?.aborted) throw e;
             lastErr = e;
             await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
           }
@@ -640,14 +320,14 @@ export class TelegramBot {
           const subCmd = parts[0]?.toLowerCase();
           if (subCmd === 'report' || subCmd === 'briefing') {
             const segArg = (parts[1]?.toLowerCase() || 'all');
-            const segment = ['cn', 'hk', 'us', 'crypto', 'all'].includes(segArg) ? segArg : 'all';
+            const segment = parseMarketSegment(segArg);
             const userConfig = loadUserConfig();
             const allowedUsers = userConfig?.allowedUsers || [];
             const userId = chatId > 0 ? chatId : (allowedUsers[0] || 0);
 
             logger.info(`Routing scheduled task message to watchlist report handler: segment=${segment}, userId=${userId}`);
             const { handleReportGeneration } = await import('./commands/watchlistHandler.js');
-            await handleReportGeneration(threadCtx, userId, segment as any);
+            await handleReportGeneration(threadCtx, userId, segment);
             return;
           }
         }
@@ -1066,7 +746,7 @@ export class TelegramBot {
           input.media = [
             {
               type: repliedMedia.type,
-              path: tempFilePath,
+              path: tempFilePath!,
               mimeType: repliedMedia.mimeType,
               fileName: repliedMedia.fileName,
             },
@@ -1241,7 +921,7 @@ export class TelegramBot {
     ctx: Context,
     mediaType: TelegramMediaType,
   ): Promise<void> {
-    const groupId = (ctx.message as any)?.media_group_id as string | undefined;
+    const groupId = ctx.message?.media_group_id;
     if (!groupId) {
       await this.handleMediaMessage(ctx, mediaType);
       return;
@@ -1272,172 +952,25 @@ export class TelegramBot {
   }
 
   private async flushAlbum(groupId: string): Promise<void> {
-    const entry = this.albumBuffer.get(groupId);
-    this.albumBuffer.delete(groupId);
-    if (!entry || entry.items.length === 0) return;
-
-    const firstCtx = entry.items[0].ctx;
-
-    if (firstCtx.chat?.type === 'group' || firstCtx.chat?.type === 'supergroup') {
-      const botUsername = firstCtx.me.username;
-      const targetsBot = entry.items.some(({ info, ctx }) =>
-        (info.caption ?? '').includes(`@${botUsername}`) || ctx.message?.reply_to_message?.from?.id === ctx.me.id,
-      );
-      if (!targetsBot) return;
-    }
-
-    // Telegram puts the album caption on the last media item; pick the last non-empty one.
-    let captionText = '';
-    for (const item of entry.items) {
-      if (item.info.caption) captionText = item.info.caption;
-    }
-
-    // Clean up the mention from caption text for group chats
-    if (firstCtx.chat?.type === 'group' || firstCtx.chat?.type === 'supergroup') {
-      const botUsername = firstCtx.me.username;
-      const mentionRegex = new RegExp(`@${botUsername}\\b`, 'gi');
-      captionText = captionText.replace(mentionRegex, '').trim();
-    }
-
-    const media: {
-      type: TelegramMediaType;
-      path: string;
-      mimeType?: string;
-      fileName?: string;
-    }[] = [];
-    const tempPaths: string[] = [];
-
-    try {
-      for (const item of entry.items) {
-        const tempFilePath = await downloadTelegramFile(
-          item.ctx,
-          item.info.fileId,
-          this.proxyAgent,
-        );
-        tempPaths.push(tempFilePath);
-        media.push({
-          type: item.mediaType,
-          path: tempFilePath,
-          mimeType: item.info.mimeType,
-          fileName: item.info.fileName,
-        });
-      }
-    } catch (e) {
-      logger.error(`Failed to download album files: ${e}`);
-      for (const p of tempPaths) {
-        await fs.unlink(p).catch(() => undefined);
-      }
-      return;
-    }
-
-    await withSession(
+    await flushAlbumBuffer(
+      this.albumBuffer,
+      groupId,
       this.sessionManager,
-      firstCtx,
       this.defaultOptions,
-      async (session, channelReply) => {
-        const taskText = injectMediaCaptionTask(captionText);
-        const multimodalInput: MultimodalInput = {
-          text: taskText ?? captionText,
-          media,
-        };
-        await processMessage(
-          session,
-          multimodalInput,
-          channelReply,
-          telegramFormatter,
-        );
-        reset429Backoff(Number(session.chatId));
-      },
+      this.proxyAgent,
     );
-
-    for (const p of tempPaths) {
-      await fs
-        .unlink(p)
-        .catch((e) => logger.warn(`Failed to delete temp file: ${e}`));
-    }
   }
 
   private async handleMediaMessage(
     ctx: Context,
     mediaType: TelegramMediaType,
   ): Promise<void> {
-    const info = extractMediaInfo(ctx, mediaType);
-    if (!info) {
-      await ctx.reply(`${ICONS.error} Could not retrieve ${mediaType} file info.`);
-      return;
-    }
-
-    let captionText = info.caption ?? '';
-
-    // In group chats, only respond if the bot is mentioned or replied to
-    if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
-      const botUsername = ctx.me.username;
-      const isMentioned = captionText.includes(`@${botUsername}`);
-      const isReplyToBot = ctx.message?.reply_to_message?.from?.id === ctx.me.id;
-
-      if (!isMentioned && !isReplyToBot) {
-        return;
-      }
-
-      // Clean up the mention from caption text
-      if (isMentioned) {
-        const mentionRegex = new RegExp(`@${botUsername}\\b`, 'gi');
-        captionText = captionText.replace(mentionRegex, '').trim();
-        if (ctx.message && ctx.message.caption) {
-          ctx.message.caption = captionText;
-        }
-      }
-    }
-
-    let tempFilePath: string | undefined;
-
-    await withSession(
-      this.sessionManager,
+    await handleSingleMediaMessage(
       ctx,
+      mediaType,
+      this.sessionManager,
       this.defaultOptions,
-      async (session, channelReply) => {
-        tempFilePath = await downloadTelegramFile(ctx, info.fileId, this.proxyAgent);
-
-        const taskText = injectMediaCaptionTask(captionText);
-        let promptText = taskText ?? captionText;
-        if (!promptText || !promptText.trim()) {
-          if (mediaType === 'voice' || mediaType === 'audio') {
-            promptText = '请转写并理解这段语音音频内容，并根据其中的内容或指令进行回答。';
-          } else if (mediaType === 'document') {
-            promptText = '请阅读并分析该文件的核心内容。';
-          } else if (mediaType === 'photo') {
-            promptText = '请分析这幅图片的内容。';
-          }
-        }
-        const multimodalInput: MultimodalInput = {
-          text: promptText,
-          media: [
-            {
-              type: mediaType,
-              path: tempFilePath,
-              mimeType: info.mimeType,
-              fileName: info.fileName,
-            },
-          ],
-        };
-
-        try {
-          await processMessage(
-            session,
-            multimodalInput,
-            channelReply,
-            telegramFormatter,
-          );
-        } finally {
-          if (tempFilePath) {
-            await fs
-              .unlink(tempFilePath)
-              .catch((e) =>
-                logger.warn(`Failed to delete temp file: ${e}`),
-              );
-          }
-        }
-      },
+      this.proxyAgent,
     );
   }
 }

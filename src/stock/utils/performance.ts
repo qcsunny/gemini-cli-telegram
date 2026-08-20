@@ -12,7 +12,7 @@
 
 import type { CandleDataPoint } from '../types.js';
 
-export interface StockPerformance {
+interface StockPerformance {
   change1M?: number;
   change3M?: number;
   change6M?: number;

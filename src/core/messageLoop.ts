@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-
 /**
  * @file messageLoop.ts
  * @description Core message execution loop and LLM orchestrator.
@@ -25,17 +24,35 @@ import { messageCache } from '../utils/messageCache.js';
 import { getTuningConfig, getDefaultModel } from '../config/userConfig.js';
 import { getEffectiveModelOrder, getChannelModel, buildTierAwareChain } from './modelRegistry.js';
 import { classifyAndRouteQuery, AUTO_MODEL_NAME } from './router.js';
-import { isBackendAvailable, markBackendFailed, markBackendHealthy, isConnectionError } from './backendHealth.js';
+import { isBackendAvailable, markBackendFailed, markBackendHealthy } from './backendHealth.js';
 
 import { withTimeout } from './messageLoop/threading.js';
+import { stripThoughtTags } from '../utils/textUtils.js';
 import { stripWholeMessageCodeFence, normalizeCodeFences, stripSearchResultPayloads } from './messageLoop/textUtils.js';
 import { detectAndSendNewArtifacts } from './messageLoop/artifact.js';
 import { forceReleaseDraft } from '../channels/telegram/bot/channelReply.js';
+import { evaluateRetryState } from './messageLoop/retry.js';
 
 const sleep = (ms: number) => {
   if (process.env['VITEST'] || process.env['NODE_ENV'] === 'test') return Promise.resolve();
   return new Promise(r => setTimeout(r, ms));
 };
+
+/**
+ * Build the structured message payload for finalizing a reply.
+ * Centralizes the repeated finalContent construction that was duplicated
+ * 3 times in the finalize path.
+ */
+function buildFinalContent(
+  answerBuffer: string,
+  thoughtBuffer: string,
+  footerParts: string[],
+): { content: string; thought?: string; footerText?: string } {
+  const content = { content: answerBuffer.trim() } as { content: string; thought?: string; footerText?: string };
+  if (thoughtBuffer.trim()) content.thought = thoughtBuffer.trim();
+  if (footerParts.length > 0) content.footerText = `⚙️ ${footerParts.join(' · ')}`;
+  return content;
+}
 
 // agy's text mode streams small chunks while generating but dumps the remaining
 // ~50-80% of the answer in one final stdout write at process exit. Any single
@@ -56,13 +73,16 @@ const STREAM_SLICE_GAP_MS = 400;
 // tick checks reply.usesEphemeralDraft each time.
 const DRAFT_HEARTBEAT_MS = 20_000;
 
-
 // Callers use getTuningConfig() at runtime so SIGHUP-triggered cache clears take effect.
 
 /**
- * Channel-agnostic message processing loop using local agy CLI wrapper.
- * Streams output to the channel in real-time, manages session mappings,
- * and handles autonomous Autopilot loops entirely on the Node side.
+ * Channel-agnostic message processing loop. Streams output to the channel in
+ * real-time, manages session state, and handles autonomous Autopilot loops
+ * entirely on the Node side.
+ *
+ * The concrete model backend (local agy CLI, deepseek, web2api, opencode,
+ * claude, codex) is resolved per-model inside the loop and walked as a
+ * monotonic fallback chain on failure.
  */
 function agyPrintTimeout(): string {
   const tuning = getTuningConfig();
@@ -115,7 +135,7 @@ export async function processMessage(
   let lastEditTime = 0;
   let isFinished = false;
   let isDone = false;
-  let activeUpdatePromise: Promise<any> = Promise.resolve();
+  let activeUpdatePromise: Promise<void> = Promise.resolve();
 
   const hasRichPrimitives = !!reply.sendRichDraft;
 
@@ -126,13 +146,7 @@ export async function processMessage(
   // Render the whole authoritative content to the wire (draft while streaming,
   // real message once finalized).
   const flushBlocks = async () => {
-    const stripped = answerBuffer.trim()
-      .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
-      .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
-      .replace(/<\/?thought[^>]*>/gi, '')
-      .replace(/<\/?thinking[^>]*>/gi, '')
-      .replace(/<\/?think[^>]*>/gi, '')
-      .trim();
+    const stripped = stripThoughtTags(answerBuffer.trim());
     const content: { content: string; thought?: string } = {
       content: stripped,
     };
@@ -178,9 +192,11 @@ export async function processMessage(
           return;
         }
 
-        // ── Rich HTML streaming path ──
-        // Send the full content each time via sendRichDraft (HTML mode).
-        // sendRichDraft handles <tg-thinking> animation and details blocks.
+        // ── Rich streaming path ──
+        // Render the whole authoritative content as native 10.2 RichBlocks via
+        // sendRichDraft/editRichDraft (draft while streaming, real message on
+        // finalize). flushBlocks strips thought tags and keeps a single
+        // append-only draft bubble.
         await flushBlocks();
       } catch (e) {
         logger.warn(`[messageLoop] Failed to update streaming message: ${e}`);
@@ -232,7 +248,7 @@ export async function processMessage(
       let failsForModel = 0;     // consecutive failures on the current model
       let attempts = 0;
       let success = false;
-      let lastResult: any = null;
+      let lastResult: AgyRunResult | null = null;
       let lastErrorMessage = '';
       let didTimeout = false;
 
@@ -469,83 +485,50 @@ export async function processMessage(
 
           const stderr = result.stderr || '';
           const output = result.output || answerBuffer;
+          const evaluation = evaluateRetryState(stderr || output, failsForModel, retriesPerModel);
 
-          // Backend health: mark backend failed on connection-level errors
-          if (isConnectionError(result.stderr) || isConnectionError(result.output)) {
+          if (evaluation.isConnection) {
             markBackendFailed(getChannelModel(modelToUse));
           }
-
-          // ANY non-success is eligible for a retry/downgrade (rate-limit,
-          // auth error, process termination, hard timeout, generic error).
-          const parsed = parseErrorMessage(stderr || output || 'Unknown error');
-          const isRateLimited = parsed.type === 'rate_limit';
-          const isPermanent = parsed.type === 'connection' || parsed.type === 'auth' || parsed.type === 'critical';
-          const reason = parsed.message;
-
-          // Adaptive skip: permanently failed models (connection errors) are
-          // excluded from the rest of this session's fallback chain.
-          if (isPermanent) {
+          if (evaluation.isPermanent) {
             skipModels.add(modelToUse);
-            logger.info(`[messageLoop] Permanently skipping model "${modelToUse}" — connection error`);
+            logger.info(`[messageLoop] Permanently skipping model "${modelToUse}" — permanent failure`);
           }
-
-          // Exponential backoff on rate-limit before retry
-          if (isRateLimited && failsForModel < retriesPerModel) {
-            const backoffMs = Math.min(1000 * Math.pow(2, failsForModel), 30000);
-            logger.info(`[messageLoop] Rate-limited, backing off ${backoffMs}ms before retry`);
-            await sleep(backoffMs);
+          if (evaluation.backoffMs > 0) {
+            logger.info(`[messageLoop] Rate-limited, backing off ${evaluation.backoffMs}ms before retry`);
+            await sleep(evaluation.backoffMs);
           }
 
           failsForModel++;
-          // User cancelled (e.g. /cancel): stop retrying immediately instead of
-          // burning through the retry/downgrade budget pointlessly.
           if (signal.aborted) break;
           if (failsForModel < retriesPerModel) continue; // retry same model
-          if (await advanceModel(reason)) continue;          // downgrade to next
-          break;                                            // last model failed → terminate
-        } catch (e: any) {
-          logger.error(`[messageLoop] Attempt ${attempts} error: ${e?.message || e}`);
+          if (await advanceModel(evaluation.reason)) continue; // downgrade to next
+          break; // last model failed → terminate
+        } catch (e: unknown) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          logger.error(`[messageLoop] Attempt ${attempts} error: ${errMsg}`);
           if (signal.aborted) throw e;
-          // Remember whether the final failure was a hard/inactivity timeout so
-          // the terminal error message can still say "timed out" even though
-          // withTimeout rejects (no AgyRunResult carries isTimeout=true).
-          if (e?.isTimeout) didTimeout = true;
+          if (typeof e === 'object' && e !== null && 'isTimeout' in e && e.isTimeout === true) didTimeout = true;
+          lastErrorMessage = errMsg;
+          const evaluation = evaluateRetryState(e, failsForModel, retriesPerModel);
 
-          // Backend health: mark backend failed on connection-level errors
-          if (isConnectionError(e)) {
+          if (evaluation.isConnection) {
             markBackendFailed(getChannelModel(modelToUse));
           }
-
-          // ANY thrown error is eligible for a retry/downgrade (including
-          // hard-timeout / inactivity kills from withTimeout, auth errors,
-          // process termination, and generic failures) — not just rate-limits.
-          const errMsg = e?.message || String(e);
-          lastErrorMessage = errMsg;
-          const parsed = parseErrorMessage(errMsg);
-          const isRateLimited = parsed.type === 'rate_limit';
-          const isEofError = errMsg.includes('EOF') || errMsg.includes('streamGenerateContent') || errMsg.includes('daily-cloudcode-pa');
-          const isPermanent = isConnectionError(e) || isEofError || parsed.type === 'auth' || parsed.type === 'critical';
-          const reason = isEofError ? 'Google cloud API connection dropped (EOF network fluctuation)' : parsed.message;
-
-          // Adaptive skip: permanently failed models are excluded from the rest of this session
-          if (isPermanent) {
+          if (evaluation.isPermanent) {
             skipModels.add(modelToUse);
             logger.info(`[messageLoop] Permanently skipping model "${modelToUse}" — connection error`);
           }
-
-          // Exponential backoff on rate-limit before retry
-          if (isRateLimited && failsForModel < retriesPerModel) {
-            const backoffMs = Math.min(1000 * Math.pow(2, failsForModel), 30000);
-            logger.info(`[messageLoop] Rate-limited, backing off ${backoffMs}ms before retry`);
-            await sleep(backoffMs);
+          if (evaluation.backoffMs > 0) {
+            logger.info(`[messageLoop] Rate-limited, backing off ${evaluation.backoffMs}ms before retry`);
+            await sleep(evaluation.backoffMs);
           }
 
           failsForModel++;
-          // User cancelled (e.g. /cancel): stop retrying immediately.
           if (signal.aborted) break;
           if (failsForModel < retriesPerModel) continue; // retry same model
-          if (await advanceModel(reason)) continue;          // downgrade to next
-          break;                                            // last model failed → terminate
+          if (await advanceModel(evaluation.reason)) continue; // downgrade to next
+          break; // last model failed → terminate
         }
       }
 
@@ -595,13 +578,7 @@ export async function processMessage(
       // tags survived the extractThoughtAndContent step (e.g. an upstream interrupt
       // mid-tag while body text was already streaming), strip them here so they never
       // leak as literal text into the user-facing final message.
-      answerBuffer = answerBuffer
-        .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
-        .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
-        .replace(/<\/?thought[^>]*>/gi, '')
-        .replace(/<\/?thinking[^>]*>/gi, '')
-        .replace(/<\/?think[^>]*>/gi, '')
-        .trim();
+      answerBuffer = stripThoughtTags(answerBuffer);
 
       // Recover this turn's complete non-body output (planner reasoning + tool
       // calls + tool results) from agy's transcript. The transcript is a strict
@@ -657,11 +634,7 @@ export async function processMessage(
         if (currentMessageId !== null) {
           phase = 'footer';
           try {
-            const finalContent: { content: string; thought?: string; footerText?: string } = {
-              content: answerBuffer.trim(),
-            };
-            if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
-            if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
+            const finalContent = buildFinalContent(answerBuffer, thoughtBuffer, footerParts);
 
             logger.info(`[TRACE finalize] content.len=${finalContent.content.length} thought.len=${(finalContent.thought || '').length} thought.preview="${(finalContent.thought || '').slice(0, 80).replace(/\n/g, '\\n')}" hasSendRich=${!!reply.sendRich} hasEditRich=${!!reply.editRich}`);
 
@@ -686,11 +659,7 @@ export async function processMessage(
           } catch (e) {
             logger.warn(`[messageLoop] Finalize failed: ${e}`);
             try {
-              const finalContent: { content: string; thought?: string; footerText?: string } = {
-                content: answerBuffer.trim(),
-              };
-              if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
-              if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
+              const finalContent = buildFinalContent(answerBuffer, thoughtBuffer, footerParts);
               if (reply.editRich) {
                 const persistedId = await reply.editRich!(currentMessageId, finalContent);
                 if (typeof persistedId === 'number' && persistedId > 0) currentMessageId = persistedId;
@@ -716,11 +685,7 @@ export async function processMessage(
         } else if (answerBuffer.trim()) {
           // No draft was ever created (e.g. model outputs all at once).
           try {
-            const finalContent: { content: string; thought?: string; footerText?: string } = {
-              content: answerBuffer.trim(),
-            };
-            if (thoughtBuffer.trim()) finalContent.thought = thoughtBuffer.trim();
-            if (footerParts.length > 0) finalContent.footerText = `⚙️ ${footerParts.join(' · ')}`;
+            const finalContent = buildFinalContent(answerBuffer, thoughtBuffer, footerParts);
             currentMessageId = await reply.sendRich!(finalContent);
             if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
           } catch (e) {
@@ -802,14 +767,13 @@ export async function processMessage(
         }
       }
 
-
-
-  } catch (e: any) {
-    logger.error(`[messageLoop] Error running prompt: ${e?.message || e}`);
+  } catch (e: unknown) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    logger.error(`[messageLoop] Error running prompt: ${errMsg}`);
     if (signal.aborted) {
       await reply.send(`${ICONS.cancel} Task cancelled by the user.`);
     } else {
-      await reply.send(`${ICONS.error} Error: ${e?.message || String(e)}`);
+      await reply.send(`${ICONS.error} Error: ${errMsg}`);
     }
   } finally {
     session.busy = false;
@@ -820,150 +784,3 @@ export async function processMessage(
     forceReleaseDraft(chatId);
   }
 }
-
-/**
- * Error code mapping for better error detection and user-friendly messages
- */
-const ERROR_CODE_MAP: Record<string, {
-    type: string;
-    message: string;
-    suggestion: string;
-}> = {
-    // Rate Limit
-    "429": { type: "rate_limit", message: "Rate limit exceeded (throttled)", suggestion: "Wait 1-2 minutes and retry, or switch models" },
-    "quota": { type: "rate_limit", message: "Quota exhausted", suggestion: "Quota used up, wait for recovery or downgrade model" },
-    "exhausted": { type: "rate_limit", message: "Resources exhausted", suggestion: "Please retry later" },
-    "rate_limit": { type: "rate_limit", message: "Rate limit exceeded", suggestion: "Lower call frequency or downgrade model" },
-    "rate_limit_exceeded": { type: "rate_limit", message: "Rate limit exceeded", suggestion: "Lower call frequency or downgrade model" },
-
-    // Connection
-    "ECONNREFUSED": { type: "connection", message: "Connection refused", suggestion: "Backend not started, check service status" },
-    "ECONNRESET": { type: "connection", message: "Connection reset", suggestion: "Unstable network, please retry later" },
-    "ENETUNREACH": { type: "connection", message: "Network unreachable", suggestion: "Check network connection" },
-    "ETIMEDOUT": { type: "connection", message: "Connection timed out", suggestion: "Increase timeout or check network" },
-    "socket hang up": { type: "connection", message: "Connection hung up", suggestion: "Unstable network, please retry later" },
-    "connection refused": { type: "connection", message: "Connection refused", suggestion: "Check backend service status" },
-
-    // Authentication
-    "401": { type: "auth", message: "Authentication failed (invalid token)", suggestion: "Check the token in the config file" },
-    "403": { type: "auth", message: "Access forbidden (no permission)", suggestion: "Check if the bot token is correct" },
-    "invalid token": { type: "auth", message: "Invalid token", suggestion: "Reconfigure the bot token" },
-    "unauthorized": { type: "auth", message: "Unauthorized (401)", suggestion: "Check if the bot token is correct" },
-    "authentication failed": { type: "auth", message: "Authentication failed", suggestion: "Check if the bot token is correct" },
-
-    // Timeout
-    "timeout": { type: "timeout", message: "Request timed out", suggestion: "Increase timeout or check network" },
-    "client timeout": { type: "timeout", message: "Client timed out", suggestion: "Increase timeout" },
-    "upstream timeout": { type: "timeout", message: "Upstream timed out", suggestion: "Increase timeout" },
-
-    // Backend Unavailable
-    "backend_unavailable": { type: "backend", message: "Backend unavailable", suggestion: "Backend under maintenance, please retry later" },
-
-    // Unknown
-    "unknown": { type: "unknown", message: "Unknown error", suggestion: "Please retry later or downgrade model" },
-};
-
-/**
- * Error severity levels
- */
-const ERROR_SEVERITY: Record<string, "critical" | "warning" | "info"> = {
-    // Critical - immediate attention needed
-    "ECONNREFUSED": "critical",
-    "401": "critical",
-    "403": "critical",
-    "invalid_token": "critical",
-
-    // Warning - can retry
-    "429": "warning",
-    "quota": "warning",
-    "ETIMEDOUT": "warning",
-    "ECONNRESET": "warning",
-
-    // Info - normal errors
-    "backend_unavailable": "info",
-    "unknown": "info",
-};
-
-/**
- * Extract error channel from error message
- */
-function extractErrorChannel(reason: string): string | undefined {
-    const lowerReason = reason.toLowerCase();
-    if (lowerReason.includes('agy')) return 'agy (local)';
-    if (lowerReason.includes('deepseek')) return 'deepseek-api (proxy)';
-    if (lowerReason.includes('web2api')) return 'web2api (proxy)';
-    if (lowerReason.includes('opencode')) return 'opencode (local)';
-    return undefined;
-}
-
-/**
- * Parse error message and extract key information
- */
-function parseErrorMessage(reason: string): {
-    type: string;
-    code: string;
-    channel: string | undefined;
-    message: string;
-    suggestion: string;
-} {
-    const text = reason.trim();
-    const lowerText = text.toLowerCase();
-
-    // Find error type
-    let errorType = 'unknown';
-    let errorCode = '';
-
-    // Check for specific error codes
-    for (const [code, info] of Object.entries(ERROR_CODE_MAP)) {
-        if (lowerText.includes(code) || lowerText.includes(info.type)) {
-            errorType = info.type;
-            errorCode = code;
-            break;
-        }
-    }
-
-    // Extract error code from message
-    if (!errorCode && lowerText.match(/\d{3}/)) {
-        const match = lowerText.match(/(\d{3})/);
-        if (match) {
-            errorCode = match[1];
-            errorType = 'unknown'; // Don't assume type without mapping
-        }
-    }
-
-    // Extract channel
-    const channel = extractErrorChannel(reason);
-
-    // Build suggestion
-    const suggestion = ERROR_CODE_MAP[errorCode]?.suggestion ||
-        (ERROR_SEVERITY[errorCode] === 'critical'
-            ? 'Please retry later or downgrade the model'
-            : 'Please retry later');
-
-    return {
-        type: errorType,
-        code: errorCode,
-        channel,
-        message: text,
-        suggestion,
-    };
-}
-
-// ── Model registry & fallback helpers ──────────────────────────────────────
-//
-// Model order is resolved dynamically from config sources (priority chain):
-//   1. config.json orderedModels (user override)
-//   2. config.json modelsConfig.tiers (user tiered config)
-//   3. models.json defaultOrder (developer-maintained fallback)
-//
-// The fallback chain is built per session by slicing this order starting at the
-// user's current model and wrapping around — so a user on a mid-tier model
-// first tries weaker models, then loops back to the strongest ones.
-//
-// Three "channels" exist:
-//   • agy       — official Antigravity CLI models (require OAuth / API key)
-//   • deepseek  — local deepseek-api proxy
-//   • web2api   — free Gemini web frontend via reverse proxy (no auth needed)
-//
-// The channel is detected at runtime by getChannelModel() using model-name
-// prefixes, so cross-channel fallback is fully automatic.

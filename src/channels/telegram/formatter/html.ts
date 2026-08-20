@@ -31,7 +31,6 @@ type HtmlToken = {
   value: string;
 };
 
-
 export function tokenizeHtml(htmlText: string): HtmlToken[] {
   const tokens: HtmlToken[] = [];
   let index = 0;
@@ -465,7 +464,6 @@ export const telegramFormatter: MessageFormatter = {
     return findSafeCutPoint(markdown, maxLen);
   },
 };
-
 
 function markdownToHtmlSnippet(markdown: string): string {
   const normalized = normalizeMarkdownFences(markdown);

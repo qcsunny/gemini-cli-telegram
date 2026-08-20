@@ -9,9 +9,9 @@
  * @description CoinGecko provider for crypto market data (BTC, ETH, SOL, etc.).
  */
 
-import { fetch as undiciFetch } from 'undici';
 import type { MarketDataProvider, StockQuote, StockCandles, StockSearchResult, CandleDataPoint } from '../types.js';
 import { logger } from '../../utils/logger.js';
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 
 const CRYPTO_MAP: Record<string, { id: string; name: string }> = {
   BTC: { id: 'bitcoin', name: 'Bitcoin' },
@@ -31,18 +31,17 @@ export class CoinGeckoProvider implements MarketDataProvider {
     if (!meta) return null;
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3000);
       const url = `https://api.coingecko.com/api/v3/simple/price?ids=${meta.id}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`;
-      const res = await undiciFetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal }).finally(() => clearTimeout(timer));
+      const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 3000);
       if (!res.ok) return null;
 
-      const data = (await res.json()) as Record<string, any>;
+      const data = (await res.json()) as Record<string, unknown>;
       const coin = data[meta.id];
-      if (!coin) return null;
+      if (!coin || typeof coin !== 'object' || Array.isArray(coin)) return null;
+      const coinData = coin as Record<string, unknown>;
 
-      const price = coin.usd ?? 0;
-      const changePercent = coin.usd_24h_change ?? 0;
+      const price = typeof coinData['usd'] === 'number' ? coinData['usd'] : 0;
+      const changePercent = typeof coinData['usd_24h_change'] === 'number' ? coinData['usd_24h_change'] : 0;
       const change = (price * changePercent) / 100;
 
       return {
@@ -51,7 +50,7 @@ export class CoinGeckoProvider implements MarketDataProvider {
         price,
         change,
         changePercent,
-        volume: coin.usd_24h_vol ?? 0,
+        volume: typeof coinData['usd_24h_vol'] === 'number' ? coinData['usd_24h_vol'] : 0,
         market: 'CRYPTO',
         currency: 'USD',
         timestamp: Math.floor(Date.now() / 1000),
@@ -81,7 +80,7 @@ export class CoinGeckoProvider implements MarketDataProvider {
     try {
       const days = range === '1d' ? '1' : range === '7d' || range === '1w' ? '7' : '30';
       const url = `https://api.coingecko.com/api/v3/coins/${meta.id}/market_chart?vs_currency=usd&days=${days}`;
-      const res = await undiciFetch(url, { headers: { Accept: 'application/json' } });
+      const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 3000);
       if (!res.ok) return null;
 
       const json = (await res.json()) as { prices: Array<[number, number]>; total_volumes: Array<[number, number]> };

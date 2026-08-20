@@ -173,15 +173,20 @@ export function reset429Backoff(chatId: number): void {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 export function is429Error(err: unknown): boolean {
-  if (!err) return false;
-  if (typeof err === 'object') {
-    const e = err as Record<string, unknown>;
+  const e = asRecord(err);
+  if (e) {
     if (e['error_code'] === 429 || e['status'] === 429) return true;
-    const params = e['parameters'] as Record<string, unknown> | undefined;
+    const params = asRecord(e['parameters']);
     if (params?.['retry_after'] !== undefined) return true;
-    const payload = e['payload'] as Record<string, unknown> | undefined;
-    const payloadParams = payload?.['parameters'] as Record<string, unknown> | undefined;
+    const payload = asRecord(e['payload']);
+    const payloadParams = asRecord(payload?.['parameters']);
     if (payloadParams?.['retry_after'] !== undefined) return true;
   }
   const msg = err instanceof Error ? err.message : String(err);
@@ -189,12 +194,12 @@ export function is429Error(err: unknown): boolean {
 }
 
 export function get429RetryAfter(err: unknown): number | undefined {
-  if (!err || typeof err !== 'object') return undefined;
-  const e = err as Record<string, unknown>;
-  const params = e['parameters'] as Record<string, unknown> | undefined;
+  const e = asRecord(err);
+  if (!e) return undefined;
+  const params = asRecord(e['parameters']);
   if (typeof params?.['retry_after'] === 'number') return params['retry_after'];
-  const payload = e['payload'] as Record<string, unknown> | undefined;
-  const payloadParams = payload?.['parameters'] as Record<string, unknown> | undefined;
+  const payload = asRecord(e['payload']);
+  const payloadParams = asRecord(payload?.['parameters']);
   if (typeof payloadParams?.['retry_after'] === 'number') return payloadParams['retry_after'];
   return undefined;
 }

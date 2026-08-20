@@ -17,6 +17,19 @@ import { createEventQueue } from '../eventQueue.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
 export const codexThreadMap = new Map<string, string>();
+const MAX_CODEX_THREADS = 500;
+
+export function clearCodexThread(conversationId: string): void {
+  codexThreadMap.delete(conversationId);
+}
+
+function setCodexThread(conversationId: string, threadId: string): void {
+  codexThreadMap.set(conversationId, threadId);
+  if (codexThreadMap.size > MAX_CODEX_THREADS) {
+    const firstKey = codexThreadMap.keys().next().value;
+    if (firstKey !== undefined) codexThreadMap.delete(firstKey);
+  }
+}
 
 export function getCodexPath(): string {
   const userConfig = loadUserConfig();
@@ -117,7 +130,7 @@ export async function runCodex(opts: AgyRunOptions): Promise<AgyRunResult> {
       try {
         const event = JSON.parse(line);
         if (event.type === 'thread.started' && event.thread_id) {
-          codexThreadMap.set(convId, event.thread_id);
+          setCodexThread(convId, event.thread_id);
           opts.onActivity?.();
         } else if (event.type === 'item.completed' || event.type === 'item.updated') {
           opts.onActivity?.();

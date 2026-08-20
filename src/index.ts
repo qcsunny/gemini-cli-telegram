@@ -125,4 +125,3 @@ export async function startTelegramDaemon(
   // Initialize exchange rate (fetch in background, use cached value from disk)
   initExchangeRate();
 }
-

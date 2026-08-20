@@ -223,9 +223,9 @@ const userConfigSchema = z.object({
      */
     retriesPerModel: z.number().positive().optional(),
     /**
-     * Sliding window size for conversation history sent to web2api / deepseek / gemini-direct
-     * backends. These backends don't maintain server-side conversation state, so the full
-     * history must be sent with each request.
+     * Sliding window size for conversation history sent to the web2api / deepseek
+     * backends. These OpenAI-compatible SSE backends don't maintain server-side
+     * conversation state, so the full history must be sent with each request.
      *
      * - Lower values (e.g. 20):  Faster responses, less token usage, but less context.
      * - Higher values (e.g. 80): More context, but higher latency and token costs.

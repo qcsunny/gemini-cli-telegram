@@ -6,14 +6,15 @@
 
 /**
  * @file fmp.ts
- * @description Financial Modeling Prep (FMP) recent quarterly income statement fetcher.
+ * @description Financial Modeling Prep (FMP) fetchers for recent financials,
+ * balance sheets, cash flows, company profiles, and dividend yields.
  * Used to enrich stock cards with recent earnings data. Requires a config.json
  * "stockMarketApiKey" (FMP key) — when absent, no requests are made.
  */
 
-import { fetch as undiciFetch } from 'undici';
 import type { StockFinancial, StockBalanceSheet, StockCashFlow } from '../types.js';
 import { logger } from '../../utils/logger.js';
+import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
 
 const FMP_BASE = 'https://financialmodelingprep.com/stable/income-statement';
 const FETCH_TIMEOUT_MS = 3000;
@@ -33,11 +34,9 @@ export async function fetchRecentFinancials(
   const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
   if (!cleanSym) return null;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const url = `${FMP_BASE}?symbol=${encodeURIComponent(cleanSym)}&period=quarter&limit=${MAX_PERIODS}&apikey=${encodeURIComponent(apiKey)}`;
-    const res = await undiciFetch(url, { signal: controller.signal });
+    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) {
       logger.warn(`[FMP] Failed for ${cleanSym}: HTTP ${res.status}`);
       return null;
@@ -101,8 +100,6 @@ export async function fetchRecentFinancials(
   } catch (err) {
     logger.warn(`[FMP] Fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -118,11 +115,9 @@ export async function fetchCompanyProfile(
   const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
   if (!cleanSym) return null;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const url = `https://financialmodelingprep.com/stable/profile?symbol=${encodeURIComponent(cleanSym)}&apikey=${encodeURIComponent(apiKey)}`;
-    const res = await undiciFetch(url, { signal: controller.signal });
+    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) {
       logger.warn(`[FMP] Profile failed for ${cleanSym}: HTTP ${res.status}`);
       return null;
@@ -133,8 +128,6 @@ export async function fetchCompanyProfile(
   } catch (err) {
     logger.warn(`[FMP] Profile fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -150,11 +143,9 @@ export async function fetchRecentBalanceSheets(
   const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
   if (!cleanSym) return null;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const url = `https://financialmodelingprep.com/stable/balance-sheet-statement?symbol=${encodeURIComponent(cleanSym)}&period=quarter&limit=${MAX_PERIODS}&apikey=${encodeURIComponent(apiKey)}`;
-    const res = await undiciFetch(url, { signal: controller.signal });
+    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) {
       logger.warn(`[FMP] BalanceSheet failed for ${cleanSym}: HTTP ${res.status}`);
       return null;
@@ -199,8 +190,6 @@ export async function fetchRecentBalanceSheets(
   } catch (err) {
     logger.warn(`[FMP] BalanceSheet fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -216,11 +205,9 @@ export async function fetchRecentCashFlows(
   const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
   if (!cleanSym) return null;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const url = `https://financialmodelingprep.com/stable/cash-flow-statement?symbol=${encodeURIComponent(cleanSym)}&period=quarter&limit=${MAX_PERIODS}&apikey=${encodeURIComponent(apiKey)}`;
-    const res = await undiciFetch(url, { signal: controller.signal });
+    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) {
       logger.warn(`[FMP] CashFlow failed for ${cleanSym}: HTTP ${res.status}`);
       return null;
@@ -253,8 +240,6 @@ export async function fetchRecentCashFlows(
   } catch (err) {
     logger.warn(`[FMP] CashFlow fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -264,21 +249,17 @@ export async function fetchUSDividendYield(symbol: string, apiKey: string): Prom
   if (!apiKey) return null;
   const cleanSym = symbol.toUpperCase().replace(/^\$/, '').trim();
   if (!cleanSym) return null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const url = `https://financialmodelingprep.com/stable/dividends?symbol=${encodeURIComponent(cleanSym)}&apikey=${encodeURIComponent(apiKey)}`;
-    const res = await undiciFetch(url, { signal: controller.signal });
+    const res = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
     if (!res.ok) return null;
-    const json = (await res.json()) as any[];
+    const json = (await res.json()) as Array<Record<string, unknown>>;
     if (!Array.isArray(json) || json.length === 0) return null;
-    const latest = json[0] as any;
+    const latest = json[0];
     const y = typeof latest['yield'] === 'number' ? latest['yield'] : parseFloat(String(latest['yield'] ?? ''));
     return Number.isFinite(y) ? y : null;
   } catch (err) {
     logger.warn(`[FMP] Dividend yield fetch failed for ${cleanSym}: ${err instanceof Error ? err.message : err}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }

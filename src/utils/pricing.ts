@@ -15,8 +15,6 @@
 import { getCachedUsdToCnyRate } from './exchangeRate.js';
 import { displayModelName } from '../core/modelRegistry.js';
 
-// Re-export for callers that want to pre-warm the cache
-
 /**
  * Model pricing rates per 1,000,000 tokens in USD.
  */

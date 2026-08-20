@@ -21,7 +21,7 @@
 import type { AgyRunOptions, AgyStreamEvent } from './types.js';
 import { logger } from '../utils/logger.js';
 
-export interface EventQueue {
+interface EventQueue {
   /** Enqueue an event. Never throws, never returns a promise. */
   emit(event: AgyStreamEvent): void;
   /** Resolves once every event enqueued so far has been handled. */

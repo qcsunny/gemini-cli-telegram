@@ -20,6 +20,22 @@ const USER_AGENT_BROWSER =
 const USER_AGENT_WECHAT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.38(0x1800262c) NetType/WIFI Language/zh_CN';
 
+interface GitHubRepoData {
+  full_name?: string;
+  description?: string;
+  stargazers_count?: number;
+  forks_count?: number;
+  language?: string | null;
+  license?: { spdx_id?: string; name?: string } | null;
+  topics?: string[];
+}
+
+function asGitHubRepoData(value: unknown): GitHubRepoData | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as GitHubRepoData
+    : null;
+}
+
 /**
  * Detects the platform type based on the URL pattern.
  */
@@ -172,7 +188,7 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
   const repoFullName = `${owner}/${repo}`;
 
   // 1. Fetch repo metadata via GitHub REST API
-  let repoData: any = null;
+  let repoData: GitHubRepoData | null = null;
   try {
     const apiRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
       headers: {
@@ -182,7 +198,7 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (apiRes.ok) {
-      repoData = await apiRes.json();
+      repoData = asGitHubRepoData(await apiRes.json());
     }
   } catch (err) {
     logger.warn(`[GitHubParser] API lookup failed for ${repoFullName}: ${err}`);
@@ -209,7 +225,7 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
   const forks = repoData?.forks_count ?? '--';
   const language = repoData?.language || 'Unknown';
   const license = repoData?.license?.spdx_id || repoData?.license?.name || 'None';
-  const topics = Array.isArray(repoData?.topics) ? repoData.topics.join(', ') : '';
+  const topics = repoData?.topics?.join(', ') || '';
 
   const content =
     `# 💻 GitHub 仓库: ${title}\n\n` +

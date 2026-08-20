@@ -19,6 +19,7 @@ import { stripWholeMessageCodeFence } from '../../../core/messageLoop/textUtils.
 import { runModelWithFallbackChain } from './inlineHandler.js';
 import { buildChannelReply } from '../bot/channelReply.js';
 import type { SessionManager } from '../../../core/session.js';
+import type { SessionOptions } from '../../../core/types.js';
 
 const SUMMARY_INSTRUCTION =
   'Summarize the following chat messages concisely and list the key points. ' +
@@ -91,7 +92,7 @@ export function loadRecentMessages(
     const db = getDb();
     let whereClause = eq(chatMessages.chatId, String(chatId));
     if (targetUsername) {
-      whereClause = and(whereClause, eq(chatMessages.senderUsername, targetUsername.toLowerCase())) as any;
+      whereClause = and(whereClause, eq(chatMessages.senderUsername, targetUsername.toLowerCase())) ?? whereClause;
     }
 
     const rows = db
@@ -139,7 +140,7 @@ export function trimChatMessages(chatId: number, keepCount: number): void {
 export function registerSumHandler(
   bot: Bot,
   sessionManager: SessionManager,
-  defaultOptions: { cwd?: string; proxy?: string },
+  defaultOptions: SessionOptions,
 ): void {
   bot.command('sum', async (ctx: Context) => {
     await handleSum(ctx, sessionManager, defaultOptions);
@@ -149,7 +150,7 @@ export function registerSumHandler(
 async function handleSum(
   ctx: Context,
   sessionManager: SessionManager,
-  defaultOptions: { cwd?: string; proxy?: string },
+  defaultOptions: SessionOptions,
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
@@ -216,7 +217,7 @@ async function handleSum(
 
   const model =
     config.model ||
-    (defaultOptions as { model?: string }).model ||
+    defaultOptions.model ||
     getDefaultModel() ||
     '';
 
@@ -224,7 +225,7 @@ async function handleSum(
     const { result, modelUsed } = await runModelWithFallbackChain(
       SUMMARY_INSTRUCTION + body,
       model,
-      defaultOptions as any,
+      defaultOptions,
     );
 
     if (!result?.output) {
