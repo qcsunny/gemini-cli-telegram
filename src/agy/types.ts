@@ -3,11 +3,15 @@
  * @description Shared type definitions for the agy module.
  */
 
+/** Incremental streaming event emitted by a backend runner during a model turn. */
 export interface AgyStreamEvent {
   type: 'thought' | 'text' | 'done';
   content?: string;
 }
 
+/** Options passed to every backend runner (runOpenCode, runClaudeCli, etc.).
+ *  Callers populate this from the message-loop; backends destructure the
+ *  fields they need and ignore the rest. */
 export interface AgyRunOptions {
   /** The user prompt text. */
   prompt: string;
@@ -50,6 +54,8 @@ export interface AgyRunOptions {
   allowTools?: boolean;
 }
 
+/** Standardised result returned by every backend runner after a model turn
+ *  completes (success or failure). */
 export interface AgyRunResult {
   /** The conversation UUID (new or existing). */
   conversationId: string;
@@ -78,6 +84,9 @@ export interface AgyRunResult {
   thinkingTokens?: number;
 }
 
+/** A single step within an agy conversation transcript. Parsed from the
+ *  protobuf step table (src/agy/protobuf.ts) and used for rendering the
+ *  Thinking Process panel and calculating token usage. */
 export interface ConversationTurn {
   role: 'user' | 'assistant' | 'thinking' | 'tool' | 'observation' | 'title' | 'unknown';
   content: string;
