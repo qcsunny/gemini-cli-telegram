@@ -36,6 +36,15 @@ interface PricingInfo {
  */
 const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
   {
+    // ── Free tier (OpenCode/OpenRouter built-in free models) ──
+    // e.g. "opencode/deepseek-v4-flash-free", "opencode/hy3-free",
+    // "openrouter/openrouter/free", plus opencode's stealth free model
+    // "opencode/big-pickle". MUST stay first so ids like
+    // "deepseek-v4-flash-free" don't fall into the paid DeepSeek rules.
+    pattern: /free|big[\s-]*pickle/i,
+    rates: { inputRate: 0, outputRate: 0, cacheMultiplier: 0, thinkingMultiplier: 'none' }
+  },
+  {
     // DeepSeek V4 Pro: $0.435 / $0.003625 / $0.87
     pattern: /deepseek.*pro/i,
     rates: { inputRate: 0.435, outputRate: 0.87, cacheMultiplier: 0.008333, thinkingMultiplier: 'none', currency: 'CNY' }
@@ -66,43 +75,25 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     rates: { inputRate: 0.60, outputRate: 2.40, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.5 Flash-Lite: $0.25 / $0.03 / $1.50
-    // MUST precede the generic /3.5\s*flash/ rule, otherwise Flash-Lite model
-    // names match the more expensive generic rule first.
-    pattern: /3\.5\s*flash-lite|flash-lite/i,
+    // ── Gemini: three product tiers, version-agnostic (per config.json lineup) ──
+    // Patterns must match BOTH display names ("Gemini 3.7 Flash") and model ids
+    // ("gemini-3.7-flash"): [\s-]* tolerates the space OR hyphen between the
+    // version number and the tier keyword. Never pin specific versions here —
+    // ids like "gemini-3.1-pro" made /\s*/-only patterns silently never match.
+    // Flash-Lite: $0.25 / cache×0.12 / $1.50 — MUST precede the generic flash rule.
+    pattern: /flash[\s-]*lite/i,
     rates: { inputRate: 0.25, outputRate: 1.50, cacheMultiplier: 0.12, thinkingMultiplier: 'none' }
   },
   {
-    // Gemini 3.6 Flash: $1.50 / $0.15 / $7.50
-    pattern: /3\.6\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 7.50, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
-  },
-  {
-    // Gemini 3.5 Flash: $1.50 / $0.15 / $9.00
-    pattern: /3\.5\s*flash/i,
-    rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
-  },
-  {
-    // Gemini 3.1 Pro — ≤200K: $2/$12; >200K: $4/$18
-    pattern: /3\.1\s*pro/i,
+    // Pro: ≤200K $2/$12; single request >200K input switches to $4/$18.
+    pattern: /pro/i,
     rates: {
       inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none',
       longContextRates: { inputRate: 4.00, outputRate: 18.00 }
     }
   },
   {
-    // Gemini 3.x Flash (generic fallback)
-    pattern: /3\s*flash/i,
-    rates: { inputRate: 0.50, outputRate: 3.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
-  },
-  // --- Generics / Fallbacks ---
-  {
-    // General Pro keyword
-    pattern: /pro/i,
-    rates: { inputRate: 2.00, outputRate: 12.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
-  },
-  {
-    // General Flash / Auto keyword
+    // Flash / Auto (generic fallback): $1.50 / cache×0.1 / $9.00
     pattern: /flash|auto/i,
     rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   }
