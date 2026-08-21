@@ -16,8 +16,9 @@
       "priority": 1,
       "models": [
         "Gemini 3.7 Flash (High)",
-        "OpenCode: DeepSeek V4 Flash Free",
+        "OpenCode: Muse Spark 1.2 Free",
         "Gemini 3.1 Pro (Low)",
+        "OpenCode: X Preview F Free",
         "OpenCode: Big Pickle"
       ]
     },
@@ -29,7 +30,6 @@
         "OpenCode: Nemotron 3 Ultra Free",
         "OpenCode: Hunyuan 3.0 Free",
         "GPT-OSS 120B (Medium)",
-        "OpenCode: Laguna S 2.1 Free",
         "OpenCode: MiMo V2.5 Free"
       ]
     },
@@ -72,14 +72,14 @@
     "Gemini 3.1 Pro (High)",
     "Claude Sonnet 4.6 (Thinking)",
     "Gemini 3.7 Flash (High)",
-    "OpenCode: DeepSeek V4 Flash Free",
+    "OpenCode: Muse Spark 1.2 Free",
     "Gemini 3.1 Pro (Low)",
+    "OpenCode: X Preview F Free",
     "OpenCode: Big Pickle",
     "Gemini 3.7 Flash (Medium)",
     "OpenCode: Nemotron 3 Ultra Free",
     "OpenCode: Hunyuan 3.0 Free",
     "GPT-OSS 120B (Medium)",
-    "OpenCode: Laguna S 2.1 Free",
     "OpenCode: MiMo V2.5 Free",
     "Gemini 3.7 Flash (Low)",
     "OpenCode: GLM 4.7 Flash",
@@ -116,14 +116,12 @@
     "DeepSeek: Flash Thinking Search":         "deepseek-v4-flash-thinking-search",
     "DeepSeek: Pro":                           "deepseek-v4-pro",
     "DeepSeek: Pro Thinking":                  "deepseek-v4-pro-thinking",
-    "OpenCode: DeepSeek V4 Flash Free":        "opencode/deepseek-v4-flash-free",
+    "OpenCode: Muse Spark 1.2 Free":          "opencode/muse-spark-1.2-contributor-free",
     "OpenCode: Nemotron 3 Ultra Free":         "opencode/nemotron-3-ultra-free",
     "OpenCode: Nemotron 3.5 Lightning Free":   "opencode/nemotron-3.5-lightning-free",
     "OpenCode: Hunyuan 3.0 Free":              "opencode/hy3-free",
-    "OpenCode: Laguna S 2.1 Free":             "opencode/laguna-s-2.1-free",
+    "OpenCode: X Preview F Free":             "opencode/x-preview-f-free",
     "OpenCode: MiMo V2.5 Free":              "opencode/mimo-v2.5-free",
-    "OpenCode: Ling 3.0 Tiny Free":          "opencode/ling-3.0-tiny-free",
-    "OpenCode: Longcat 2.0 Free":            "opencode/longcat-2.0-free",
     "OpenCode: OpenRouter Free":             "openrouter/openrouter/free",
     "OpenCode: GLM 4.7 Flash":                "zhipuai/glm-4.7-flash",
     "OpenCode: Big Pickle":                  "opencode/big-pickle",
@@ -141,10 +139,8 @@
     "OpenCode: Big Pickle":                  "Big Pickle 全栈编程强模型 · 适用：多轮项目开发、复杂架构设计与重构",
     "OpenCode: Qwen 3.6 35B A3B":            "通义千问 3.6 35B 极速轻量模型 (3B激活) · 适用：快速代码片段生成、日常快答、极速响应",
     "OpenCode: Nemotron 3 Ultra Free":       "综合推理最强，代码能力顶级 · 适用：复杂算法设计、架构决策、高难度调试",
-    "OpenCode: DeepSeek V4 Flash Free":      "速度快、成本低、能力均衡 · 适用：日常编码、中等复杂度任务、高频调用",
-    "OpenCode: Laguna S 2.1 Free":           "Agent编码能力突出，工具调用强 · 适用：自动化工作流、多步骤任务、MLOps管道",
-    "OpenCode: MiMo V2.5 Free":              "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解",
-    "OpenCode: Ling 3.0 Tiny Free":         "轻量级中文优化模型，快速响应 · 适用：中文对话、简单问答、文本生成",
-    "OpenCode: Longcat 2.0 Free":           "超长上下文模型 · 适用：长文档处理、大型代码库理解"
+    "OpenCode: Muse Spark 1.2 Free":         "Meta Muse Spark 1.2 贡献者免费档 (1M上下文) · 适用：复杂编码、多模态理解、长任务规划",
+    "OpenCode: X Preview F Free":            "Ox Alpha 匿名预览模型免费档 · 适用：日常问答、轻量编码、快速响应",
+    "OpenCode: MiMo V2.5 Free":              "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解"
   }
 }

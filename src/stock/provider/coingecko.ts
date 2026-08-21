@@ -63,15 +63,6 @@ export class CoinGeckoProvider implements MarketDataProvider {
     }
   }
 
-  async getQuotes(symbols: string[]): Promise<StockQuote[]> {
-    const quotes: StockQuote[] = [];
-    for (const sym of symbols) {
-      const q = await this.getQuote(sym);
-      if (q) quotes.push(q);
-    }
-    return quotes;
-  }
-
   async getCandles(symbol: string, interval: string, range: string): Promise<StockCandles | null> {
     const cleanSym = symbol.toUpperCase().replace(/^\$/, '');
     const meta = CRYPTO_MAP[cleanSym];

@@ -91,6 +91,8 @@ export class ChatScheduler {
     this.timer = setInterval(() => {
       void this.checkAndRunTasks();
     }, this.CHECK_INTERVAL_MS);
+    // Never keep the event loop alive just for the scheduler tick (test hygiene).
+    this.timer.unref?.();
   }
 
   private async checkAndRunTasks(): Promise<void> {

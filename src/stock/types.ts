@@ -216,7 +216,6 @@ export interface StockSearchResult {
 export interface MarketDataProvider {
   readonly name: string;
   getQuote(symbol: string): Promise<StockQuote | null>;
-  getQuotes(symbols: string[]): Promise<StockQuote[]>;
   getCandles(symbol: string, interval: string, range: string): Promise<StockCandles | null>;
   searchSymbols(query: string): Promise<StockSearchResult[]>;
 }

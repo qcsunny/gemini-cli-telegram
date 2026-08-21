@@ -459,7 +459,7 @@ describe('[Integration] BUG-04: History Map size cap prevents OOM', () => {
 
 describe('[Integration] InlineStreamQueue adaptive throttling', () => {
   it('flushFinal resolves true for a normal API response', async () => {
-    const { InlineStreamQueue } = await import('./channels/telegram/commands/inlineHandler.js');
+    const { InlineStreamQueue } = await import('./channels/telegram/commands/inlineStreamQueue.js');
 
     const mockApi: any = {
       raw: { editMessageText: vi.fn().mockResolvedValue(true) },
@@ -476,7 +476,7 @@ describe('[Integration] InlineStreamQueue adaptive throttling', () => {
   });
 
   it('retries on 429 and eventually succeeds', async () => {
-    const { InlineStreamQueue } = await import('./channels/telegram/commands/inlineHandler.js');
+    const { InlineStreamQueue } = await import('./channels/telegram/commands/inlineStreamQueue.js');
 
     let callCount = 0;
     const mockApi: any = {
@@ -501,7 +501,7 @@ describe('[Integration] InlineStreamQueue adaptive throttling', () => {
   });
 
   it('flushFinal with no prior enqueue still calls editMessageText once', async () => {
-    const { InlineStreamQueue } = await import('./channels/telegram/commands/inlineHandler.js');
+    const { InlineStreamQueue } = await import('./channels/telegram/commands/inlineStreamQueue.js');
 
     const mockApi: any = {
       raw: { editMessageText: vi.fn().mockResolvedValue(true) },

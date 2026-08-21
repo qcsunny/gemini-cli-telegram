@@ -8,21 +8,26 @@
  * @file channelReply.ts
  * @description Telegram Bot API 10.2 Rich Message multi-tier fallback pipeline.
  * Houses `buildChannelReply` (the central adapter that translates abstract
- * send/edit operations into concrete Telegram Bot API calls) and the helpers
- * used by it: block construction, payload validation, throttle/backoff, etc.
+ * send/edit operations into concrete Telegram Bot API calls) plus payload
+ * validation. Streaming block builders live in ./streamingBlocks.ts and the
+ * draft pacing state machine in ./draftThrottle.ts.
  */
 
 import { Context, InputFile } from 'grammy';
 
 import type { InputRichMessage } from '@grammyjs/types/rich.js';
 import type { RichBlock } from '../richMessage.js';
-import { markdownToHtml, markdownToMarkdownV2, markdownToRichBlocks, buildFinalBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
+import { markdownToHtml, markdownToMarkdownV2, buildFinalBlocks, buildFooterBlocksFromHtml, splitRichBlocks, TELEGRAM_RICH_MAX_LENGTH } from '../formatter.js';
 import { logger } from '../../../utils/logger.js';
-import { stripThoughtTags } from '../../../utils/textUtils.js';
 import { extractThoughtAndContent } from '../../../agy/thoughtParser.js';
 import { messageCache } from '../../../utils/messageCache.js';
-import { draftBackoffUntil, record429Backoff, recordBackoffSuccess, is429Error, get429RetryAfter } from './rateLimiter.js';
+import { record429Backoff, is429Error, get429RetryAfter } from './rateLimiter.js';
+import { throttleDraft, markDraftEditSuccess, markDraft429 } from './draftThrottle.js';
 import { getTuningConfig } from '../../../config/userConfig.js';
+import { stripThoughtTags } from '../../../utils/textUtils.js';
+import { buildDraftStreamingBlocks, buildPrivateStreamingBlocks, getStreamingMarkdown, isPillOnlyPayload } from './streamingBlocks.js';
+export { clearDraftThrottleState } from './draftThrottle.js';
+export { getStreamingMarkdown, buildPrivateStreamingBlocks, buildDraftStreamingBlocks } from './streamingBlocks.js';
 import type { ChannelReply, StructuredMessage, DaemonSession } from '../../../core/types.js';
 
 interface TelegramApiError {
@@ -67,321 +72,12 @@ function getCacheMarkdown(text: string | StructuredMessage): string {
     : `${text.content}${text.thought ? `\n\n<thought>\n${text.thought}\n</thought>` : ''}`;
 }
 
-/**
- * Streaming-safe body transform: flattens any collapsible block inside the BODY
- * to its plain-text summary + visible body. The client re-renders the whole
- * message on every edit, which resets the `<details>` open state each time, so
- * a folded block appears "stuck" and can never be opened. Only the summary line
- * (plus a short hint) is streamed; the full folded content is restored at
- * finalize (editRich → buildFinalBlocks). Also strips literal `<details>` tags
- * (markdown mode only understands `**bold**` / `*italic*`).
- */
-function collapseDetailsInStreaming(s: string): string {
-  let t = s;
-  // `<details>` may be unclosed mid-stream: strip the opening tag and turn
-  // `<summary>...</summary>` into a bold heading. The following body lines
-  // (if any) are kept verbatim so folded content is visible while streaming.
-  t = t.replace(/<details[^>]*>\s*<summary>([\s\S]*?)<\/summary>/gi, (m, summaryHtml) => {
-    const summary = summaryHtml.replace(/<[^>]*>/g, '').trim() || 'Details';
-    return `**${summary}**\n`;
-  });
-  // A bare unclosed `<details>` (summary may be emitted later): drop the tag,
-  // keep whatever follows.
-  t = t.replace(/<details[^>]*>/gi, '\n');
-  // Drop every closing tag — body content before it is preserved.
-  t = t.replace(/<\/details>/gi, '');
-  // A `> [details] summary` blockquote → flatten to bold summary + body lines.
-  t = t.replace(/(^|\n)(?:[ \t]*> *)+\[details\]\s*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
-    const sTrim = (summary || '').trim();
-    if (!sTrim) return `${lead}${m}`;
-    // Keep the quoted body (indented lines) but drop the `> [details]` marker
-    // and unquote the lines so they render as plain body text.
-    const body = m
-      .replace(/(^|\n)[ \t]*> *\[details\]\s*[^\n]*/, '')
-      .replace(/(^|\n)[ \t]*> */g, '$1')
-      .trim();
-    return `${lead}**${sTrim}**${body ? `\n${body}` : ''}`;
-  });
-  // Model-native collapsible prompts: `> 点击展开...` / `> ▶ ...` / a bare
-  // `[details]` line followed by a blockquote line. Flatten to bold summary.
-  t = t.replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*([^\n]*)(?:\n(?:[ \t]*> *)[^\n]*)*/g, (m, lead, summary) => {
-    const sTrim = (summary || '').trim();
-    const body = m
-      .replace(/(^|\n)(?:[ \t]*> *)*(?:点击展开[.。…]*|Click to expand[.…]*|▶+|▼+|\[details\])[ \t]*[^\n]*/, '')
-      .replace(/(^|\n)[ \t]*> */g, '$1')
-      .trim();
-    return `${lead}${sTrim ? `**${sTrim}**` : ''}${body ? `\n${body}` : ''}`;
-  });
-  return t;
-}
-
-/**
- * Streaming-safe markdown: strips any literal <thought>/<think> XML so the
- * typewriter render never shows raw tags. Body content renders as markdown;
- * while only thinking, show the actual reasoning text typewriter-style so the
- * user sees the thinking chain grow (not a static placeholder).
- *
- * Phase 1 (thought present, no body): stream the thinking text verbatim under a
- * "🧠 Thinking..." header.
- * Phase 2 (body present): fold the thinking into a collapsed <details> block
- * (summary matches finalize's "🧠 Thinking Process") and stream the body below.
- * Phase 3 (finalize): handled separately by buildFinalBlocks (native blocks).
- *
- * Used by the rich-markdown fallback path; the primary streaming path emits
- * native blocks via `buildPrivateStreamingBlocks` (same semantics).
- */
-export function getStreamingMarkdown(text: string | StructuredMessage): string {
-  if (typeof text === 'string') {
-    const content = collapseDetailsInStreaming(stripThoughtTags(text));
-    return content || '🧠 Thinking...';
-  }
-  const rawThought = stripThoughtTags(text.thought || '');
-  const rawContent = stripThoughtTags(text.content || '');
-  if (rawThought) {
-    if (rawContent) {
-      // Phase 2: thinking is done — fold it into a collapsed block (summary
-      // matches the finalize details block) and stream the body below it.
-      return `<details><summary>🧠 Thinking Process</summary>\n\n${rawThought}\n\n</details>\n\n${collapseDetailsInStreaming(rawContent)}`;
-    }
-    // Phase 1: typewriter-stream the actual thinking text as it grows.
-    return `**🧠 Thinking...**\n\n${rawThought}`;
-  }
-  const content = collapseDetailsInStreaming(rawContent);
-  return content || '🧠 Thinking...';
-}
-
-/**
- * Build native 10.2 blocks for a streaming draft update (private chat).
- *
- * Mirrors the phases of `getStreamingMarkdown` so the typewriter UX is
- * identical, but emits native blocks instead of raw markdown:
- *  - Phase 1 (thought, no body): bold "🧠 Thinking..." header + growing thought.
- *  - Phase 2 (thought + body): the thought folds into a native collapsible
- *    `details` block (summary matches finalize's "🧠 Thinking Process") and the
- *    body streams below it; body `<details>` blocks stay flattened (see
- *    collapseDetailsInStreaming).
- *  - Body only: body blocks.  - Empty: plain "🧠 Thinking..." paragraph
- *    (RICH_MESSAGE_EMPTY guard).
- *
- * Uses the lightweight per-frame `markdownToRichBlocks` (<50ms at 21KB) — NOT
- * the heavy finalize pipeline (buildFinalBlocks), whose per-update use caused
- * the visible stutter that previously forced streaming back to markdown.
- */
-export function buildPrivateStreamingBlocks(text: string | StructuredMessage): RichBlock[] {
-  const bodyBlocks = (s: string) => markdownToRichBlocks(collapseDetailsInStreaming(stripThoughtTags(s)));
-
-  if (typeof text === 'string') {
-    const blocks = bodyBlocks(text);
-    return blocks.length > 0 ? blocks : markdownToRichBlocks('🧠 Thinking...');
-  }
-  const thought = stripThoughtTags(text.thought || '');
-  const content = stripThoughtTags(text.content || '');
-  if (thought && content) {
-    const thoughtBlocks = markdownToRichBlocks(thought);
-    return [
-      {
-        type: 'details',
-        summary: '🧠 Thinking Process',
-        blocks: thoughtBlocks.length > 0 ? thoughtBlocks : [{ type: 'paragraph', text: thought }],
-      },
-      ...markdownToRichBlocks(collapseDetailsInStreaming(content)),
-    ];
-  }
-  if (thought) {
-    return markdownToRichBlocks(`**🧠 Thinking...**\n\n${thought}`);
-  }
-  if (content) {
-    return bodyBlocks(content);
-  }
-  return markdownToRichBlocks('🧠 Thinking...');
-}
-
-/**
- * Max characters of reasoning carried inside the native `thinking` pill. The
- * pill is a status placeholder, not a document block, so a long chain is
- * trimmed to its tail (the newest reasoning); the complete chain is restored at
- * finalize inside the "🧠 Thinking Process" details block.
- */
-const THINKING_PILL_MAX_CHARS = 3500;
-
-/**
- * Renders the streamed reasoning into the pill's single `text` field. Inline
- * entities are dropped on purpose: `validateBlocksPayload` accepts only a plain
- * string for `thinking`, and a shimmering status pill has no use for links or
- * bold runs.
- */
-function buildThinkingPillText(thought: string): string {
-  const flat = thought.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
-  if (!flat) return '🧠 Thinking...';
-  return flat.length <= THINKING_PILL_MAX_CHARS
-    ? `🧠 ${flat}`
-    : `🧠 …${flat.slice(flat.length - THINKING_PILL_MAX_CHARS)}`;
-}
-
-/**
- * Draft-mode variant of buildPrivateStreamingBlocks. During the thinking phase
- * (thought growing, body not yet started) the reasoning is streamed INSIDE the
- * native `thinking` block — the official pill animation, valid only inside
- * sendRichMessageDraft — so the reasoning text itself gets the pill treatment
- * instead of only the "🧠 Thinking..." label, which is all the pill used to
- * carry (the reasoning was emitted as plain paragraphs beside it). The pill is
- * also the very first frame, before any thought arrives, so the whole thinking
- * phase is one block whose text grows: no per-frame block-type churn for the
- * client to re-render. Once the body starts, phase 2/3 render exactly like the
- * real-message path (shared via buildPrivateStreamingBlocks), dropping the pill
- * — `thinking` is rejected outside drafts.
- *
- * `opts.pillOnly === false` (from `tuning.richDraftThinkingInPill: false`, or
- * latched by the caller when Telegram rejects a pill-only payload) restores the
- * previous split layout: a label-only pill with the reasoning as plain
- * paragraphs below it, for clients that render the pill collapsed and hide its
- * text.
- */
-export function buildDraftStreamingBlocks(
-  text: string | StructuredMessage,
-  opts?: { pillOnly?: boolean },
-): RichBlock[] {
-  const thought = typeof text === 'string' ? '' : stripThoughtTags(text.thought || '');
-  const content = typeof text === 'string' ? '' : stripThoughtTags(text.content || '');
-  const pillOnly = opts?.pillOnly ?? (getTuningConfig().richDraftThinkingInPill !== false);
-
-  // Thinking phase: stream the reasoning inside the native pill.
-  if (thought && !content) {
-    if (!pillOnly) {
-      return [
-        { type: 'thinking', text: '🧠 Thinking...' },
-        ...markdownToRichBlocks(thought),
-      ];
-    }
-    return [{ type: 'thinking', text: buildThinkingPillText(thought) }];
-  }
-
-  // Waiting for the first thought/text event: the pill is the native placeholder
-  // for exactly this state, so start it here and let its text grow.
-  if (pillOnly && !thought && !content && typeof text !== 'string') {
-    return [{ type: 'thinking', text: '🧠 Thinking...' }];
-  }
-
-  // Body phase or final: drop the pill, use shared builder
-  return buildPrivateStreamingBlocks(text);
-}
-
-/** True when `blocks` is a single native pill (the payload shape Telegram may reject). */
-function isPillOnlyPayload(blocks: RichBlock[]): boolean {
-  return blocks.length === 1 && blocks[0]?.type === 'thinking';
-}
-
 function getHtmlPayloadWithDetails(text: string | StructuredMessage, isStreaming?: boolean): string {
   let html = getHtmlPayload(text, isStreaming);
   if (html.includes('<details') && !html.replace(/<details[\s>][\s\S]*?<\/details>/gi, '').replace(/<br\s*\/?>/gi, '').trim()) {
     html = 'Thinking...<br><br>' + html;
   }
   return html;
-}
-
-interface DraftThrottleState {
-  currentMs: number;
-  lastEditTime: number;
-  lastSentLen: number;
-  nextAllowedTime: number;
-}
-const draftThrottleStates = new Map<number, DraftThrottleState>();
-const DRAFT_THROTTLE_MIN_MS = 250;
-const DRAFT_THROTTLE_MAX_MS = 4000;
-
-/** Drop per-chat draft pacing & 429 backoff state (called when a turn ends). */
-export function clearDraftThrottleState(chatId: number): void {
-  draftThrottleStates.delete(chatId);
-  draftBackoffUntil.delete(chatId);
-}
-
-/**
- * Draft update pacing — adaptive version (ported from InlineQueue):
- *
- *  • Starts optimistic at DRAFT_THROTTLE_MIN_MS (250ms) for smooth typing.
- *  • On 429 the per-chat window expands (x2, floored by the server's
- *    retry-after) up to DRAFT_THROTTLE_MAX_MS, so a rate-limited chat slows
- *    itself down instead of throwing every edit and killing the stream.
- *  • On a clean success the window gradually recovers toward the minimum
- *    (x0.85), mirroring the inline path.
- *  • Skips the edit entirely when too soon AND the content grew by <15 chars
- *    (de-dup, avoids meaningless full re-edits of unchanged text).
- *  • The module-level 429 backoff (draftBackoffUntil) still overrides
- *    everything and force-waits until the retry-after window expires.
- *
- * Returns true when an edit should proceed, false when skipped (no-op).
- * A `draftThrottleMs: 0` option disables pacing entirely (tests).
- */
-async function throttleDraft(chatId: number, contentLen: number, disabled = false): Promise<boolean> {
-  if (disabled) return true;
-  const now = Date.now();
-  let st = draftThrottleStates.get(chatId);
-  if (!st) {
-    st = { currentMs: DRAFT_THROTTLE_MIN_MS, lastEditTime: 0, lastSentLen: -1, nextAllowedTime: 0 };
-    draftThrottleStates.set(chatId, st);
-  }
-
-  // Global 429 backoff (retry-after window) overrides everything. Sleep in
-  // bounded slices so /cancel or shutdown can interrupt long waits.
-  const backoffUntil = draftBackoffUntil.get(chatId) ?? 0;
-  if (now < backoffUntil) {
-    logger.info(`[429 BACKOFF] Throttling draft update for chatId=${chatId} due to active 429 backoff (${backoffUntil - now}ms left)`);
-    await sleepInterruptibly(backoffUntil - now);
-  }
-  if (now < st!.nextAllowedTime) {
-    await sleepInterruptibly(st!.nextAllowedTime - now);
-  }
-
-  const elapsed = now - st!.lastEditTime;
-  const textDelta = Math.abs(contentLen - st!.lastSentLen);
-
-  // Too soon AND barely changed → skip this edit entirely (no-op).
-  if (elapsed < st!.currentMs && textDelta < 15) {
-    const wait = Math.max(50, st!.currentMs - elapsed);
-    await new Promise(r => setTimeout(r, wait));
-    return false;
-  }
-  // Too soon but meaningful growth → still pace to the window, then edit.
-  if (elapsed < st!.currentMs) {
-    await new Promise(r => setTimeout(r, st!.currentMs - elapsed));
-  }
-  return true;
-}
-
-function markDraftEditSuccess(chatId: number, contentLen: number): void {
-  const st = draftThrottleStates.get(chatId);
-  if (st) {
-    st.lastEditTime = Date.now();
-    st.lastSentLen = contentLen;
-    // Gradually recover the throttle window toward the minimum on clean success.
-    st.currentMs = Math.max(DRAFT_THROTTLE_MIN_MS, Math.floor(st.currentMs * 0.85));
-  }
-  // Decay the module-level 429 multiplier and cap remaining backoff on success
-  // so one big 429 cannot freeze the chat for the whole turn.
-  recordBackoffSuccess(chatId);
-}
-
-/**
- * Sleep in ≤1s slices so /cancel, shutdown or a later backoff reset can
- * interleave with the wait loop; the event loop gets a chance to process the
- * reset/cancel callbacks between slices instead of blocking for the full
- * backoff duration.
- */
-async function sleepInterruptibly(ms: number): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(0, deadline - Date.now()))));
-  }
-}
-
-function markDraft429(chatId: number, retryAfterSec?: number): void {
-  const st = draftThrottleStates.get(chatId);
-  const backoffMs = (retryAfterSec ?? 1) * 1000;
-  if (st) {
-    st.nextAllowedTime = Date.now() + backoffMs;
-    // Adaptively expand the throttle window on 429.
-    st.currentMs = Math.min(DRAFT_THROTTLE_MAX_MS, Math.max(st.currentMs * 2, backoffMs));
-  }
 }
 
 // ── Block payload validation ──
@@ -889,7 +585,7 @@ const safeEdit = async (messageId: number, text: string | StructuredMessage, htm
       // that finalize later persists via sendRichMessage. On any failure fall
       // through to the real-message path below.
       if (draftCapable) {
-        const draftBlocks = buildDraftStreamingBlocks(originalText, { pillOnly });
+        const draftBlocks = buildDraftStreamingBlocks(originalText, { pillOnly, cacheKey: chatId });
         if (draftBlocks.length > 0 && validateBlocksPayload(draftBlocks)) {
           try {
             logger.info(`[TRACE-EVIDENCE] Calling sendRichMessageDraft (draft mode): draftId=${ephemeralDraftId}, blocks=${draftBlocks.length}`);
@@ -908,7 +604,7 @@ const safeEdit = async (messageId: number, text: string | StructuredMessage, htm
             // before giving up the animated draft for this reply.
             if (pillOnly && !is429Error(e) && isPillOnlyPayload(draftBlocks)) {
               pillOnly = false;
-              const splitBlocks = buildDraftStreamingBlocks(originalText, { pillOnly: false });
+              const splitBlocks = buildDraftStreamingBlocks(originalText, { pillOnly: false, cacheKey: chatId });
               if (splitBlocks.length > 0 && validateBlocksPayload(splitBlocks)) {
                 try {
                   logger.info(`[TRACE-EVIDENCE] Retrying sendRichMessageDraft with split layout (pill + paragraphs): draftId=${ephemeralDraftId}`);
@@ -999,7 +695,7 @@ const safeEdit = async (messageId: number, text: string | StructuredMessage, htm
           messageCache.set(draftId, cacheMarkdown);
           return;
         }
-        const draftBlocks = buildDraftStreamingBlocks(originalText, { pillOnly });
+        const draftBlocks = buildDraftStreamingBlocks(originalText, { pillOnly, cacheKey: chatId });
         if (draftBlocks.length > 0 && validateBlocksPayload(draftBlocks)) {
           try {
             logger.info(`[TRACE-EVIDENCE] sendRichMessageDraft (draft update): draftId=${draftId}, blocks=${draftBlocks.length}`);

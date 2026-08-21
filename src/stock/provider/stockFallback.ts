@@ -323,15 +323,6 @@ export class StockFallbackProvider implements MarketDataProvider {
     return null;
   }
 
-  async getQuotes(symbols: string[]): Promise<StockQuote[]> {
-    const quotes: StockQuote[] = [];
-    for (const sym of symbols) {
-      const q = await this.getQuote(sym);
-      if (q) quotes.push(q);
-    }
-    return quotes;
-  }
-
   private async fetchSnapshot(
     symbol: string,
     type: 'A' | 'H',

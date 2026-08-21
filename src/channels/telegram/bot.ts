@@ -443,6 +443,8 @@ export class TelegramBot {
     this.healthCheckInterval = setInterval(() => {
       void this.performHealthCheck();
     }, HEALTH_CHECK_INTERVAL_MS);
+    // Never keep the event loop alive just for the health check (test hygiene).
+    this.healthCheckInterval.unref?.();
     logger.debug('Health check started');
   }
 
