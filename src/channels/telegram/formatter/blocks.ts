@@ -118,7 +118,7 @@ function inlineToRichText(inlineTokens: MarkdownToken[] | null | undefined, math
     // plus \(...\) / \[...\] (DeepSeek Pro Thinking emits these) and the
     // LATEXINLINE/LATEXBLOCK markers that normalizeMarkdownStructure
     // emits from them — otherwise those markers leak as literal text.
-    const mathRe = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^\$\n\r]*?[^\s$])?)\$|LATEXBLOCKSTART([\s\S]+?)LATEXBLOCKEND|LATEXINLINESTART([\s\S]+?)LATEXINLINEEND|\\\[\s*([\s\S]+?)\s*\\\]|\\\(\s*([\s\S]+?)\s*\\\)/g;
+    const mathRe = /(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$|(?<!\\)\$(?!\s)((?:\\\$|[^\$\n\r])+?)(?<![\s\\])\$|LATEXBLOCKSTART([\s\S]+?)LATEXBLOCKEND|LATEXINLINESTART([\s\S]+?)LATEXINLINEEND|\\\[\s*([\s\S]+?)\s*\\\]|\\\(\s*([\s\S]+?)\s*\\\)/g;
     let last = 0;
     let m: RegExpExecArray | null;
     while ((m = mathRe.exec(s)) !== null) {
@@ -392,7 +392,7 @@ const MATH_OPEN = '\uE000';
 const MATH_CLOSE = '\uE001';
 let mathPlaceholderStore: string[] = [];
 
-const MATH_EXTRACT_RE = /\$\$([\s\S]+?)\$\$|\$([^\s$](?:[^\$\n\r]*?[^\s$])?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+const MATH_EXTRACT_RE = /(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$|(?<!\\)\$(?!\s)((?:\\\$|[^\$\n\r])+?)(?<![\s\\])\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
 
 function extractMath(source: string): { text: string; math: string[] } {
   const math: string[] = [];
@@ -724,7 +724,21 @@ function markdownTokensToRichBlocks(tokens: MarkdownToken[], math: string[]): Ri
       case 'html_block':
       case 'html_inline': {
         const { block } = tryHtmlBlockToRichBlock(token);
-        if (block) blocks.push(block);
+        if (block) {
+          blocks.push(block);
+        } else {
+          // Fallback for unrecognized HTML/XML blocks: strip outer HTML/XML tags
+          // and emit as a paragraph if there is non-empty content.
+          const stripped = (token.content ?? '')
+            .replace(/<[^>]*>/g, '')
+            .trim();
+          if (stripped) {
+            const inner = trimRichText(inlineToRichText(md.parseInline(stripped, {}) as unknown as MarkdownToken[], math));
+            if (inner) {
+              blocks.push({ type: 'paragraph', text: inner });
+            }
+          }
+        }
         break;
       }
       case 'heading_open': {

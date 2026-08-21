@@ -1040,6 +1040,38 @@ export function normalizeMarkdownStructure(markdown: string): string {
     return `> [details] ${summary}\n${quotedBody}`;
   });
 
+  // Gemini Web2API / Web UI components normalization:
+  // 1. Remove GenerateWidget blocks (interactive Canvas micro-app JSON specs not renderable in chat)
+  markdown = markdown.replace(/<GenerateWidget[^>]*>[\s\S]*?<\/GenerateWidget>/gi, '');
+
+  // 2. Transform Timeline & TimelineEvent into structured markdown headings + body
+  markdown = markdown.replace(/<TimelineEvent(?:\s+[^>]*)?>([\s\S]*?)<\/TimelineEvent>/gi, (m, body) => {
+    const timeMatch = m.match(/\btime="([^"]*)"/i);
+    const titleMatch = m.match(/\btitle="([^"]*)"/i);
+    const time = timeMatch ? timeMatch[1].trim() : '';
+    const title = titleMatch ? titleMatch[1].trim() : '';
+    const header = [time, title].filter(Boolean).join(' · ');
+    const headerPrefix = header ? `\n\n#### 📅 ${header}\n` : '\n\n';
+    return `${headerPrefix}${body.trim()}\n\n`;
+  });
+  markdown = markdown.replace(/<\/?Timeline>/gi, '');
+
+  // 3. Transform Elicitations into suggested questions list
+  const elicitations: string[] = [];
+  const elicitationRe = /<Elicitation\s+[^>]*\blabel="([^"]*)"[^>]*\/?>/gi;
+  let em: RegExpExecArray | null;
+  while ((em = elicitationRe.exec(markdown)) !== null) {
+    const label = em[1].trim();
+    if (label) elicitations.push(label);
+  }
+  markdown = markdown.replace(/<ElicitationsGroup>[\s\S]*?<\/ElicitationsGroup>/gi, '');
+  markdown = markdown.replace(/<Elicitation[^>]*\/?>/gi, '');
+  markdown = markdown.replace(/<\/?ElicitationsGroup>/gi, '');
+
+  if (elicitations.length > 0) {
+    markdown = markdown.trim() + '\n\n---\n\n💡 **相关推荐与延伸探讨：**\n' + elicitations.map((label) => `• **${label}**`).join('\n');
+  }
+
   // Process line-by-line to extract fenced code blocks (````) into placeholders so
   // subsequent normalizations (heading spacing, HR isolation, etc.) never corrupt code.
   // Uses backtick-count-aware matching: a ````markdown` fence (4+ backticks) correctly

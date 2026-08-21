@@ -1113,11 +1113,139 @@ describe('Tilde Fence Isolation in normalizeMarkdownStructure', () => {
     expect(lines[4]).toBe('```js');
     expect(lines[6]).toBe('```');
   });
+
+  describe('Gemini Web XML Components and HTML Block Fallback', () => {
+    it('should transform Timeline and TimelineEvent into markdown headings and paragraphs without data loss', () => {
+      const input = [
+        '<Timeline>',
+        '  <TimelineEvent time="2023年底 - 2024年" title="Gemini 1.0 & 1.5 系列">',
+        '    **1.0 世代**确立了 Google 的多模态战略。',
+        '    **1.5 世代**是整个 AI 行业的重大突破。',
+        '  </TimelineEvent>',
+        '  <TimelineEvent time="2025年上半年" title="Gemini 2.0 & 2.5 系列">',
+        '    这一代的重点从单纯的内容生成转向了**多模态实时交互**。',
+        '  </TimelineEvent>',
+        '</Timeline>'
+      ].join('\n');
+
+      const blocks = markdownToRichBlocks(input);
+      expect(blocks.length).toBeGreaterThanOrEqual(4);
+      const headings = blocks.filter(b => b.type === 'heading');
+      expect(headings.length).toBe(2);
+      expect((headings[0] as any).text).toBe('📅 2023年底 - 2024年 · Gemini 1.0 & 1.5 系列');
+      expect((headings[1] as any).text).toBe('📅 2025年上半年 · Gemini 2.0 & 2.5 系列');
+    });
+
+    it('should remove GenerateWidget blocks containing canvas JSON', () => {
+      const input = [
+        '### 正文前导',
+        '<GenerateWidget component_placeholder_id="im_123" height="800px" title="测试组件">',
+        '```json',
+        '{ "widgetSpec": { "id": "test", "prompt": "Draw something" } }',
+        '```',
+        '</GenerateWidget>',
+        '### 正文后续'
+      ].join('\n');
+
+      const blocks = markdownToRichBlocks(input);
+      const preBlocks = blocks.filter(b => b.type === 'pre');
+      expect(preBlocks.length).toBe(0);
+      const headings = blocks.filter(b => b.type === 'heading');
+      expect(headings.map(h => (h as any).text)).toEqual(['正文前导', '正文后续']);
+    });
+
+    it('should convert Elicitations to a recommended questions list', () => {
+      const input = [
+        '这是回答内容。',
+        '<ElicitationsGroup>',
+        '  <Elicitation label="Gemini Deep Think 的工作原理" query="详细介绍..."/>',
+        '  <Elicitation label="对比 3.5 Flash 和旧版 Pro" query="Gemini 3.5 Flash..."/>',
+        '</ElicitationsGroup>'
+      ].join('\n');
+
+      const normalized = normalizeMarkdownStructure(input);
+      expect(normalized).toContain('💡 **相关推荐与延伸探讨：**');
+      expect(normalized).toContain('• **Gemini Deep Think 的工作原理**');
+      expect(normalized).toContain('• **对比 3.5 Flash 和旧版 Pro**');
+
+      const blocks = markdownToRichBlocks(input);
+      const allTexts = blocks.flatMap(extractAllTexts).join(' ');
+      expect(allTexts).toContain('相关推荐与延伸探讨');
+      expect(allTexts).toContain('Gemini Deep Think 的工作原理');
+    });
+
+    it('should fallback unrecognized HTML block into paragraph instead of dropping text', () => {
+      const input = [
+        '### 标题',
+        '<custom-container>',
+        '这是自定义容器内部的 **重要文本**，不应该被静默丢弃。',
+        '</custom-container>',
+        '### 结尾'
+      ].join('\n');
+
+      const blocks = markdownToRichBlocks(input);
+      const allTexts = blocks.flatMap(extractAllTexts).join(' ');
+      expect(allTexts).toContain('重要文本');
+      expect(allTexts).toContain('不应该被静默丢弃');
+    });
+
+    it('should parse math formulas with escaped currency dollar signs without premature cutoff or text swallow', () => {
+      const input = '边际收益（$\\$1,800$）永远小于边际成本（$\\$5,000$）。';
+      const blocks = markdownToRichBlocks(input);
+      expect(blocks.length).toBe(1);
+      const p = blocks[0] as any;
+      expect(p.type).toBe('paragraph');
+
+      // The text should contain the math blocks for \$1,800 and \$5,000 and the plain text in between
+      const mathNodes = (p.text as any[]).filter(n => typeof n === 'object' && n.type === 'mathematical_expression');
+      expect(mathNodes.length).toBe(2);
+      expect(mathNodes[0].expression).toBe('\\$1,800');
+      expect(mathNodes[1].expression).toBe('\\$5,000');
+
+      const allText = extractAllTexts(p).join(' ');
+      expect(allText).toContain('边际收益');
+      expect(allText).toContain('永远小于边际成本');
+    });
+
+    it('should parse complex multi-term financial formulas correctly', () => {
+      const input = '每日利润 = $\\$135,000 - \\$80,000 - \\$100,000 = -\\$45,000$';
+      const blocks = markdownToRichBlocks(input);
+      expect(blocks.length).toBe(1);
+      const p = blocks[0] as any;
+      const mathNodes = (p.text as any[]).filter(n => typeof n === 'object' && n.type === 'mathematical_expression');
+      expect(mathNodes.length).toBe(1);
+      expect(mathNodes[0].expression).toBe('\\$135,000 - \\$80,000 - \\$100,000 = -\\$45,000');
+    });
+
+    it('should not confuse plain currency values in text with math formulas', () => {
+      const input = '单价从 $10 涨到了 $20。';
+      const blocks = markdownToRichBlocks(input);
+      expect(blocks.length).toBe(1);
+      const p = blocks[0] as any;
+      const mathNodes = Array.isArray(p.text)
+        ? p.text.filter((n: any) => typeof n === 'object' && n.type === 'mathematical_expression')
+        : [];
+      expect(mathNodes.length).toBe(0);
+    });
+  });
 });
 
 function extractAllTexts(blk: any): string[] {
   const result: string[] = [];
-  if (blk.text && typeof blk.text === 'string') result.push(blk.text);
+  if (blk === null || blk === undefined) return result;
+  if (typeof blk === 'string') {
+    result.push(blk);
+    return result;
+  }
+  if (Array.isArray(blk)) {
+    for (const item of blk) {
+      result.push(...extractAllTexts(item));
+    }
+    return result;
+  }
+  if (blk.text) {
+    result.push(...extractAllTexts(blk.text));
+  }
   if (blk.items) {
     for (const item of blk.items) {
       if (item.blocks) result.push(...item.blocks.flatMap(extractAllTexts));
