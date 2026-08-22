@@ -22,7 +22,7 @@ import { setConversation } from '../agy/conversationStore.js';
 import { formatFooterMarker, parseFooterMarker } from '../utils/pricing.js';
 import { messageCache } from '../utils/messageCache.js';
 import { getTuningConfig, getDefaultModel } from '../config/userConfig.js';
-import { getEffectiveModelOrder, getChannelModel, buildTierAwareChain } from './modelRegistry.js';
+import { getEffectiveModelOrder, getChannelModel } from './modelRegistry.js';
 import { classifyAndRouteQuery, AUTO_MODEL_NAME } from './router.js';
 import { isBackendAvailable, markBackendFailed, markBackendHealthy } from './backendHealth.js';
 
@@ -32,6 +32,8 @@ import { stripWholeMessageCodeFence, normalizeCodeFences, stripSearchResultPaylo
 import { detectAndSendNewArtifacts } from './messageLoop/artifact.js';
 import { forceReleaseDraft } from '../channels/telegram/bot/channelReply.js';
 import { evaluateRetryState } from './messageLoop/retry.js';
+import { StreamDraft } from './messageLoop/streamDraft.js';
+import { ModelFallbackChain } from './messageLoop/modelFallbackChain.js';
 
 const sleep = (ms: number) => {
   if (process.env['VITEST'] || process.env['NODE_ENV'] === 'test') return Promise.resolve();
@@ -92,6 +94,101 @@ function agyPrintTimeout(): string {
   return `${m}m`;
 }
 
+export interface PreparedPrompt {
+  finalPrompt: string;
+  extraDirs: string[];
+  extraFiles: string[];
+}
+
+/**
+ * Prepares the final prompt from multimodal input, resolving local media
+ * attachment paths into prompt lines and backend-specific file/dir grants.
+ */
+export function preparePromptWithMedia(input: MultimodalInput): PreparedPrompt {
+  let finalPrompt = input.text || '';
+  let extraDirs: string[] = [];
+  let extraFiles: string[] = [];
+  if (input.media && input.media.length > 0) {
+    const mediaLines = input.media.map(item => {
+      return `[本地关联文件 - 类型: ${item.type}, 物理路径: "${item.path}", 原始文件名: "${item.fileName || '未知'}"]`;
+    });
+    finalPrompt = `${mediaLines.join('\n')}\n\n${finalPrompt}`;
+    // Give the agy backend tooling access to the directory holding each
+    // attachment so it can actually read the file (e.g. a PDF/文本附件)
+    // rather than just seeing the path string. This relies on agy's
+    // --add-dir flag and is consumed by the agy fallback path.
+    extraDirs = [...new Set(input.media.map((item) => path.dirname(item.path)))];
+    // Separately, feed the opencode backend the file paths themselves so it
+    // can attach the bytes via its native --file flag. Without this, opencode
+    // vision models only see the path string in the prompt and cannot read
+    // the content. The two channels are mutually supporting: agy uses
+    // extraDirs, opencode uses extraFiles — neither replaces the other.
+    extraFiles = [...new Set(input.media.map((item) => item.path))];
+  }
+  return { finalPrompt, extraDirs, extraFiles };
+}
+
+export interface ExecutionErrorInfo {
+  result: AgyRunResult;
+  model: string;
+  aborted: boolean;
+  lastErrorMessage: string;
+  didTimeout: boolean;
+}
+
+/**
+ * Builds the user-facing HTML error message for a failed model run, choosing
+ * the reason/detail/hint from the exit code, stderr/stdout signatures, and the
+ * failing channel.
+ */
+export function buildExecutionErrorHtml(info: ExecutionErrorInfo): string {
+  const { result: finalResult, model, aborted, lastErrorMessage, didTimeout } = info;
+  const stderrStr = finalResult.stderr || '';
+  const stdoutStr = finalResult.output || '';
+
+  // Friendly, user-facing upstream messages (e.g. web2api empty-response
+  // warning) are shown verbatim WITHOUT the generic "执行失败 / agy CLI"
+  // prefix, since they are not CLI/login errors.
+  const isFriendlyUpstreamMsg = !!stderrStr.trim() && /[⚠️❌]/.test(stderrStr) && !/(failed|Error|refused|terminated)/.test(stderrStr);
+
+  const isAuthError = stderrStr.includes('authentication failed') || stdoutStr.includes('authentication failed') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required');
+  const isTerminated = stderrStr.includes('terminated due to error') || stdoutStr.includes('terminated due to error');
+
+  let errorReason = 'Execution failed';
+  if (isAuthError) errorReason = 'Authentication expired or not logged in';
+  if (isTerminated) errorReason = 'Agent process terminated abnormally';
+  if (finalResult.isTimeout || aborted || didTimeout) errorReason = 'Execution cancelled or timed out';
+
+  let detailMsg = '';
+
+  if (isFriendlyUpstreamMsg) {
+    detailMsg = `\n\n${escapeHtml(stderrStr.trim())}`;
+  } else if (stdoutStr.includes('Welcome to the Antigravity CLI') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required')) {
+    detailMsg = `\n\n<b>Note</b>: local agy CLI is not logged in. Login interaction info:\n<pre>Welcome to the Antigravity CLI. You are currently not signed in. Select login method: > 1. Google OAuth</pre>\nLog in via SSH and run <code>agy auth login</code> to re-authenticate.`;
+  } else {
+    const lines: string[] = [];
+    if (stdoutStr.trim()) {
+      lines.push(...stdoutStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused') || l.includes('not supported')));
+    }
+    if (stderrStr.trim()) {
+      lines.push(...stderrStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused') || l.includes('not supported')));
+    }
+    const uniqueLines = Array.from(new Set(lines)).slice(0, 3);
+    if (uniqueLines.length > 0) {
+      detailMsg = `\n\n<b>Error details</b>:\n<pre>${uniqueLines.map(escapeHtml).join('\n')}</pre>`;
+    }
+  }
+
+  // BUG-07: Choose error hint based on the actual failing channel, not always agy CLI.
+  const failingChannel = getChannelModel(model);
+  const channelHint = (!failingChannel || failingChannel === 'agy')
+    ? 'Please verify that your local `agy` CLI is logged in and configured properly.'
+    : `Please check that the ${failingChannel} backend service is reachable and configured correctly.`;
+  return isFriendlyUpstreamMsg
+    ? `${escapeHtml(stderrStr.trim())}`
+    : `${ICONS.error} <b>${errorReason}</b> (exit code: ${finalResult.exitCode}). ${aborted || finalResult.isTimeout || didTimeout ? 'Task was cancelled or timed out (possibly by the system watchdog or the user).' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : channelHint)}${detailMsg}`;
+}
+
 export async function processMessage(
   session: DaemonSession,
   input: MultimodalInput,
@@ -108,26 +205,7 @@ export async function processMessage(
   }
 
   // 1. Prepare prompt and resolve local multimedia file paths
-  let finalPrompt = input.text || '';
-  let mediaExtraDirs: string[] = [];
-  let mediaExtraFiles: string[] = [];
-  if (input.media && input.media.length > 0) {
-    const mediaLines = input.media.map(item => {
-      return `[本地关联文件 - 类型: ${item.type}, 物理路径: "${item.path}", 原始文件名: "${item.fileName || '未知'}"]`;
-    });
-    finalPrompt = `${mediaLines.join('\n')}\n\n${finalPrompt}`;
-    // Give the agy backend tooling access to the directory holding each
-    // attachment so it can actually read the file (e.g. a PDF/文本附件)
-    // rather than just seeing the path string. This relies on agy's
-    // --add-dir flag and is consumed by the agy fallback path.
-    mediaExtraDirs = [...new Set(input.media.map((item) => path.dirname(item.path)))];
-    // Separately, feed the opencode backend the file paths themselves so it
-    // can attach the bytes via its native --file flag. Without this, opencode
-    // vision models only see the path string in the prompt and cannot read
-    // the content. The two channels are mutually supporting: agy uses
-    // extraDirs, opencode uses extraFiles — neither replaces the other.
-    mediaExtraFiles = [...new Set(input.media.map((item) => item.path))];
-  }
+  const { finalPrompt, extraDirs: mediaExtraDirs, extraFiles: mediaExtraFiles } = preparePromptWithMedia(input);
 
   if (!finalPrompt.trim()) {
     logger.debug('[messageLoop] Empty prompt input, doing nothing.');
@@ -136,83 +214,10 @@ export async function processMessage(
 
   logger.debug(`[messageLoop] Prompt prepared: "${finalPrompt.slice(0, 100)}..."`);
 
-  // 2. Local variables for streaming response
-  let thoughtBuffer = '';
-  let answerBuffer = '';
-  let currentMessageId: number | null = null;
-  let lastEditTime = 0;
-  let isFinished = false;
+  // 2. Single-draft append-only streaming state machine (buffers, draft.phase,
+  // debounced edit pipeline) — extracted into StreamDraft.
+  const draft = new StreamDraft(reply, formatter);
   let isDone = false;
-  let activeUpdatePromise: Promise<void> = Promise.resolve();
-
-  const hasRichPrimitives = !!reply.sendRichDraft;
-
-  // ── Single-draft append-only state machine ────────────────────────────────
-  type Phase = 'thinking' | 'body' | 'footer';
-  let phase: Phase = 'thinking';
-
-  // Render the whole authoritative content to the wire (draft while streaming,
-  // real message once finalized).
-  const flushBlocks = async () => {
-    const stripped = stripThoughtTags(answerBuffer.trim());
-    const content: { content: string; thought?: string } = {
-      content: stripped,
-    };
-    if (thoughtBuffer.trim()) content.thought = thoughtBuffer.trim();
-
-    logger.info(`[TRACE flushBlocks] phase=${phase} msgId=${currentMessageId} content.len=${content.content.length} thought.len=${(content.thought || '').length}`);
-
-    if (currentMessageId === null || currentMessageId === 0) {
-      const resId = await reply.sendRichDraft!(content);
-      if (typeof resId === 'number' && resId > 0) currentMessageId = resId;
-    } else if (phase === 'footer') {
-      await reply.editRichDraft!(currentMessageId, content);
-    } else {
-      await reply.editRichDraft!(currentMessageId, content);
-    }
-  };
-
-  // Stream editing helper — append-only.
-  const updateMessageStream = async (isFinal = false) => {
-    if (isFinished && !isFinal) return;
-    const now = Date.now();
-    if (!isFinal && now - lastEditTime < getTuningConfig().debounceIntervalMs) return;
-    lastEditTime = now;
-
-    activeUpdatePromise = activeUpdatePromise.then(async () => {
-      if (isFinished && !isFinal) return;
-      try {
-        if (!hasRichPrimitives) {
-          // Non-rich fallback: plain text (thinking then body), single message path.
-          let text = '';
-          if (thoughtBuffer.trim()) {
-            const prefix = isFinal ? '🧠 Thinking Process\n\n' : '🧠 Thinking...\n\n';
-            text = prefix + thoughtBuffer.trim();
-            if (answerBuffer.trim()) text += '\n\n' + answerBuffer.trim();
-          } else if (answerBuffer.trim()) {
-            text = answerBuffer.trim();
-          }
-          if (text) {
-            const truncated = formatter.truncateForEdit(text);
-            if (!currentMessageId) currentMessageId = await reply.sendPlain(truncated);
-            else await reply.editPlain(currentMessageId, truncated);
-          }
-          return;
-        }
-
-        // ── Rich streaming path ──
-        // Render the whole authoritative content as native 10.2 RichBlocks via
-        // sendRichDraft/editRichDraft (draft while streaming, real message on
-        // finalize). flushBlocks strips thought tags and keeps a single
-        // append-only draft bubble.
-        await flushBlocks();
-      } catch (e) {
-        logger.warn(`[messageLoop] Failed to update streaming message: ${e}`);
-      }
-    });
-
-    await activeUpdatePromise;
-  };
 
     const cwd = session.currentProject?.path || process.cwd();
 
@@ -238,10 +243,7 @@ export async function processMessage(
       // src/config/models.json) — the modelOrder resolver returns every model
       // starting at `initialModel` and walks downward through lower-priority
       // tiers. Guarantees monotonic downgrade (只降不升). Models that
-      // permanently failed are skipped via skipModels.
-      const skipModels = new Set<string>();
-      const chain = buildTierAwareChain(initialModel, skipModels);
-
+      // permanently failed are skipped via chain.skipModels.
       // Retry policy (per the agreed design):
       //   • Each model is attempted up to retriesPerModel times (configurable via tuning).
       //   • On exhausting a model's retries, downgrade to the next-weaker
@@ -253,55 +255,30 @@ export async function processMessage(
       //     capability mismatch (that is what downgrade is for).
       //   • Total budget across the whole run is chain.length * retriesPerModel.
       const retriesPerModel = getTuningConfig().retriesPerModel;
-      const maxAttempts = chain.length * retriesPerModel;
+      const chain = new ModelFallbackChain(initialModel, retriesPerModel);
 
-      let modelToUse = chain[0];
-      let chainIdx = 0;          // index into `chain`
-      let failsForModel = 0;     // consecutive failures on the current model
-      let attempts = 0;
-      let success = false;
-      let lastResult: AgyRunResult | null = null;
-      let lastErrorMessage = '';
-      let didTimeout = false;
-
-      // Advance to the next model in the fallback chain. The chain walks
-      // monotonically downward (tier-aware, 只降不升 — see buildTierAwareChain)
-      // and TERMINATES once the last model is exhausted; it never wraps back
-      // to the strongest model. Returns true if a next model was selected,
-      // false if the chain is exhausted and the run should terminate.
-      //
-      // Also detects channel switches (e.g., agy → deepseek) and logs them
-      // with a 🔀 emoji so the user sees the backend change in Telegram.
-      const advanceModel = async (reason: string): Promise<boolean> => {
-        const prevModel = modelToUse;
-        if (chainIdx + 1 >= chain.length) {
-          logger.warn(`[messageLoop] Model "${prevModel}" failed (${reason}). Full fallback chain exhausted — terminating (attempt ${attempts}/${maxAttempts}).`);
-          return false;
-        }
-        chainIdx++;
-        modelToUse = chain[chainIdx];
-        failsForModel = 0;
-        // Detect whether the downgrade crosses a channel boundary
-        // (agy ↔ deepseek ↔ web2api ↔ opencode ↔ claude ↔ codex).
-        const prevCh = getChannelModel(prevModel);
-        const nextCh = getChannelModel(modelToUse);
-        const switchedChannel = prevCh && nextCh && prevCh !== nextCh;
-        const logTag = switchedChannel ? `[messageLoop] 🔀 Channel switch ${prevCh}→${nextCh}` : '[messageLoop]';
-        logger.warn(`${logTag} Model "${prevModel}" failed (${reason}). Downgrading to "${modelToUse}" (attempt ${attempts}/${maxAttempts}).`);
+      // User-facing downgrade notice + fresh-bubble reset, invoked by
+      // chain.advance() before each downgrade attempt.
+      const onDowngrade = async (reason: string, prevModel: string, nextModel: string, switchedChannel: boolean): Promise<void> => {
+        const nextCh = getChannelModel(nextModel);
         const switchNote = switchedChannel ? ` (switched to ${nextCh} channel)` : '';
         // BUG-05: Edit the existing message instead of sending a new one to avoid
         // flooding the chat with multiple "downgrading..." messages.
-        const degradeHtml = `${ICONS.warning} ⚠️ Current model \`${prevModel}\` call failed (${escapeHtml(reason).slice(0, 200)}), automatically downgrading to \`${modelToUse}\`${switchNote} and retrying...`;
-        if (currentMessageId) {
-          try { await reply.edit(currentMessageId, degradeHtml); } catch { await reply.send(degradeHtml); }
+        const degradeHtml = `${ICONS.warning} ⚠️ Current model \`${prevModel}\` call failed (${escapeHtml(reason).slice(0, 200)}), automatically downgrading to \`${nextModel}\`${switchNote} and retrying...`;
+        if (draft.currentMessageId) {
+          try { await reply.edit(draft.currentMessageId, degradeHtml); } catch { await reply.send(degradeHtml); }
         } else {
           await reply.send(degradeHtml);
         }
         // Start the next attempt with a fresh bubble so the downgrade note
         // above stays visible (reusing it would overwrite the note).
-        currentMessageId = null;
-        return true;
+        draft.currentMessageId = null;
       };
+
+      let success = false;
+      let lastResult: AgyRunResult | null = null;
+      let lastErrorMessage = '';
+      let didTimeout = false;
 
       let thoughtEventCount = 0;
       let textEventCount = 0;
@@ -317,20 +294,20 @@ export async function processMessage(
       // (outside the retry loop) so finalize can read it after the loop ends.
       const usedStreamJson = Boolean(getTuningConfig().streamJsonForChat);
 
-      while (attempts < maxAttempts && !success && !signal.aborted) {
-        attempts++;
+      while (chain.attempts < chain.maxAttempts && !success && !signal.aborted) {
+        chain.attempts++;
         // Reset per-attempt buffers so a new attempt starts from a clean
         // slate (otherwise a failed attempt's partial blocks would leak into
-        // the next attempt's message). NOTE: currentMessageId is intentionally
+        // the next attempt's message). NOTE: draft.currentMessageId is intentionally
         // NOT reset here — on a same-model retry we reuse the existing draft
         // bubble (edit it back to "Thinking...") instead of sending a fresh
         // placeholder, avoiding duplicate "Thinking..." messages in the chat.
         // advanceModel() nulls it after a downgrade so the downgrade note
         // stays visible and the next attempt opens a new bubble.
-        thoughtBuffer = '';
-        answerBuffer = '';
+        draft.thoughtBuffer = '';
+        draft.answerBuffer = '';
         isDone = false;
-        phase = 'thinking';
+        draft.phase = 'thinking';
         thoughtEventCount = 0;
         textEventCount = 0;
 
@@ -338,8 +315,8 @@ export async function processMessage(
 
         // Immediately send a placeholder "Thinking..." draft bubble to Telegram
         // so the user gets instant visual feedback while the model starts up.
-        if (hasRichPrimitives) {
-          await updateMessageStream(false).catch((err) => {
+        if (draft.hasRich) {
+          await draft.updateMessageStream(false).catch((err) => {
             logger.warn(`[messageLoop] Failed to send initial placeholder: ${err}`);
           });
         }
@@ -347,15 +324,15 @@ export async function processMessage(
         try {
           // Lazy health check: skip this model if its backend is in cooldown.
           {
-            const channel = getChannelModel(modelToUse);
+            const channel = getChannelModel(chain.currentModel);
             if (!isBackendAvailable(channel)) {
-              logger.info(`[messageLoop] Skipping model "${modelToUse}" — backend "${channel}" is in cooldown`);
-              if (await advanceModel(`backend ${channel} temporarily unavailable`)) continue;
+              logger.info(`[messageLoop] Skipping model "${chain.currentModel}" — backend "${channel}" is in cooldown`);
+              if (await chain.advance(`backend ${channel} temporarily unavailable`, onDowngrade)) continue;
               break;
             }
           }
 
-          logger.info(`[messageLoop] Attempt ${attempts}/${maxAttempts}: Running prompt with model="${modelToUse}" (model retry ${failsForModel + 1}/${retriesPerModel})`);
+          logger.info(`[messageLoop] Attempt ${chain.attempts}/${chain.maxAttempts}: Running prompt with model="${chain.currentModel}" (model retry ${chain.failsForModel + 1}/${retriesPerModel})`);
           // Stale-event guard: once this attempt settles (resolves OR rejects),
           // ignore any late events from the just-killed child (SIGINT on timeout)
           // so they never pollute the next attempt's shared stream buffers.
@@ -371,17 +348,17 @@ export async function processMessage(
               rawStreamBuffer += text;
               const parsed = extractThoughtAndContent(rawStreamBuffer);
               if (parsed.thought) {
-                thoughtBuffer = parsed.thought;
-                // Use rawStreamBuffer for answerBuffer during streaming to avoid content loss
-                answerBuffer = rawStreamBuffer;
+                draft.thoughtBuffer = parsed.thought;
+                // Use rawStreamBuffer for draft.answerBuffer during streaming to avoid content loss
+                draft.answerBuffer = rawStreamBuffer;
               } else {
-                answerBuffer = rawStreamBuffer;
+                draft.answerBuffer = rawStreamBuffer;
               }
               // Transition between thinking ↔ body phases based on buffer content
-              if (phase === 'thinking' && answerBuffer.trim()) {
-                phase = 'body';
-              } else if (phase === 'body' && !answerBuffer.trim()) {
-                phase = 'thinking';
+              if (draft.phase === 'thinking' && draft.answerBuffer.trim()) {
+                draft.phase = 'body';
+              } else if (draft.phase === 'body' && !draft.answerBuffer.trim()) {
+                draft.phase = 'thinking';
               }
             };
 
@@ -392,8 +369,8 @@ export async function processMessage(
                 // debounce + adaptive-throttle pipeline; awaiting serializes
                 // them. The gap below prevents the debounce gate from collapsing
                 // consecutive slices.
-                await updateMessageStream(false).catch(err => {
-                  logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
+                await draft.updateMessageStream(false).catch(err => {
+                  logger.warn(`[messageLoop] Error in draft.updateMessageStream: ${err}`);
                 });
                 await sleep(STREAM_SLICE_GAP_MS);
               }
@@ -404,9 +381,9 @@ export async function processMessage(
             // streaming can stall for tens of seconds). Cleared in the finally
             // below. `unref()` keeps it from holding the event loop in tests.
             heartbeatTimer = setInterval(() => {
-              if (isFinished || !reply.usesEphemeralDraft) return;
-              updateMessageStream(false).catch(err => {
-                logger.warn(`[messageLoop] Error in draft heartbeat updateMessageStream: ${err}`);
+              if (draft.isFinished || !reply.usesEphemeralDraft) return;
+              draft.updateMessageStream(false).catch(err => {
+                logger.warn(`[messageLoop] Error in draft heartbeat draft.updateMessageStream: ${err}`);
               });
             }, DRAFT_HEARTBEAT_MS);
             (heartbeatTimer as unknown as { unref?: () => void }).unref?.();
@@ -415,7 +392,7 @@ export async function processMessage(
               prompt: finalPrompt,
               cwd,
               conversationId: session.conversationId,
-              model: modelToUse,
+              model: chain.currentModel,
               proxy: session.proxy,
               printTimeout: agyPrintTimeout(),
               signal: runSignal,
@@ -451,8 +428,8 @@ export async function processMessage(
               logger.debug(`[EVENT] type="${event.type}" content.length=${event.content?.length || 0} content_preview="${(event.content || '').slice(0, 100).replace(/\n/g, '\\n')}"`);
 
               if (event.type === 'thought') {
-                thoughtBuffer += event.content || '';
-                logger.info(`[TRACE] thought event → thoughtBuffer.len=${thoughtBuffer.length} preview="${(event.content || '').slice(0, 80).replace(/\n/g, '\\n')}"`);
+                draft.thoughtBuffer += event.content || '';
+                logger.info(`[TRACE] thought event → draft.thoughtBuffer.len=${draft.thoughtBuffer.length} preview="${(event.content || '').slice(0, 80).replace(/\n/g, '\\n')}"`);
               } else if (event.type === 'text') {
                 const text = event.content || '';
                 // Oversized chunks (agy's final gush) are split and each slice is
@@ -469,13 +446,13 @@ export async function processMessage(
                 logger.debug(`[EVENT STATS] thought event count=${thoughtEventCount} text event count=${textEventCount}`);
               }
 
-              logger.debug(`[BUFFER] thoughtBuffer.length=${thoughtBuffer.length} answerBuffer.length=${answerBuffer.length}`);
+              logger.debug(`[BUFFER] draft.thoughtBuffer.length=${draft.thoughtBuffer.length} draft.answerBuffer.length=${draft.answerBuffer.length}`);
 
-              updateMessageStream(isDone).catch(err => {
-                logger.warn(`[messageLoop] Error in updateMessageStream: ${err}`);
+              draft.updateMessageStream(isDone).catch(err => {
+                logger.warn(`[messageLoop] Error in draft.updateMessageStream: ${err}`);
               });
             }
-          }), modelToUse || session.model || 'unknown', signal);
+          }), chain.currentModel || session.model || 'unknown', signal);
           } finally {
             // Mark the attempt as settled: any late events (e.g. a 'done' emitted
             // by the close-handler of a child we just SIGINT-killed on timeout)
@@ -488,66 +465,66 @@ export async function processMessage(
 
           if (result.exitCode === 0) {
             success = true;
-            markBackendHealthy(getChannelModel(modelToUse));
+            markBackendHealthy(getChannelModel(chain.currentModel));
             // If we had to fall back, persist the change to disk and update session
-            if (modelToUse && modelToUse !== session.model) {
-              logger.info(`[messageLoop] Successfully downgraded to model "${modelToUse}". Updating session.`);
-              session.model = modelToUse;
-              await setConversation(chatId, result.conversationId || session.conversationId || '', cwd, modelToUse, session.threadId);
+            if (chain.currentModel && chain.currentModel !== session.model) {
+              logger.info(`[messageLoop] Successfully downgraded to model "${chain.currentModel}". Updating session.`);
+              session.model = chain.currentModel;
+              await setConversation(chatId, result.conversationId || session.conversationId || '', cwd, chain.currentModel, session.threadId);
             }
             break;
           }
 
           const stderr = result.stderr || '';
-          const output = result.output || answerBuffer;
-          const evaluation = evaluateRetryState(stderr || output, failsForModel, retriesPerModel);
+          const output = result.output || draft.answerBuffer;
+          const evaluation = evaluateRetryState(stderr || output, chain.failsForModel, retriesPerModel);
 
           if (evaluation.isConnection) {
-            markBackendFailed(getChannelModel(modelToUse));
+            markBackendFailed(getChannelModel(chain.currentModel));
           }
           if (evaluation.isPermanent) {
-            skipModels.add(modelToUse);
-            logger.info(`[messageLoop] Permanently skipping model "${modelToUse}" — permanent failure`);
+            chain.skipModels.add(chain.currentModel);
+            logger.info(`[messageLoop] Permanently skipping model "${chain.currentModel}" — permanent failure`);
           }
           if (evaluation.backoffMs > 0) {
             logger.info(`[messageLoop] Rate-limited, backing off ${evaluation.backoffMs}ms before retry`);
             await sleep(evaluation.backoffMs);
           }
 
-          failsForModel++;
+          chain.failsForModel++;
           if (signal.aborted) break;
-          if (failsForModel < retriesPerModel) continue; // retry same model
-          if (await advanceModel(evaluation.reason)) continue; // downgrade to next
+          if (chain.failsForModel < retriesPerModel) continue; // retry same model
+          if (await chain.advance(evaluation.reason, onDowngrade)) continue; // downgrade to next
           break; // last model failed → terminate
         } catch (e: unknown) {
           const errMsg = e instanceof Error ? e.message : String(e);
-          logger.error(`[messageLoop] Attempt ${attempts} error: ${errMsg}`);
+          logger.error(`[messageLoop] Attempt ${chain.attempts} error: ${errMsg}`);
           if (signal.aborted) throw e;
           if (typeof e === 'object' && e !== null && 'isTimeout' in e && e.isTimeout === true) didTimeout = true;
           lastErrorMessage = errMsg;
-          const evaluation = evaluateRetryState(e, failsForModel, retriesPerModel);
+          const evaluation = evaluateRetryState(e, chain.failsForModel, retriesPerModel);
 
           if (evaluation.isConnection) {
-            markBackendFailed(getChannelModel(modelToUse));
+            markBackendFailed(getChannelModel(chain.currentModel));
           }
           if (evaluation.isPermanent) {
-            skipModels.add(modelToUse);
-            logger.info(`[messageLoop] Permanently skipping model "${modelToUse}" — connection error`);
+            chain.skipModels.add(chain.currentModel);
+            logger.info(`[messageLoop] Permanently skipping model "${chain.currentModel}" — connection error`);
           }
           if (evaluation.backoffMs > 0) {
             logger.info(`[messageLoop] Rate-limited, backing off ${evaluation.backoffMs}ms before retry`);
             await sleep(evaluation.backoffMs);
           }
 
-          failsForModel++;
+          chain.failsForModel++;
           if (signal.aborted) break;
-          if (failsForModel < retriesPerModel) continue; // retry same model
-          if (await advanceModel(evaluation.reason)) continue; // downgrade to next
+          if (chain.failsForModel < retriesPerModel) continue; // retry same model
+          if (await chain.advance(evaluation.reason, onDowngrade)) continue; // downgrade to next
           break; // last model failed → terminate
         }
       }
 
-      const finalResult = lastResult || { conversationId: '', output: answerBuffer, exitCode: 1 };
+      const finalResult = lastResult || { conversationId: '', output: draft.answerBuffer, exitCode: 1 };
 
       // In stream-json mode the live body was assembled from agy's incremental
       // `text_delta`, which agy slices on byte boundaries and can split a
@@ -556,9 +533,9 @@ export async function processMessage(
       // own. agy's final `result.response` (carried in result.output) is the
       // complete, correctly-encoded answer, so substitute it for the buffered
       // deltas as the authoritative body. Text mode never hits this path
-      // (answerBuffer already equals the clean accumulated stdout).
+      // (draft.answerBuffer already equals the clean accumulated stdout).
       if (usedStreamJson && finalResult.exitCode === 0 && finalResult.output) {
-        answerBuffer = finalResult.output;
+        draft.answerBuffer = finalResult.output;
       }
 
       // 4. Save and persist the updated conversation ID
@@ -568,24 +545,20 @@ export async function processMessage(
       }
 
       // Wait for any pending stream updates to completely finish before rendering final message
-      isFinished = true;
-      try {
-        await activeUpdatePromise;
-      } catch (e) {
-        logger.warn(`[messageLoop] Error waiting for active update promise: ${e}`);
-      }
+      draft.isFinished = true;
+      await draft.drainPending();
 
-      // Strip <thought> XML from answerBuffer unconditionally before final rendering.
-      // Raw stdout chunks accumulate into answerBuffer including any <thought>…</thought>
-      // tags. Whether thoughtBuffer was populated by the close-handler (agy-CLI path) or
-      // will be populated by transcript recovery below, answerBuffer must be clean before
+      // Strip <thought> XML from draft.answerBuffer unconditionally before final rendering.
+      // Raw stdout chunks accumulate into draft.answerBuffer including any <thought>…</thought>
+      // tags. Whether draft.thoughtBuffer was populated by the close-handler (agy-CLI path) or
+      // will be populated by transcript recovery below, draft.answerBuffer must be clean before
       // markdownToHtml renders it, or a second <details> block will appear.
       {
-        const parsed = extractThoughtAndContent(answerBuffer);
-        answerBuffer = stripSearchResultPayloads(normalizeCodeFences(stripWholeMessageCodeFence(parsed.content)));
-        if (parsed.thought && thoughtBuffer.length === 0) {
-          // Promote inline thought to thoughtBuffer if not already set by onEvent
-          thoughtBuffer = parsed.thought;
+        const parsed = extractThoughtAndContent(draft.answerBuffer);
+        draft.answerBuffer = stripSearchResultPayloads(normalizeCodeFences(stripWholeMessageCodeFence(parsed.content)));
+        if (parsed.thought && draft.thoughtBuffer.length === 0) {
+          // Promote inline thought to draft.thoughtBuffer if not already set by onEvent
+          draft.thoughtBuffer = parsed.thought;
         }
       }
 
@@ -593,7 +566,7 @@ export async function processMessage(
       // tags survived the extractThoughtAndContent step (e.g. an upstream interrupt
       // mid-tag while body text was already streaming), strip them here so they never
       // leak as literal text into the user-facing final message.
-      answerBuffer = stripThoughtTags(answerBuffer);
+      draft.answerBuffer = stripThoughtTags(draft.answerBuffer);
 
       // Recover this turn's complete non-body output (planner reasoning + tool
       // calls + tool results) from agy's transcript. The transcript is a strict
@@ -603,20 +576,20 @@ export async function processMessage(
       // results would never reach the Thinking Process block. Non-agy backends
       // have no transcript, so their real-time thought is kept as-is.
       if (session.conversationId) {
-        const hadRealtimeThought = thoughtBuffer.length > 0;
+        const hadRealtimeThought = draft.thoughtBuffer.length > 0;
         const result = await readThoughtFromTranscript(
           session.conversationId,
-          answerBuffer,
+          draft.answerBuffer,
           turnStartTime,
           // Already streaming a thought: the transcript is fully written by the
           // time agy exits, so poll briefly instead of blocking the reply for 5 s.
           hadRealtimeThought ? { maxAttempts: 5 } : undefined,
         );
         if (result && result.thought) {
-          thoughtBuffer = result.thought;
-          logger.info(`[messageLoop] Successfully recovered thought from transcript: source=${result.source}, length=${thoughtBuffer.length}, replacedRealtime=${hadRealtimeThought}`);
+          draft.thoughtBuffer = result.thought;
+          logger.info(`[messageLoop] Successfully recovered thought from transcript: source=${result.source}, length=${draft.thoughtBuffer.length}, replacedRealtime=${hadRealtimeThought}`);
         } else if (hadRealtimeThought) {
-          logger.info(`[messageLoop] Keeping real-time thought — no transcript for conversation ${session.conversationId}: length=${thoughtBuffer.length}`);
+          logger.info(`[messageLoop] Keeping real-time thought — no transcript for conversation ${session.conversationId}: length=${draft.thoughtBuffer.length}`);
         } else {
           logger.info(`[messageLoop] No thought recovered from transcript for conversation ${session.conversationId}`);
         }
@@ -630,9 +603,9 @@ export async function processMessage(
       // their database; backends fill it from the streamed/parsed proto.
       logger.info(`[footer] Calculating footer - exitCode=${finalResult.exitCode}, usage=${JSON.stringify(finalResult.usage)}`);
       const footerText = formatFooterMarker(
-        modelToUse || getDefaultModel() || '',
+        chain.currentModel || getDefaultModel() || '',
         finalPrompt,
-        answerBuffer + (thoughtBuffer.trim() ? '\n' + thoughtBuffer.trim() : ''),
+        draft.answerBuffer + (draft.thoughtBuffer.trim() ? '\n' + draft.thoughtBuffer.trim() : ''),
         finalResult.usage,
       );
 
@@ -643,14 +616,14 @@ export async function processMessage(
 
         // Atomically send the real persisted message.
         const replyContext = {
-          answerMarkdown: answerBuffer.trim(),
-          thinkingMarkdown: thoughtBuffer.trim(),
+          answerMarkdown: draft.answerBuffer.trim(),
+          thinkingMarkdown: draft.thoughtBuffer.trim(),
         };
 
-        if (currentMessageId !== null) {
-          phase = 'footer';
+        if (draft.currentMessageId !== null) {
+          draft.phase = 'footer';
           try {
-            const finalContent = buildFinalContent(answerBuffer, thoughtBuffer, footerParts);
+            const finalContent = buildFinalContent(draft.answerBuffer, draft.thoughtBuffer, footerParts);
 
             logger.info(`[TRACE finalize] content.len=${finalContent.content.length} thought.len=${(finalContent.thought || '').length} thought.preview="${(finalContent.thought || '').slice(0, 80).replace(/\n/g, '\\n')}" hasSendRich=${!!reply.sendRich} hasEditRich=${!!reply.editRich}`);
 
@@ -660,55 +633,55 @@ export async function processMessage(
             // Only send a brand-new message if no edit primitive is available
             // (e.g. plain-text fallback or a legacy non-rich reply object).
             if (reply.editRich) {
-              const persistedId = await reply.editRich!(currentMessageId, finalContent);
-              if (typeof persistedId === 'number' && persistedId > 0) currentMessageId = persistedId;
+              const persistedId = await reply.editRich!(draft.currentMessageId, finalContent);
+              if (typeof persistedId === 'number' && persistedId > 0) draft.currentMessageId = persistedId;
             } else if (reply.sendRich) {
-              currentMessageId = await reply.sendRich!(finalContent);
+              draft.currentMessageId = await reply.sendRich!(finalContent);
             } else {
               // Plain text fallback
-              const finalText = thoughtBuffer.trim()
-                ? `🧠 Thinking Process\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
-                : answerBuffer.trim();
-              await reply.edit!(currentMessageId, finalText);
+              const finalText = draft.thoughtBuffer.trim()
+                ? `🧠 Thinking Process\n\n${draft.thoughtBuffer.trim()}\n\n${draft.answerBuffer.trim()}`
+                : draft.answerBuffer.trim();
+              await reply.edit!(draft.currentMessageId, finalText);
             }
-            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
+            if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId!, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
           } catch (e) {
             logger.warn(`[messageLoop] Finalize failed: ${e}`);
             try {
-              const finalContent = buildFinalContent(answerBuffer, thoughtBuffer, footerParts);
+              const finalContent = buildFinalContent(draft.answerBuffer, draft.thoughtBuffer, footerParts);
               if (reply.editRich) {
-                const persistedId = await reply.editRich!(currentMessageId, finalContent);
-                if (typeof persistedId === 'number' && persistedId > 0) currentMessageId = persistedId;
+                const persistedId = await reply.editRich!(draft.currentMessageId, finalContent);
+                if (typeof persistedId === 'number' && persistedId > 0) draft.currentMessageId = persistedId;
               } else {
-                currentMessageId = await reply.sendRich!(finalContent);
+                draft.currentMessageId = await reply.sendRich!(finalContent);
               }
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
+              if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
             } catch (e2) {
               logger.error(`[messageLoop] editRich/sendRich fallback failed: ${e2}`);
               // Last resort: persist the answer as a plain-text message so the
               // user never loses the response to an edit failure.
               try {
-                const finalText = thoughtBuffer.trim()
-                  ? `🧠 Thinking Process\n\n${thoughtBuffer.trim()}\n\n${answerBuffer.trim()}`
-                  : answerBuffer.trim();
-                currentMessageId = await reply.send!(finalText);
-                if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
+                const finalText = draft.thoughtBuffer.trim()
+                  ? `🧠 Thinking Process\n\n${draft.thoughtBuffer.trim()}\n\n${draft.answerBuffer.trim()}`
+                  : draft.answerBuffer.trim();
+                draft.currentMessageId = await reply.send!(finalText);
+                if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
               } catch (e3) {
                 logger.error(`[messageLoop] Plain-text degrade failed: ${e3}`);
               }
             }
           }
-        } else if (answerBuffer.trim()) {
+        } else if (draft.answerBuffer.trim()) {
           // No draft was ever created (e.g. model outputs all at once).
           try {
-            const finalContent = buildFinalContent(answerBuffer, thoughtBuffer, footerParts);
-            currentMessageId = await reply.sendRich!(finalContent);
-            if (answerBuffer.trim()) messageCache.set(currentMessageId!, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
+            const finalContent = buildFinalContent(draft.answerBuffer, draft.thoughtBuffer, footerParts);
+            draft.currentMessageId = await reply.sendRich!(finalContent);
+            if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId!, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
           } catch (e) {
             logger.warn(`[messageLoop] sendRich (no-draft path) failed: ${e}`);
             try {
-              currentMessageId = await reply.send!(answerBuffer.trim());
-              if (answerBuffer.trim()) messageCache.set(currentMessageId, answerBuffer.trim(), replyContext, chatId, modelToUse, session.conversationId);
+              draft.currentMessageId = await reply.send!(draft.answerBuffer.trim());
+              if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
             } catch (e2) {
               logger.warn(`[messageLoop] send fallback failed: ${e2}`);
             }
@@ -728,53 +701,16 @@ export async function processMessage(
           `Stderr (preview): ${finalResult.stderr?.substring(0, 1000)}\n` +
           `Stdout (preview): ${finalResult.output?.substring(0, 1000)}\n`);
         
-        const stderrStr = finalResult.stderr || '';
-        const stdoutStr = finalResult.output || '';
-
-        // Friendly, user-facing upstream messages (e.g. web2api empty-response
-        // warning) are shown verbatim WITHOUT the generic "执行失败 / agy CLI"
-        // prefix, since they are not CLI/login errors.
-        const isFriendlyUpstreamMsg = !!stderrStr.trim() && /[⚠️❌]/.test(stderrStr) && !/(failed|Error|refused|terminated)/.test(stderrStr);
-
-        const isAuthError = stderrStr.includes('authentication failed') || stdoutStr.includes('authentication failed') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required');
-        const isTerminated = stderrStr.includes('terminated due to error') || stdoutStr.includes('terminated due to error');
-
-        let errorReason = 'Execution failed';
-        if (isAuthError) errorReason = 'Authentication expired or not logged in';
-        if (isTerminated) errorReason = 'Agent process terminated abnormally';
-        if (finalResult.isTimeout || signal.aborted || didTimeout) errorReason = 'Execution cancelled or timed out';
-
-        let detailMsg = '';
-
-        if (isFriendlyUpstreamMsg) {
-          detailMsg = `\n\n${escapeHtml(stderrStr.trim())}`;
-        } else if (stdoutStr.includes('Welcome to the Antigravity CLI') || stdoutStr.includes('not signed in') || stdoutStr.includes('Authentication required')) {
-          detailMsg = `\n\n<b>Note</b>: local agy CLI is not logged in. Login interaction info:\n<pre>Welcome to the Antigravity CLI. You are currently not signed in. Select login method: > 1. Google OAuth</pre>\nLog in via SSH and run <code>agy auth login</code> to re-authenticate.`;
-        } else {
-          const lines: string[] = [];
-          if (stdoutStr.trim()) {
-            lines.push(...stdoutStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused') || l.includes('not supported')));
-          }
-          if (stderrStr.trim()) {
-            lines.push(...stderrStr.trim().split('\n').filter((l: string) => l.includes('429') || l.includes('503') || l.includes('canceled') || l.includes('failed') || l.includes('Error') || l.includes('refused') || l.includes('not supported')));
-          }
-          const uniqueLines = Array.from(new Set(lines)).slice(0, 3);
-          if (uniqueLines.length > 0) {
-            detailMsg = `\n\n<b>Error details</b>:\n<pre>${uniqueLines.map(escapeHtml).join('\n')}</pre>`;
-          }
-        }
-
-        // BUG-07: Choose error hint based on the actual failing channel, not always agy CLI.
-        const failingChannel = getChannelModel(modelToUse);
-        const channelHint = (!failingChannel || failingChannel === 'agy')
-          ? 'Please verify that your local `agy` CLI is logged in and configured properly.'
-          : `Please check that the ${failingChannel} backend service is reachable and configured correctly.`;
-        const errorHtml = isFriendlyUpstreamMsg
-          ? `${escapeHtml(stderrStr.trim())}`
-          : `${ICONS.error} <b>${errorReason}</b> (exit code: ${finalResult.exitCode}). ${signal.aborted || finalResult.isTimeout || didTimeout ? 'Task was cancelled or timed out (possibly by the system watchdog or the user).' : (lastErrorMessage ? `\n\n${escapeHtml(lastErrorMessage)}` : channelHint)}${detailMsg}`;
-        if (currentMessageId) {
+        const errorHtml = buildExecutionErrorHtml({
+          result: finalResult,
+          model: chain.currentModel,
+          aborted: signal.aborted,
+          lastErrorMessage,
+          didTimeout,
+        });
+        if (draft.currentMessageId) {
           try {
-            await reply.edit(currentMessageId, errorHtml);
+            await reply.edit(draft.currentMessageId, errorHtml);
           } catch (e) {
             await reply.send(errorHtml);
           }
