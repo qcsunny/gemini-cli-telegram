@@ -128,28 +128,31 @@ describe('extractUsageFromProto', () => {
     expect(extractUsageFromProto(raw)).toEqual({ input: 300, output: 0, cached: 0, thinking: 0 });
   });
 
-  it('accepts a truncated varint as a partial value (no validation in parseVarint)', () => {
+  it('rejects a truncated varint (no partial value accepted)', () => {
     // Declares sub-message length 2 but field 2's varint needs 3 bytes; the
-    // decoder silently keeps only the first byte (0xAC & 0x7F = 44).
+    // decoder now throws on the unterminated varint and stops the sub-parse,
+    // keeping only the fields decoded before the truncation.
     const raw = u8([tag(9, 2), 2, tag(2, 0), 0xac, 0x02]);
-    expect(extractUsageFromProto(raw)).toEqual({ input: 44, output: 0, cached: 0, thinking: 0 });
+    expect(extractUsageFromProto(raw)).toEqual({ input: 0, output: 0, cached: 0, thinking: 0 });
   });
 
   it('returns null for an empty Uint8Array', () => {
     expect(extractUsageFromProto(new Uint8Array(0))).toBeNull();
   });
 
-  it('returns a zeroed usage object when the field-9 tag has no length byte left', () => {
-    // Truncated at the tag: parseVarint finds no length bytes and yields len=0.
-    expect(extractUsageFromProto(u8([tag(9, 2)]))).toEqual({ input: 0, output: 0, cached: 0, thinking: 0 });
+  it('returns null when the field-9 tag has no length byte left', () => {
+    // Truncated at the tag: parseVarint throws on the missing length bytes.
+    expect(extractUsageFromProto(u8([tag(9, 2)]))).toBeNull();
   });
 
   it('returns a zeroed usage object when field 9 carries an empty sub-message', () => {
     expect(extractUsageFromProto(u8([tag(9, 2), 0]))).toEqual({ input: 0, output: 0, cached: 0, thinking: 0 });
   });
 
-  it('returns null when the declared field-9 length runs past the end of the buffer', () => {
-    expect(extractUsageFromProto(u8([tag(9, 2), 5, tag(2, 0), 42]))).toBeNull();
+  it('decodes the available prefix when the declared field-9 length runs past the end of the buffer', () => {
+    // Declares length 5 but only 2 sub-bytes exist; the partial sub-message
+    // (field 2 = 42) is still decoded instead of aborting the whole parse.
+    expect(extractUsageFromProto(u8([tag(9, 2), 5, tag(2, 0), 42]))).toEqual({ input: 42, output: 0, cached: 0, thinking: 0 });
   });
 
   it('returns null for garbage bytes or messages without a field-9 length-delimited field', () => {
@@ -372,9 +375,33 @@ describe('readConversationHistory', () => {
     expect(turn.taskDetails).toBe('plain task details');
     expect(turn.renderInfo).toBeNull();
     // extractMetadataFromProto stores the nested field-9 message under the
-    // 'field9' key, never under 'usage', so turn.usage is always undefined.
+    // 'field9' key; turn.usage is wired separately via extractUsageFromProto.
     expect(turn.metadata).toEqual({ field9: { field2: 2 } });
-    expect(turn.usage).toBeUndefined();
+    expect(turn.usage).toEqual({ input: 2, output: 0, cached: 0, thinking: 0 });
     expect(turns![1].taskDetails).toBeNull();
+  });
+
+  it('parses TEXT (JSON) metadata instead of dropping it', () => {
+    const db = openDb('conv-textmeta.db', STEPS_FULL);
+    db.prepare('INSERT INTO steps (idx, step_type, step_payload, metadata) VALUES (?, ?, ?, ?)')
+      .run(0, 8, textPayload('hello text meta'), JSON.stringify({ model: 'test-model', tokens: 12 }));
+    db.close();
+
+    const turns = readConversationHistory(path.join(tmpDir, 'conv-textmeta.db'));
+    expect(turns).toHaveLength(1);
+    expect(turns![0].metadata).toEqual({ model: 'test-model', tokens: 12 });
+    // TEXT metadata carries no proto usage field.
+    expect(turns![0].usage).toBeNull();
+  });
+
+  it('drops malformed TEXT metadata (non-JSON) safely', () => {
+    const db = openDb('conv-badmeta.db', STEPS_FULL);
+    db.prepare('INSERT INTO steps (idx, step_type, step_payload, metadata) VALUES (?, ?, ?, ?)')
+      .run(0, 8, textPayload('hello bad meta'), 'not json at all');
+    db.close();
+
+    const turns = readConversationHistory(path.join(tmpDir, 'conv-badmeta.db'));
+    expect(turns).toHaveLength(1);
+    expect(turns![0].metadata).toBeNull();
   });
 });

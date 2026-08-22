@@ -21,15 +21,27 @@ interface RateCache {
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const FETCH_TIMEOUT_MS = 5000;
+/** Pause live fetches for this long after a failed attempt (API down / network error). */
+const FETCH_BACKOFF_MS = 5 * 60 * 1000;
 const DEFAULT_RATE = 7; // fallback if nothing is available
 
 let cachedRate: RateCache | null = null;
+let lastFetchFailedAt = 0;
+
+function isValidRate(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 100;
+}
 
 function readCache(): RateCache | null {
   try {
     if (!fs.existsSync(CACHE_FILE)) return null;
     const raw = fs.readFileSync(CACHE_FILE, 'utf-8');
-    return JSON.parse(raw) as RateCache;
+    const data: unknown = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return null;
+    const candidate = data as Partial<RateCache>;
+    if (!isValidRate(candidate.rate)) return null;
+    if (typeof candidate.fetchedAt !== 'number' || !Number.isFinite(candidate.fetchedAt)) return null;
+    return { rate: candidate.rate, fetchedAt: candidate.fetchedAt };
   } catch {
     return null;
   }
@@ -63,11 +75,16 @@ async function fetchFromApi(): Promise<number | null> {
 }
 
 async function updateCache(): Promise<void> {
+  // Backoff: after a failed attempt, don't hammer a down API on every stale check.
+  if (lastFetchFailedAt && Date.now() - lastFetchFailedAt < FETCH_BACKOFF_MS) return;
   const liveRate = await fetchFromApi();
   if (liveRate) {
+    lastFetchFailedAt = 0;
     cachedRate = { rate: liveRate, fetchedAt: Date.now() };
     writeCache(liveRate);
     logger.info(`[exchangeRate] Updated live USD/CNY = ${liveRate}`);
+  } else {
+    lastFetchFailedAt = Date.now();
   }
 }
 

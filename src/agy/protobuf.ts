@@ -16,6 +16,11 @@ export function getConversationsDir(): string {
   return path.join(getAgyDataDir(), 'conversations');
 }
 
+/**
+ * Decodes a base-128 varint starting at `pos`.
+ * Throws when the varint is truncated (no terminating byte), so callers can
+ * detect corrupt/partial data instead of silently decoding a partial value.
+ */
 function parseVarint(data: Uint8Array, pos: number): { val: number; nextPos: number } {
   let val = 0;
   let shift = 0;
@@ -24,11 +29,11 @@ function parseVarint(data: Uint8Array, pos: number): { val: number; nextPos: num
     val |= (b & 0x7f) << shift;
     pos++;
     if (!(b & 0x80)) {
-      break;
+      return { val, nextPos: pos };
     }
     shift += 7;
   }
-  return { val, nextPos: pos };
+  throw new Error('Truncated varint');
 }
 
 /** Exported for testing: manual protobuf decoder for agy usage metadata. */
@@ -57,9 +62,10 @@ export function extractUsageFromProto(m: Uint8Array): AgyRunResult['usage'] | nu
       }
       const len = pLen.val;
       pos = pLen.nextPos;
-      if (pos + len > m.length) break;
-      
-      const subM = m.subarray(pos, pos + len);
+      // The declared length may exceed the buffer (truncated write). Decode
+      // whatever is available instead of aborting the whole parse. An empty
+      // sub-message (len 0 at end of buffer) yields a zeroed usage object.
+      const subM = m.subarray(pos, Math.min(pos + len, m.length));
       let subPos = 0;
       const usage = { input: 0, output: 0, cached: 0, thinking: 0 };
       
@@ -475,7 +481,7 @@ export function readConversationHistory(dbPath: string): ConversationTurn[] | nu
   try {
     if (!fssync.existsSync(dbPath)) return null;
     const db = new Database(dbPath, { readonly: true });
-    const rows = db.prepare('SELECT idx, step_type, status, step_payload, metadata, step_format, has_subtrajectory, error_details, permissions, task_details, render_info FROM steps ORDER BY idx ASC').all() as { idx: number; step_type: number; status: string; step_payload: Uint8Array; metadata: Uint8Array; step_format: string; has_subtrajectory: number; error_details: unknown; permissions: unknown; task_details: unknown; render_info: unknown }[];
+    const rows = db.prepare('SELECT idx, step_type, status, step_payload, metadata, step_format, has_subtrajectory, error_details, permissions, task_details, render_info FROM steps ORDER BY idx ASC').all() as { idx: number; step_type: number; status: string; step_payload: Uint8Array; metadata: Uint8Array | string | null; step_format: string; has_subtrajectory: number; error_details: unknown; permissions: unknown; task_details: unknown; render_info: unknown }[];
     db.close();
 
     const turns: ConversationTurn[] = [];
@@ -488,7 +494,21 @@ export function readConversationHistory(dbPath: string): ConversationTurn[] | nu
 
       const stepType = Number(row.step_type);
       const role = stepTypeToRole(stepType);
-      const md = row.metadata instanceof Uint8Array ? extractMetadataFromProto(row.metadata) : null;
+      let md: Record<string, unknown> | null = null;
+      if (row.metadata instanceof Uint8Array) {
+        md = extractMetadataFromProto(row.metadata);
+      } else if (typeof row.metadata === 'string' && row.metadata.trimStart().startsWith('{')) {
+        // Some agy versions persist metadata as a JSON text column.
+        try {
+          const parsed: unknown = JSON.parse(row.metadata);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            md = parsed as Record<string, unknown>;
+          }
+        } catch {
+          md = null;
+        }
+      }
+      const usage = row.metadata instanceof Uint8Array ? extractUsageFromProto(row.metadata) : null;
       turns.push({
         role,
         content: text,
@@ -497,7 +517,7 @@ export function readConversationHistory(dbPath: string): ConversationTurn[] | nu
         status: Number(row.status ?? 0),
         stepFormat: Number(row.step_format ?? 0),
         hasSubtrajectory: row.has_subtrajectory === 1,
-        usage: ((md?.['usage'] ?? undefined) as ConversationTurn['usage']),
+        usage,
         metadata: md,
         errorDetails: row.error_details instanceof Uint8Array ? extractTextFromProto(row.error_details) ?? decodePlainText(row.error_details) : null,
         permissions: row.permissions instanceof Uint8Array ? extractTextFromProto(row.permissions) ?? decodePlainText(row.permissions) : null,

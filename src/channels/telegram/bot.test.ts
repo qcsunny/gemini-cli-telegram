@@ -475,8 +475,11 @@ describe('getStreamingMarkdown', () => {
     const md = getStreamingMarkdown({ content: 'body <thinking>x</thinking>', thought: '<thought>t</thought>\nreal' });
     expect(md).not.toContain('<thinking>');
     expect(md).not.toContain('<thought>');
+    // Paired <thinking> blocks are removed entirely (parity with
+    // think/thought): no tag or inner reasoning text leaks into the output.
+    expect(md).toContain('body');
     expect(md).toContain('real');
-    expect(md).toContain('body x');
+    expect(md).not.toContain('x');
   });
 
   it('returns the body as-is when there is no thought', async () => {

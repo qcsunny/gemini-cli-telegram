@@ -22,8 +22,10 @@ describe('stripThoughtTags', () => {
     expect(stripThoughtTags(`a${T_OPEN}inner${T_CLOSE}c`)).toBe('ac');
   });
 
-  it('strips <thinking> tags but keeps their content', () => {
-    expect(stripThoughtTags('a<thinking>inner</thinking>c')).toBe('ainnerc');
+  it('removes paired <thinking> blocks (parity with think/thought)', () => {
+    // Previously only the tags were stripped and the inner content leaked
+    // into the body; paired blocks are now removed entirely.
+    expect(stripThoughtTags('a<thinking>inner</thinking>c')).toBe('ac');
   });
 
   it('removes orphaned open/close tags of all variants', () => {
@@ -70,5 +72,11 @@ describe('extractSimpleThought', () => {
   it('trims the extracted thought content', () => {
     const { thought } = extractSimpleThought('<thought>  spaced  </thought>x');
     expect(thought).toBe('spaced');
+  });
+
+  it('extracts <thinking> blocks (parity with stripThoughtTags)', () => {
+    const { thought, content } = extractSimpleThought('<thinking>deep reasoning</thinking>final answer');
+    expect(thought).toBe('deep reasoning');
+    expect(content).toBe('final answer');
   });
 });

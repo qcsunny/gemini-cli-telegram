@@ -24,6 +24,7 @@
 export function stripThoughtTags(s: string): string {
   return s
     .replace(/<thought[^>]*>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<thinking[^>]*>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<think[^>]*>[\s\S]*?<\/think>/gi, '')
     .replace(/<\/?thought[^>]*>/gi, '')
     .replace(/<\/?thinking[^>]*>/gi, '')
@@ -32,12 +33,13 @@ export function stripThoughtTags(s: string): string {
 }
 
 /**
- * Extracts a `<thought>` or `<think>` block from a string, returning
- * the thought content and the body with tags stripped.
+ * Extracts a `<thought>`, `<think>` or `<thinking>` block from a string,
+ * returning the thought content and the body with tags stripped.
  */
 export function extractSimpleThought(text: string): { thought: string; content: string } {
   const match =
     text.match(/<thought[^>]*>([\s\S]*?)<\/thought>/i) ||
+    text.match(/<thinking[^>]*>([\s\S]*?)<\/thinking>/i) ||
     text.match(/<think[^>]*>([\s\S]*?)<\/think>/i);
   if (match) {
     return { thought: match[1].trim(), content: stripThoughtTags(text) };
