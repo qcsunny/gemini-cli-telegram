@@ -279,7 +279,7 @@ describe('readConversationHistory', () => {
 describe('isWeb2ApiModel / isDeepSeekModel', () => {
   it('should identify Web2API models', async () => {
     expect(isWeb2ApiModel('Web2API: Gemini 3.7 Flash')).toBe(true);
-    expect(isWeb2ApiModel('Web2API: Gemini Auto')).toBe(true);
+    expect(isWeb2ApiModel('Web2API: Gemini 3.5 Flash Lite')).toBe(true);
   });
 
   it('should not identify non-Web2API models', async () => {
@@ -295,20 +295,20 @@ describe('isWeb2ApiModel / isDeepSeekModel', () => {
 
   it('should not identify non-DeepSeek models', async () => {
     expect(isDeepSeekModel('Gemini 3.6 Flash (High)')).toBe(false);
-    expect(isDeepSeekModel('Web2API: Gemini Auto')).toBe(false);
+    expect(isDeepSeekModel('Web2API: Gemini 3.5 Flash Lite')).toBe(false);
   });
 
   it('should identify Claude CLI models', async () => {
     expect(isClaudeCliModel('Claude CLI: Claude Opus 5')).toBe(true);
     expect(isClaudeCliModel('Claude Opus 4.6 (Thinking)')).toBe(false);
     expect(isClaudeCliModel('OpenCode: Big Pickle')).toBe(false);
-    expect(isClaudeCliModel('Web2API: Gemini Auto')).toBe(false);
+    expect(isClaudeCliModel('Web2API: Gemini 3.5 Flash Lite')).toBe(false);
   });
 
   it('should identify Codex models', async () => {
     expect(isCodexModel('Codex: GPT-5.6 Sol')).toBe(true);
     expect(isCodexModel('Claude CLI: Claude Opus 5')).toBe(false);
-    expect(isCodexModel('Web2API: Gemini Auto')).toBe(false);
+    expect(isCodexModel('Web2API: Gemini 3.5 Flash Lite')).toBe(false);
   });
 });
 

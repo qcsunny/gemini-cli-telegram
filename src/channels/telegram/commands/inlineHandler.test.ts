@@ -79,14 +79,14 @@ describe('displayModelName', () => {
 
   it('should leave other model names unchanged', () => {
     expect(displayModelName('Gemini 3.6 Flash (High)')).toBe('Gemini 3.6 Flash (High)');
-    expect(displayModelName('Web2API: Gemini 3.1 Pro Enhanced')).toBe('Web2API: Gemini 3.1 Pro Enhanced');
+    expect(displayModelName('Web2API: Gemini 3.1 Pro Thinking')).toBe('Web2API: Gemini 3.1 Pro Thinking');
     expect(displayModelName('DeepSeek: Pro Thinking')).toBe('DeepSeek: Pro Thinking');
   });
 });
 
 describe('compareModelName', () => {
   it('should hide backend prefixes only in compare display', () => {
-    expect(compareModelName('Web2API: Gemini 3.1 Pro Enhanced')).toBe('Gemini 3.1 Pro Enhanced');
+    expect(compareModelName('Web2API: Gemini 3.1 Pro Thinking')).toBe('Gemini 3.1 Pro Thinking');
     expect(compareModelName('OpenCode: Qwen 3.6 35B A3B')).toBe('Qwen 3.6 35B A3B');
   });
 

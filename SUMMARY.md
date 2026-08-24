@@ -5,7 +5,7 @@
 - Current release line: **v1.25.6**.
 
 ## Important Details
-- **Six model backends**, routed by display-name prefix in `runAgyPrint()` (src/agy/agyCli.ts): `Web2API:` → web2api HTTP proxy (:8081), `DeepSeek:` → deepseek proxy (:5001), `OpenCode:` → opencode CLI (run --format json), `Claude CLI:` → claude -p, `Codex:` → codex exec, others → native agy subprocess.
+- **Six model backends**, routed by display-name prefix in `runAgyPrint()` (src/agy/agyCli.ts): `Web2API:` → web2api HTTP proxy (:8083), `DeepSeek:` → deepseek proxy (:5001), `OpenCode:` → opencode CLI (run --format json), `Claude CLI:` → claude -p, `Codex:` → codex exec, others → native agy subprocess.
 - **5 capability tiers** (config.json `modelsConfig.tiers` / src/config/models.json): T0 旗舰推理 (5) → T1 高级推理 (4) → T2 通用能力 (6) → T3 轻量与免费 (5) → T4 远程备用 (14). 34 models total across 6 channels.
 - **Tier-aware monotonic fallback**: `buildTierAwareChain()` (src/core/modelRegistry.ts) builds a strictly-descending chain; each model retried `retriesPerModel` (default 3); total budget = chain.length × retriesPerModel. `backendHealth.ts` skips cooldown channels (30s→5min exponential, persisted in `runtime_states`).
 - **🤖 Auto smart router** (src/core/router.ts, committed as `7e19666`): `Web2API: Gemini 3.5 Flash Lite` pre-classifies A/B/C with a 2.5s timeout, heuristic fallback (`classifyHeuristic`), maps A→T0 first, B→T1 first, C→T4 free Web2API. Entry: `/model auto` / keyboard `🤖 Auto` button.

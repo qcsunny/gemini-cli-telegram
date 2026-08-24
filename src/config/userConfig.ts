@@ -164,7 +164,7 @@ const userConfigSchema = z.object({
    * model routes will not be available).
    */
   backends: z.object({
-    /** Web2API reverse proxy URL. Default: http://127.0.0.1:8081/v1 */
+    /** Web2API reverse proxy URL. Default: http://127.0.0.1:8083/v1 */
     web2api: z.string().optional(),
     /** Web2API shared secret key. Default: sk-gemini-local */
     web2apiKey: z.string().optional(),
@@ -414,7 +414,7 @@ let _cachedTuning: TuningConfig | undefined;
 
 /** Default backend URLs — used when config.backends fields are omitted. */
 export const BACKEND_URL_DEFAULTS = {
-  web2api: 'http://127.0.0.1:8081/v1',
+  web2api: 'http://127.0.0.1:8083/v1',
   deepseek: 'http://127.0.0.1:5001/v1',
   web2apiKey: 'sk-gemini-local',
 };
