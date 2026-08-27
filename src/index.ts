@@ -19,6 +19,7 @@ import { clearModelOrderCache } from './core/modelRegistry.js';
 import { startHealthServer, stopHealthServer } from './utils/healthServer.js';
 import { initExchangeRate } from './utils/exchangeRate.js';
 import { closeDb } from './db/index.js';
+import { startWeb2ApiHealthProbe, stopWeb2ApiHealthProbe } from './core/web2apiHealth.js';
 
 export type { ChannelReply, DaemonSession, SessionOptions, MessageFormatter } from './core/types.js';
 export { SessionManager } from './core/session.js';
@@ -64,6 +65,11 @@ export async function startTelegramDaemon(
       stopHealthServer();
     } catch (e) {
       logger.warn(`[shutdown] Error stopping health server: ${e}`);
+    }
+    try {
+      stopWeb2ApiHealthProbe();
+    } catch (e) {
+      logger.warn(`[shutdown] Error stopping Web2API health probe: ${e}`);
     }
     try {
       await bot.stop();
@@ -126,4 +132,8 @@ export async function startTelegramDaemon(
 
   // Initialize exchange rate (fetch in background, use cached value from disk)
   initExchangeRate();
+
+  // Start periodic Web2API /health probe — catches silent degradation (cookie
+  // death, model downgrade, abuse wall) before the first user request pays for it.
+  startWeb2ApiHealthProbe();
 }
