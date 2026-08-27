@@ -54,6 +54,12 @@ function asApiError(err: unknown): TelegramApiError {
   return { message: String(err) };
 }
 
+function isThreadNotFoundError(err: unknown): boolean {
+  const e = asApiError(err);
+  const desc = (e.description || e.message || '').toLowerCase();
+  return desc.includes('message thread not found') || desc.includes('topic_closed') || desc.includes('topic_deleted');
+}
+
 function buildRichMessagePayload(blocks: RichBlock[]): InputRichMessage<never> {
   return { blocks };
 }
@@ -307,7 +313,7 @@ export function buildChannelReply(
   replyToMessageId?: number,
   options?: { draftThrottleMs?: number },
 ): ChannelReply {
-  const messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
+  let messageThreadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
   const draftDisabled = options?.draftThrottleMs === 0;
   // Official Bot API draft mode (sendRichMessageDraft): opt-in via tuning and
   // private chats only (the API rejects non-private chats). The preview is
@@ -563,6 +569,11 @@ const safeEdit = async (messageId: number, text: string | StructuredMessage, htm
         }
       } catch (e: unknown) {
         const err = asApiError(e);
+        if (messageThreadId !== undefined && isThreadNotFoundError(e)) {
+          logger.warn(`[SENDRICH] sendRich failed because message thread ${messageThreadId} was deleted/closed. Retrying in main chat without threadId...`);
+          messageThreadId = undefined;
+          return await replyObj.sendRich!(originalText);
+        }
         logger.error(`sendRich failed entirely: ${err.message}`);
         throw e;
       } finally {
@@ -1064,6 +1075,11 @@ const safeEdit = async (messageId: number, text: string | StructuredMessage, htm
         return msg.message_id;
       } catch (e: unknown) {
         const err = asApiError(e);
+        if (messageThreadId !== undefined && isThreadNotFoundError(e)) {
+          logger.warn(`[channelReply] Message thread ${messageThreadId} was deleted/closed. Clearing threadId and retrying send in main chat...`);
+          messageThreadId = undefined;
+          return await replyObj.send!(replyText);
+        }
         logger.warn(`Failed to send message in ${parseMode} mode: ${err.message}`);
         const msg = await ctx.reply(replyText, {
           message_thread_id: messageThreadId,

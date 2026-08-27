@@ -540,7 +540,7 @@ export function registerStockHandler(
       const blocksPayload = buildStockBlocks(quote);
 
       const tvSymbol = buildTradingViewSymbol(quote.symbol, quote.market);
-      const detailUrl = `https://www.tradingview.com/symbols/${tvSymbol.replace(':', '-')}/`;
+      const detailUrl = `https://www.tradingview.com/symbols/${encodeURIComponent(tvSymbol.replace(':', '-'))}/`;
       const chartUrl = `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=F1F3F6&theme=dark`;
 
       await ctx.api.sendRichMessage(ctx.chat.id, { blocks: blocksPayload }, {

@@ -308,6 +308,14 @@ export class ChatScheduler {
     return task.active;
   }
 
+  async updateTaskThreadId(id: string, threadId: number | undefined): Promise<boolean> {
+    const task = this.tasks.get(id);
+    if (!task) return false;
+    task.threadId = threadId;
+    await this.saveTasks();
+    return true;
+  }
+
   private async loadTasks(): Promise<void> {
     try {
       const data = await fs.readFile(this.tasksFile, 'utf-8').catch(() => '[]');

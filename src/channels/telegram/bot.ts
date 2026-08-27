@@ -351,9 +351,15 @@ export class TelegramBot {
           session.busy = false;
         }
       } catch (e) {
-        logger.error(`Scheduled task execution failed: ${e}`);
+        const errStr = e instanceof Error ? e.message : String(e);
+        logger.error(`Scheduled task execution failed: ${errStr}`);
+        if (errStr.includes('message thread not found') || errStr.includes('TOPIC_CLOSED') || errStr.includes('TOPIC_DELETED')) {
+          logger.warn(`[scheduler] Task ${task.id} thread ${task.threadId} not found, resetting threadId for future executions`);
+          task.threadId = undefined;
+          void scheduler.updateTaskThreadId(task.id, undefined).catch(() => {});
+        }
         try {
-          await this.bot.api.sendMessage(chatId, `${ICONS.error} Scheduled task failed: ${e instanceof Error ? e.message : String(e)}`);
+          await this.bot.api.sendMessage(chatId, `${ICONS.error} Scheduled task failed: ${errStr}`);
         } catch (notifyErr) {
           logger.warn(`Failed to notify chat ${chatId} about scheduled task failure: ${notifyErr}`);
         }
@@ -601,9 +607,10 @@ export class TelegramBot {
             if (ctx.chat.type === 'private') {
               shouldRespond = !text.startsWith('/');
             } else if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
-              const botUsername = ctx.me.username;
-              const isMentioned = text.includes(`@${botUsername}`);
-              const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+              const botUsername = ctx.me?.username ?? this.bot.botInfo?.username;
+              const botId = ctx.me?.id ?? this.bot.botInfo?.id;
+              const isMentioned = botUsername ? text.includes(`@${botUsername}`) : false;
+              const isReplyToBot = botId !== undefined && ctx.message.reply_to_message?.from?.id === botId;
               if ((isMentioned || isReplyToBot) && !text.startsWith('/')) {
                 shouldRespond = true;
               }
@@ -683,16 +690,17 @@ export class TelegramBot {
 
       // In group chats, only respond if the bot is mentioned or replied to
       if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
-        const botUsername = ctx.me.username;
-        const isMentioned = text.includes(`@${botUsername}`);
-        const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+        const botUsername = ctx.me?.username ?? this.bot.botInfo?.username;
+        const botId = ctx.me?.id ?? this.bot.botInfo?.id;
+        const isMentioned = botUsername ? text.includes(`@${botUsername}`) : false;
+        const isReplyToBot = botId !== undefined && ctx.message.reply_to_message?.from?.id === botId;
 
         if (!isMentioned && !isReplyToBot) {
           return;
         }
 
         // Clean up the mention from prompt text to avoid polluting the AI prompt
-        if (isMentioned) {
+        if (isMentioned && botUsername) {
           const mentionRegex = new RegExp(`@${botUsername}\\b`, 'gi');
           promptText = text.replace(mentionRegex, '').trim();
           // Mutate ctx.message.text so downstream helper functions see the clean text

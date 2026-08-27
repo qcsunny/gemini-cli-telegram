@@ -12,7 +12,7 @@
  * with a prefix-matching dispatch table.
  */
 
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, type Context } from 'grammy';
 import type { SessionManager } from '../../../core/session.js';
 import type { SessionOptions } from '../../../core/types.js';
 import { listAvailableSessions, resumeSession } from '../../../core/resume.js';
@@ -28,6 +28,49 @@ import { clearBackendHealth } from '../../../core/backendHealth.js';
 import { extractTitleFromMarkdown, saveMarkdownToAnswerSaveDir } from './helpers.js';
 import { PROJECTS_PER_PAGE } from './projectHandlers.js';
 import { AUTO_MODEL_NAME } from '../../../core/router.js';
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function isMessageNotModifiedError(err: unknown): boolean {
+  const e = asRecord(err);
+  const desc = typeof e?.['description'] === 'string' ? e['description'] : String(err);
+  return desc.includes('message is not modified');
+}
+
+function isCallbackQueryExpiredError(err: unknown): boolean {
+  const e = asRecord(err);
+  const desc = typeof e?.['description'] === 'string' ? e['description'] : String(err);
+  return desc.includes('query is too old') || desc.includes('query ID is invalid');
+}
+
+async function safeEditMessageText(
+  ctx: Context,
+  text: string,
+  other?: Parameters<Context['editMessageText']>[1],
+): Promise<void> {
+  try {
+    await ctx.editMessageText(text, other);
+  } catch (err: unknown) {
+    if (isMessageNotModifiedError(err)) {
+      return;
+    }
+    throw err;
+  }
+}
+
+function safeAnswerCallback(ctx: Context, text?: string): void {
+  ctx.answerCallbackQuery(text).catch((e: unknown) => {
+    if (isCallbackQueryExpiredError(e)) {
+      logger.debug(`[callbackRouter] Callback query expired or invalid: ${e}`);
+    } else {
+      logger.warn(`[callbackRouter] Failed callback query: ${e}`);
+    }
+  });
+}
 
 export function registerCallbackRouter(
   bot: Bot,
@@ -64,8 +107,8 @@ export function registerCallbackRouter(
 
     // Handle navigation callbacks
     if (data === '/start') {
-      ctx.answerCallbackQuery('Main Menu').catch(e => logger.error(`Failed callback: ${e}`));
-      await ctx.editMessageText(formatWelcome(ctx.from?.first_name), {
+      safeAnswerCallback(ctx, 'Main Menu');
+      await safeEditMessageText(ctx, formatWelcome(ctx.from?.first_name), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
@@ -73,36 +116,28 @@ export function registerCallbackRouter(
     }
 
     if (data === 'backends:refresh') {
-      ctx.answerCallbackQuery('Refreshing backends...').catch(() => {});
+      safeAnswerCallback(ctx, 'Refreshing backends...');
       const { text, keyboard } = formatBackendsStatus();
-      try {
-        await ctx.editMessageText(text, {
-          parse_mode: 'HTML',
-          reply_markup: keyboard,
-        });
-      } catch {
-        // ignore if content is identical
-      }
+      await safeEditMessageText(ctx, text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
       return;
     }
 
     if (data === 'backends:reset') {
-      ctx.answerCallbackQuery('Resetting cooldowns...').catch(() => {});
+      safeAnswerCallback(ctx, 'Resetting cooldowns...');
       clearBackendHealth();
       const { text, keyboard } = formatBackendsStatus();
-      try {
-        await ctx.editMessageText(`⚡ <b>All backend cooldowns have been reset!</b>\n\n${text}`, {
-          parse_mode: 'HTML',
-          reply_markup: keyboard,
-        });
-      } catch {
-        // ignore if content is identical
-      }
+      await safeEditMessageText(ctx, `⚡ <b>All backend cooldowns have been reset!</b>\n\n${text}`, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
       return;
     }
 
     if (data === 'cmd:model') {
-      ctx.answerCallbackQuery('Loading models...').catch(() => {});
+      safeAnswerCallback(ctx, 'Loading models...');
       const session = sessionManager.getSession(chatId, threadId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
@@ -115,7 +150,8 @@ export function registerCallbackRouter(
         active: m === currentModel,
       }));
 
-      await ctx.editMessageText(
+      await safeEditMessageText(
+        ctx,
         `${ICONS.model} <b>Model Selection</b> (🚀 Flagship Reasoning)\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
@@ -126,7 +162,7 @@ export function registerCallbackRouter(
     }
 
     if (data === '/new') {
-      ctx.answerCallbackQuery('Resetting session...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Resetting session...');
       logger.info(`[DEBUG /new] defaultOptions = ${JSON.stringify(defaultOptions)}`);
       try {
         const projectManager = sessionManager.getProjectManager();
@@ -136,7 +172,8 @@ export function registerCallbackRouter(
           ...defaultOptions,
           project: defaultProj,
         }, threadId);
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${defaultOptions.model}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
           { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
         );
@@ -147,12 +184,12 @@ export function registerCallbackRouter(
     }
 
     if (data === '/projects') {
-      ctx.answerCallbackQuery('Loading workspaces...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Loading workspaces...');
       const projectManager = sessionManager.getProjectManager();
       const projects = projectManager.getProjects();
 
       if (projects.length === 0) {
-        await ctx.editMessageText(`${ICONS.info} <b>No projects found.</b>`, {
+        await safeEditMessageText(ctx, `${ICONS.info} <b>No projects found.</b>`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -162,7 +199,8 @@ export function registerCallbackRouter(
       const session = sessionManager.getSession(chatId, threadId);
       const currentProjectId = session?.currentProject?.id;
 
-      await ctx.editMessageText(
+      await safeEditMessageText(
+        ctx,
         `${ICONS.project} <b>Workspace Manager</b>\n\nSelect a project to work with:`,
         {
           parse_mode: 'HTML',
@@ -178,7 +216,7 @@ export function registerCallbackRouter(
     }
 
     if (data === '/model') {
-      ctx.answerCallbackQuery('Loading models...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Loading models...');
       const session = sessionManager.getSession(chatId, threadId);
       const currentModel = session?.config?.getModel() || 'unknown';
       const models = await getAvailableModels();
@@ -193,7 +231,8 @@ export function registerCallbackRouter(
         active: m === currentModel,
       }));
 
-      await ctx.editMessageText(
+      await safeEditMessageText(
+        ctx,
         `${ICONS.model} <b>Model Selection</b> (Page ${page + 1}/${totalPages})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
@@ -207,7 +246,7 @@ export function registerCallbackRouter(
       const tier = parseInt(data.replace('/model_tier ', ''), 10);
       const tierNames = ['🚀 Flagship Reasoning', '⚡ Advanced Reasoning', '💡 General Capability', '🍃 Light & Free', '🔁 Remote Backends'];
       const tierName = tierNames[tier] || 'Model category';
-      ctx.answerCallbackQuery(`✨ Switched category: ${tierName}`).catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, `✨ Switched category: ${tierName}`);
 
       const session = sessionManager.getSession(chatId, threadId);
       const currentModel = session?.config?.getModel() || 'unknown';
@@ -244,7 +283,8 @@ export function registerCallbackRouter(
         };
       });
 
-      await ctx.editMessageText(
+      await safeEditMessageText(
+        ctx,
         `${ICONS.model} <b>Model Selection</b> (${tierName})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
@@ -263,14 +303,15 @@ export function registerCallbackRouter(
       const pageModels = models.slice(start, start + MODELS_PER_PAGE);
       const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
 
-      ctx.answerCallbackQuery(`Page ${page + 1}`).catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, `Page ${page + 1}`);
       const modelItems = pageModels.map((m, i) => ({
         id: (start + i + 1).toString(),
         display: m,
         active: m === currentModel,
       }));
 
-      await ctx.editMessageText(
+      await safeEditMessageText(
+        ctx,
         `${ICONS.model} <b>Model Selection</b> (Page ${page + 1}/${totalPages})\n\nSelect the AI brain for this session:\n\nCurrent: <code>${currentModel}</code>`,
         {
           parse_mode: 'HTML',
@@ -281,7 +322,7 @@ export function registerCallbackRouter(
     }
 
     if (data === '/save') {
-      ctx.answerCallbackQuery('Saving latest response...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Saving latest response...');
       const lastContext = messageCache.getLastReplyContextForChat(chatId);
       if (!lastContext || (!lastContext.answerMarkdown.trim() && !lastContext.thinkingMarkdown.trim())) {
         // Fallback: try loading from DB (survives restart)
@@ -317,7 +358,7 @@ export function registerCallbackRouter(
     }
 
     if (data === '/resume' || data.startsWith('/resume ')) {
-      ctx.answerCallbackQuery('Loading session...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Loading session...');
       let session;
       try {
         session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
@@ -343,7 +384,7 @@ export function registerCallbackRouter(
       try {
         const sessions = await listAvailableSessions(session.config);
         if (sessions.length === 0) {
-          await ctx.editMessageText(`${ICONS.info} <b>No saved sessions found.</b>`, {
+          await safeEditMessageText(ctx, `${ICONS.info} <b>No saved sessions found.</b>`, {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           });
@@ -361,7 +402,8 @@ export function registerCallbackRouter(
           `<b>${s.index}.</b> ${escapeHtml(s.title)}\n  └ <i>${s.relativeTime} · <code>${s.id.slice(0, 8)}</code></i>`
         ).join('\n\n');
 
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           `${ICONS.resume} <b>Restore Session</b>\n\n${sessionListText}\n\n<i>Send <code>/resume &lt;index&gt;</code> to switch, or tap a button below:</i>`,
           {
             parse_mode: 'HTML',
@@ -375,10 +417,10 @@ export function registerCallbackRouter(
     }
 
     if (data === '/status') {
-      ctx.answerCallbackQuery('Loading status...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Loading status...');
       const session = sessionManager.getSession(chatId, threadId);
       if (!session) {
-        await ctx.editMessageText(`${ICONS.warning} <b>No active session.</b>`, {
+        await safeEditMessageText(ctx, `${ICONS.warning} <b>No active session.</b>`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -394,7 +436,7 @@ export function registerCallbackRouter(
         activeSessions: sessionManager.getSessionCount(),
       });
 
-      await ctx.editMessageText(stats, {
+      await safeEditMessageText(ctx, stats, {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
@@ -402,8 +444,8 @@ export function registerCallbackRouter(
     }
 
     if (data === '/help') {
-      ctx.answerCallbackQuery('Loading Help...').catch(e => logger.error(`Failed callback: ${e}`));
-      await ctx.editMessageText(formatHelp(), {
+      safeAnswerCallback(ctx, 'Loading Help...');
+      await safeEditMessageText(ctx, formatHelp(), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
@@ -411,11 +453,11 @@ export function registerCallbackRouter(
     }
 
     if (data === '/project_browse') {
-      ctx.answerCallbackQuery('Browsing...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Browsing...');
       const browsePath = getBrowseRoot();
       
       // Update message to show scanning status
-      await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });
+      await safeEditMessageText(ctx, `${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(browsePath)}</code>`, { parse_mode: 'HTML' });
 
       try {
         const projectManager = sessionManager.getProjectManager();
@@ -423,7 +465,7 @@ export function registerCallbackRouter(
         await projectManager.saveProjects();
 
         if (projects.length === 0) {
-          await ctx.editMessageText(`${ICONS.info} <b>No projects found</b> in <code>${escapeHtml(browsePath)}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
+          await safeEditMessageText(ctx, `${ICONS.info} <b>No projects found</b> in <code>${escapeHtml(browsePath)}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           });
@@ -433,7 +475,8 @@ export function registerCallbackRouter(
         const session = sessionManager.getSession(chatId, threadId);
         const currentProjectId = session?.currentProject?.id;
 
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects in <code>${escapeHtml(browsePath)}</code>. Select one to activate:`,
           {
             parse_mode: 'HTML',
@@ -447,7 +490,7 @@ export function registerCallbackRouter(
         );
       } catch (e) {
         logger.error(`Error browsing directory: ${e}`);
-        await ctx.editMessageText(`${ICONS.error} <b>Failed to browse directory.</b>`, {
+        await safeEditMessageText(ctx, `${ICONS.error} <b>Failed to browse directory.</b>`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -456,11 +499,11 @@ export function registerCallbackRouter(
     }
 
     if (data === '/project_scan_documents') {
-      ctx.answerCallbackQuery('Scanning Documents...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Scanning Documents...');
       const scanPath = getBrowseRoot();
       
       // Update message to show scanning status
-      await ctx.editMessageText(`${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(scanPath)}</code>`, { parse_mode: 'HTML' });
+      await safeEditMessageText(ctx, `${ICONS.loading} <b>Scanning:</b> <code>${escapeHtml(scanPath)}</code>`, { parse_mode: 'HTML' });
 
       try {
         const projectManager = sessionManager.getProjectManager();
@@ -468,7 +511,7 @@ export function registerCallbackRouter(
         await projectManager.saveProjects();
 
         if (projects.length === 0) {
-          await ctx.editMessageText(`${ICONS.info} <b>No projects found</b> in <code>${escapeHtml(scanPath)}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
+          await safeEditMessageText(ctx, `${ICONS.info} <b>No projects found</b> in <code>${escapeHtml(scanPath)}</code>.\n\nYou can use <code>/addfolder &lt;path&gt;</code> for manual access.`, {
             parse_mode: 'HTML',
             reply_markup: buildMainKeyboard(),
           });
@@ -478,7 +521,8 @@ export function registerCallbackRouter(
         const session = sessionManager.getSession(chatId, threadId);
         const currentProjectId = session?.currentProject?.id;
 
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           `${ICONS.project} <b>Scan Complete</b>\n\nFound <b>${projects.length}</b> projects in <code>${escapeHtml(scanPath)}</code>. Select one to activate:`,
           {
             parse_mode: 'HTML',
@@ -492,7 +536,7 @@ export function registerCallbackRouter(
         );
       } catch (e) {
         logger.error(`Error scanning Documents: ${e}`);
-        await ctx.editMessageText(`${ICONS.error} <b>Failed to scan Documents.</b>`, {
+        await safeEditMessageText(ctx, `${ICONS.error} <b>Failed to scan Documents.</b>`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -501,12 +545,12 @@ export function registerCallbackRouter(
     }
 
     if (data === '/schedule') {
-      ctx.answerCallbackQuery('Loading Scheduler...').catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, 'Loading Scheduler...');
       const scheduler = sessionManager.getChatScheduler();
       const tasks = scheduler.getTasksForChat(chatId);
 
       if (tasks.length === 0) {
-        await ctx.editMessageText(`${ICONS.clock} <b>Schedule Manager</b>\n\nAutomate tasks by scheduling messages to be sent at specific times or intervals.\n\n<b>Commands:</b>\n• <code>/schedule add &lt;time&gt; &lt;msg&gt;</code>\n• <code>/schedule recurring &lt;min&gt; &lt;msg&gt;</code>\n• <code>/schedule list</code>\n• <code>/schedule remove &lt;id&gt;</code>\n• <code>/schedule toggle &lt;id&gt;</code>`, {
+        await safeEditMessageText(ctx, `${ICONS.clock} <b>Schedule Manager</b>\n\nAutomate tasks by scheduling messages to be sent at specific times or intervals.\n\n<b>Commands:</b>\n• <code>/schedule add &lt;time&gt; &lt;msg&gt;</code>\n• <code>/schedule recurring &lt;min&gt; &lt;msg&gt;</code>\n• <code>/schedule list</code>\n• <code>/schedule remove &lt;id&gt;</code>\n• <code>/schedule toggle &lt;id&gt;</code>`, {
           parse_mode: 'HTML',
           reply_markup: buildMainKeyboard(),
         });
@@ -529,7 +573,7 @@ export function registerCallbackRouter(
         }),
       ];
 
-      await ctx.editMessageText(lines.join('\n'), {
+      await safeEditMessageText(ctx, lines.join('\n'), {
         parse_mode: 'HTML',
         reply_markup: buildMainKeyboard(),
       });
@@ -537,8 +581,9 @@ export function registerCallbackRouter(
     }
 
     if (data === '/autopilot') {
-      ctx.answerCallbackQuery('Autopilot Mode').catch(e => logger.error(`Failed callback: ${e}`));
-      await ctx.editMessageText(
+      safeAnswerCallback(ctx, 'Autopilot Mode');
+      await safeEditMessageText(
+        ctx,
         `${ICONS.bot} <b>Autopilot Mode</b>\n\nI will work autonomously by auto-replying to myself until your goal is achieved.\n\n<b>Workflow:</b>\n1️⃣ Set a clear goal\n2️⃣ I think → act → verify\n3️⃣ I repeat until goal achieved (Timeout: 30 mins)\n4️⃣ I provide a final summary\n\n<b>Commands:</b>\n• <code>/autopilot &lt;goal&gt;</code> — Start working\n• <code>/autopilot stop</code> — Stop immediately`,
         {
           parse_mode: 'HTML',
@@ -563,13 +608,14 @@ export function registerCallbackRouter(
             : modelArg;
       }
 
-      ctx.answerCallbackQuery(`Brain: ${modelName}`).catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, `Brain: ${modelName}`);
 
       try {
         const session = await sessionManager.getOrCreate(chatId, defaultOptions, threadId);
         session.config!.setModel(modelName, false);
         const backKeyboard = new InlineKeyboard().text(`${ICONS.back} Main Menu`, '/start');
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           `${ICONS.model} <b>Brain Switched</b>\n\nNow using: <code>${escapeHtml(modelName)}</code>`,
           {
             parse_mode: 'HTML',
@@ -589,11 +635,11 @@ export function registerCallbackRouter(
       const project = projectManager.getProject(projectId);
 
       if (!project) {
-        ctx.answerCallbackQuery('Project not found').catch(e => logger.error(`Failed callback: ${e}`));
+        safeAnswerCallback(ctx, 'Project not found');
         return;
       }
 
-      ctx.answerCallbackQuery(`Workspace: ${project.name}`).catch(e => logger.error(`Failed callback: ${e}`));
+      safeAnswerCallback(ctx, `Workspace: ${project.name}`);
 
       const currentSession = sessionManager.getSession(chatId, threadId);
       const currentModel = currentSession?.model;
@@ -605,7 +651,8 @@ export function registerCallbackRouter(
           model: currentModel || defaultOptions.model,
         }, threadId);
 
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           `${ICONS.success} <b>Workspace Switched</b>\n\n${formatProjectInfo(project)}`,
           {
             parse_mode: 'HTML',
@@ -628,8 +675,9 @@ export function registerCallbackRouter(
       const session = sessionManager.getSession(chatId, threadId);
       const currentProjectId = session?.currentProject?.id;
 
-      ctx.answerCallbackQuery(`Page ${page + 1}`).catch(e => logger.error(`Failed callback: ${e}`));
-      await ctx.editMessageText(
+      safeAnswerCallback(ctx, `Page ${page + 1}`);
+      await safeEditMessageText(
+        ctx,
         `${ICONS.project} <b>Workspace Manager</b> (Page ${page + 1})\n\nSelect a project:`,
         {
           parse_mode: 'HTML',

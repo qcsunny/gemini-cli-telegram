@@ -212,5 +212,18 @@ describe('ChatScheduler', () => {
       const active2 = await scheduler.toggleTask(id);
       expect(active2).toBe(true);
     });
+
+    it('should update task threadId', async () => {
+      const task = await scheduler.addTask(123, 'msg', 'once', 'now', undefined, 456);
+      const id = task.id;
+      expect(scheduler.getTask(id)?.threadId).toBe(456);
+
+      const updated = await scheduler.updateTaskThreadId(id, undefined);
+      expect(updated).toBe(true);
+      expect(scheduler.getTask(id)?.threadId).toBeUndefined();
+
+      const nonExistent = await scheduler.updateTaskThreadId('invalid-id', 789);
+      expect(nonExistent).toBe(false);
+    });
   });
 });
