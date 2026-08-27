@@ -93,8 +93,8 @@ const PRICING_MATRIX: { pattern: RegExp; rates: PricingInfo }[] = [
     }
   },
   {
-    // Flash / Auto (generic fallback): $1.50 / cache×0.1 / $9.00
-    pattern: /flash|auto/i,
+    // Flash (generic fallback): $1.50 / cache×0.1 / $9.00
+    pattern: /flash/i,
     rates: { inputRate: 1.50, outputRate: 9.00, cacheMultiplier: 0.1, thinkingMultiplier: 'none' }
   }
 ];

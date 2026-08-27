@@ -58,7 +58,7 @@ describe('estimateTokens', () => {
 
 describe('calculateCost — Gemini three product tiers (version-agnostic)', () => {
   it('bills Flash tier at $1.50/M input and $9.00/M output — by model id AND display name', () => {
-    for (const name of ['gemini-3.7-flash', 'Gemini 3.7 Flash', 'gemini-auto']) {
+    for (const name of ['gemini-3.7-flash', 'Gemini 3.7 Flash']) {
       const c = calculateCost(name, 1_000_000, 1_000_000, 0, 0);
       expect(c.inputCost).toBeCloseTo(1.5, 10);
       expect(c.outputCost).toBeCloseTo(9.0, 10);
