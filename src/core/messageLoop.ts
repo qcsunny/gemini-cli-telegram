@@ -13,6 +13,7 @@
 
 import type { DaemonSession, ChannelReply, MessageFormatter, MultimodalInput } from './types.js';
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import { ICONS, escapeHtml } from '../channels/telegram/ui.js';
 import { runAgyPrint, extractThoughtAndContent } from '../agy/agyCli.js';
@@ -537,6 +538,13 @@ export async function processMessage(
       if (usedStreamJson && finalResult.exitCode === 0 && finalResult.output) {
         draft.answerBuffer = finalResult.output;
       }
+      // Media models (gemini-image/music/canvas): text streaming was suppressed,
+      // so draft.answerBuffer is empty. Set it to the preamble text (with media
+      // data URLs / HTML stripped) so the user sees a text message alongside
+      // the media file.
+      if (finalResult.mediaFiles?.length && finalResult.output) {
+        draft.answerBuffer = finalResult.output;
+      }
 
       // 4. Save and persist the updated conversation ID
       if (finalResult.conversationId && finalResult.exitCode === 0) {
@@ -690,6 +698,19 @@ export async function processMessage(
 
         if (finalResult.conversationId) {
           await detectAndSendNewArtifacts(session, finalResult.conversationId, turnStartTime);
+        }
+        // Media models (gemini-image/music/canvas): send extracted media files
+        // via session.sendMedia(). Temp files are cleaned up after sending.
+        if (finalResult.mediaFiles?.length && session.sendMedia) {
+          for (const file of finalResult.mediaFiles) {
+            try {
+              await session.sendMedia(file.path, file.type, file.caption);
+            } catch (e) {
+              logger.error(`[messageLoop] Failed to send media file ${file.path}: ${e}`);
+            } finally {
+              fs.unlink(file.path).catch(() => {});
+            }
+          }
         }
       } else if (finalResult.exitCode !== 0) {
         logger.error(`[messageLoop] DIAGNOSTIC - Execution Failed!\n` +

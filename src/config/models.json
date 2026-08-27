@@ -54,6 +54,9 @@
         "Web2API: Gemini 3.7 Flash",
         "Web2API: Gemini 3.5 Flash Lite Thinking",
         "Web2API: Gemini 3.5 Flash Lite",
+        "Web2API: Gemini Image",
+        "Web2API: Gemini Music",
+        "Web2API: Gemini Canvas",
         "DeepSeek: Flash Thinking Search",
         "DeepSeek: Flash Search",
         "DeepSeek: Pro Thinking",
@@ -90,6 +93,9 @@
     "Web2API: Gemini 3.7 Flash",
     "Web2API: Gemini 3.5 Flash Lite Thinking",
     "Web2API: Gemini 3.5 Flash Lite",
+    "Web2API: Gemini Image",
+    "Web2API: Gemini Music",
+    "Web2API: Gemini Canvas",
     "DeepSeek: Flash Thinking Search",
     "DeepSeek: Flash Search",
     "DeepSeek: Pro Thinking",
@@ -104,6 +110,9 @@
     "Web2API: Gemini 3.1 Pro Thinking":       "gemini-3.1-pro-thinking",
     "Web2API: Gemini 3.5 Flash Lite":         "gemini-3.5-flash-lite",
     "Web2API: Gemini 3.5 Flash Lite Thinking": "gemini-3.5-flash-lite-thinking",
+    "Web2API: Gemini Image":                  "gemini-image",
+    "Web2API: Gemini Music":                  "gemini-music",
+    "Web2API: Gemini Canvas":                 "gemini-canvas",
     "DeepSeek: Flash":                         "deepseek-v4-flash",
     "DeepSeek: Flash Thinking":                "deepseek-v4-flash-thinking",
     "DeepSeek: Flash Search":                  "deepseek-v4-flash-search",
@@ -135,6 +144,9 @@
     "OpenCode: Nemotron 3 Ultra Free":       "综合推理最强，代码能力顶级 · 适用：复杂算法设计、架构决策、高难度调试",
     "OpenCode: Muse Spark 1.2 Free":         "Meta Muse Spark 1.2 贡献者免费档 (1M上下文) · 适用：复杂编码、多模态理解、长任务规划",
     "OpenCode: X Preview F Free":            "Ox Alpha 匿名预览模型免费档 · 适用：日常问答、轻量编码、快速响应",
-    "OpenCode: MiMo V2.5 Free":              "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解"
+    "OpenCode: MiMo V2.5 Free":              "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解",
+    "Web2API: Gemini Image":                  "Gemini 生图 (Nano Banana) · 适用：文本生成图片，返回 JPEG",
+    "Web2API: Gemini Music":                  "Gemini 生音乐 (Lyria, ~30s) · 适用：文本生成音乐，返回 MP3",
+    "Web2API: Gemini Canvas":                 "Gemini Canvas · 适用：生成交互式 HTML 文档"
   }
 }

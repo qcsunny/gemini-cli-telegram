@@ -83,6 +83,10 @@ export interface AgyRunResult {
   thinkingTime?: string;
   /** Gemini model thinking token count (backend-specific) */
   thinkingTokens?: number;
+  /** Media files produced by the run (e.g. images from gemini-image, audio from
+   *  gemini-music, HTML documents from gemini-canvas). The caller is responsible
+   *  for sending these via `session.sendMedia()` and cleaning up the temp files. */
+  mediaFiles?: { path: string; type: 'photo' | 'audio' | 'document'; caption?: string }[];
 }
 
 /** A single step within an agy conversation transcript. Parsed from the
