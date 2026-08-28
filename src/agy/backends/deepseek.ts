@@ -25,6 +25,10 @@ export async function runDeepSeek(opts: AgyRunOptions): Promise<AgyRunResult> {
     },
     // BUG-03: TCP half-open connections must not hang the turn forever.
     timeoutMs: 60_000,
+    // deepseek-web2api keys its server-side session cache on this header;
+    // sending the convId threads every turn of one Telegram conversation
+    // into a single upstream chat session.
+    conversationIdHeader: true,
     // The duration is unknown while streaming, so the live tag carries 0.0 and
     // buildOutput stamps the measured value onto the stored copy.
     openThinking: '<thinking time="0.0">',

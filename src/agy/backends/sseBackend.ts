@@ -60,6 +60,13 @@ interface SseBackendSpec {
   openThinking: string;
   /** Closing tag streamed when reasoning ends, e.g. `</thinking>`. */
   closeThinking: string;
+  /** When set, sends `X-Conversation-Id: <convId>` with every request so a
+   *  stateful upstream (deepseek-web2api's session cache reads exactly this
+   *  header) threads all turns of one Telegram conversation into a single
+   *  server-side chat session. Without it the server keys on a hash of the
+   *  first user message, which collides across conversations that share an
+   *  opener and leaks one conversation's context into another. */
+  conversationIdHeader?: boolean;
   /** Assembles the value returned as `AgyRunResult.output`. */
   buildOutput: (parts: SseOutputParts) => string;
   /** When set, an empty upstream reply fails the run with this stderr message. */
@@ -83,7 +90,11 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
 
   const convId = existingConvId || spec.makeConvId();
 
-  // Replay the whole conversation on every request: these endpoints are stateless.
+  // Replay the whole conversation on every request. web2api is stateless;
+  // deepseek-web2api is stateful but expects the full history too — it diffs
+  // against the previous turn server-side and forwards only the new user
+  // message upstream. The full history doubles as the recovery path when its
+  // session cache misses (restart, TTL expiry, history divergence).
   const history = getHistory(spec.histories, convId, spec.backend);
   history.push({ role: 'user', content: prompt });
 
@@ -109,6 +120,7 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
     headers: {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(body),
+      ...(spec.conversationIdHeader ? { 'X-Conversation-Id': convId } : {}),
       ...spec.authHeaders(),
     },
   };
