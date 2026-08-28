@@ -46,6 +46,7 @@ vi.mock('../utils/messageCache.js', () => ({ messageCache: mockMessageCache }));
 
 import { runAgyPrint } from '../agy/agyCli.js';
 import { setConversation } from '../agy/conversationStore.js';
+import { buildTierAwareChain } from './modelRegistry.js';
 
 describe('processMessage', () => {
   let mockSession: any;
@@ -255,14 +256,13 @@ describe('processMessage', () => {
   });
 
   it('should walk exactly one full loop and terminate when the last model also fails (no second pass)', async () => {
-    // Chain from Web2API: Gemini 3.5 Flash Lite is 7 models long under the
-    // monotonic downgrade tier system (T4 远程备用: Gemini 3.5 Flash Lite →
-    // DeepSeek: Flash Thinking Search → DeepSeek: Flash Search →
-    // DeepSeek: Pro Thinking → DeepSeek: Pro → DeepSeek: Flash Thinking →
-    // DeepSeek: Flash).
-    // Each model is retried 3x, then downgraded. When the LAST model in the chain
-    // (DeepSeek: Flash) also fails its 3 retries, the session must
-    // terminate — it must NOT wrap back to higher tiers.
+    // The chain is data-driven from config.json modelsConfig.tiers (monotonic
+    // downgrade, 只降不升), so compute the expected length from the same
+    // source instead of hardcoding it — the tier contents evolve.
+    const chain = buildTierAwareChain('Web2API: Gemini 3.5 Flash Lite');
+    expect(chain.length).toBeGreaterThan(1);
+    const lastModel = chain[chain.length - 1];
+    const totalAttempts = chain.length * 3; // RETRIES_PER_MODEL = 3
     mockSession.model = 'Web2API: Gemini 3.5 Flash Lite';
     const input: MultimodalInput = { text: 'hello full loop' };
 
@@ -275,15 +275,15 @@ describe('processMessage', () => {
 
     await processMessage(mockSession, input, mockReply, mockFormatter);
 
-    // chain.length (7) * RETRIES_PER_MODEL (3) = 21 total attempts.
-    expect(runAgyPrint).toHaveBeenCalledTimes(21);
+    // chain.length * RETRIES_PER_MODEL (3) total attempts.
+    expect(runAgyPrint).toHaveBeenCalledTimes(totalAttempts);
     // First 3 attempts: original model.
     expect(runAgyPrint).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'Web2API: Gemini 3.5 Flash Lite' }));
     expect(runAgyPrint).toHaveBeenNthCalledWith(3, expect.objectContaining({ model: 'Web2API: Gemini 3.5 Flash Lite' }));
-    // Last 3 attempts: downgraded last model (DeepSeek: Flash).
-    expect(runAgyPrint).toHaveBeenNthCalledWith(19, expect.objectContaining({ model: 'DeepSeek: Flash' }));
-    expect(runAgyPrint).toHaveBeenNthCalledWith(21, expect.objectContaining({ model: 'DeepSeek: Flash' }));
-    // NO 22nd call.
+    // Last 3 attempts: downgraded last model.
+    expect(runAgyPrint).toHaveBeenNthCalledWith(totalAttempts - 2, expect.objectContaining({ model: lastModel }));
+    expect(runAgyPrint).toHaveBeenNthCalledWith(totalAttempts, expect.objectContaining({ model: lastModel }));
+    // NO extra call beyond the budget.
     // Session model is unchanged (it never succeeded).
     expect(mockSession.model).toBe('Web2API: Gemini 3.5 Flash Lite');
     // An error/termination message must have been surfaced to the channel.

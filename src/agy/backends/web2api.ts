@@ -44,7 +44,7 @@ function isMediaModel(alias: string | undefined): boolean {
 /** One extracted media file ready for `session.sendMedia()`. */
 interface MediaFileInfo {
   path: string;
-  type: 'photo' | 'audio' | 'document';
+  type: 'photo' | 'audio' | 'video' | 'document';
   caption?: string;
 }
 
@@ -64,8 +64,11 @@ async function extractMediaFiles(output: string, modelId: string): Promise<{ fil
   let text = output;
 
   if (modelId === 'gemini-canvas') {
-    // Canvas returns an inline HTML document (not a data URL).
-    const htmlMatch = output.match(/(<!DOCTYPE html[\s\S]*?<\/html>)/i);
+    // Canvas returns an inline HTML document (not a data URL). The upstream
+    // sometimes truncates the document mid-stream, so fall back to "DOCTYPE
+    // to end of output" when no closing </html> is present.
+    const htmlMatch = output.match(/(<!DOCTYPE html[\s\S]*?<\/html>)/i)
+      ?? output.match(/(<!DOCTYPE html[\s\S]*)/i);
     if (htmlMatch) {
       const html = htmlMatch[1];
       const tmpPath = path.join(os.tmpdir(), `web2api-canvas-${crypto.randomUUID()}.html`);
@@ -74,22 +77,36 @@ async function extractMediaFiles(output: string, modelId: string): Promise<{ fil
       text = output.slice(0, htmlMatch.index).trim();
     }
   } else {
-    // Image and music models return base64 data URLs in markdown.
+    // Image and music models return base64 data URLs in markdown. A single
+    // music response can carry several payloads at once: the MP3 track, an
+    // MP4 container (audio, sometimes with a visualizer), and a WebVTT
+    // subtitle track — handle every mime, not just audio/*.
     const matches = [...output.matchAll(DATA_URL_RE)];
-    for (let i = 0; i < matches.length; i++) {
-      const m = matches[i];
+    for (const m of matches) {
       const mime = m[1];
-      const base64 = m[2];
-      const buf = Buffer.from(base64, 'base64');
+
+      // Subtitle/caption tracks (text/vtt) ride along with music responses.
+      // Telegram shows neither sidecar nor embedded soft-sub tracks, and
+      // burning them in needs an ffmpeg re-encode — too costly here. Skip.
+      if (mime.startsWith('text/')) continue;
+
+      const buf = Buffer.from(m[2], 'base64');
+      // Truncated or spurious binary fragments (<1 KB) are never real media.
+      if (buf.length < 1024) continue;
 
       let ext: string;
-      let mediaType: 'photo' | 'audio' | 'document';
+      let mediaType: 'photo' | 'audio' | 'video';
 
       if (modelId === 'gemini-image' || mime.startsWith('image/')) {
         ext = mime === 'image/png' ? '.png' : mime === 'image/webp' ? '.webp' : '.jpg';
         mediaType = 'photo';
+      } else if (mime.startsWith('video/')) {
+        // Gemini music often arrives as an MP4 container (audio track, or
+        // audio + visualizer). Send it as video so Telegram plays it as-is.
+        ext = '.mp4';
+        mediaType = 'video';
       } else {
-        ext = '.mp3';
+        ext = mime === 'audio/mp4' || mime === 'audio/m4a' ? '.m4a' : '.mp3';
         mediaType = 'audio';
       }
 
@@ -99,18 +116,20 @@ async function extractMediaFiles(output: string, modelId: string): Promise<{ fil
       files.push({
         path: tmpPath,
         type: mediaType,
-        caption: i === 0
+        caption: files.length === 0
           ? (mediaType === 'photo' ? '🎨 Generated image' : '🎵 Generated music')
           : undefined,
       });
     }
 
-    // Strip the markdown data-URL syntax from the leftover text.
-    if (modelId === 'gemini-image') {
-      text = output.replace(/!\[image\]\(data:image\/[^)]+\)/g, '').trim();
-    } else if (modelId === 'gemini-music') {
-      text = output.replace(/\[audio\]\(data:audio\/[^)]+\)/g, '').trim();
-    }
+    // Strip EVERY markdown data-URL (any mime) from the leftover text, plus
+    // any bare data URL. A single unstripped video/mp4 payload is megabytes
+    // of base64 that pegs the CPU in the rendering pipeline and floods the
+    // Telegram draft.
+    text = output
+      .replace(/!?\[[^\]]*\]\(data:[-\w.+/]+;base64,[A-Za-z0-9+/=]+\)/g, '')
+      .replace(/data:[-\w.+/]+;base64,[A-Za-z0-9+/=]+/g, '')
+      .trim();
   }
 
   return { files, text };
