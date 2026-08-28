@@ -183,6 +183,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   // Post-process media model output: extract base64 / HTML into temp files.
   if (mediaModel && result.exitCode === 0 && result.output) {
+    result.mediaModel = true;
     try {
       const { files, text } = await extractMediaFiles(result.output, modelId);
       result.mediaFiles = files;

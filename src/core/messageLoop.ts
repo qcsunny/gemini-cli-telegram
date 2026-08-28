@@ -541,8 +541,9 @@ export async function processMessage(
       // Media models (gemini-image/music/canvas): text streaming was suppressed,
       // so draft.answerBuffer is empty. Set it to the preamble text (with media
       // data URLs / HTML stripped) so the user sees a text message alongside
-      // the media file.
-      if (finalResult.mediaFiles?.length && finalResult.output) {
+      // the media file. When the upstream generated no media (text-only reply),
+      // this is still the only path that surfaces the text to the user.
+      if (finalResult.mediaModel && finalResult.output) {
         draft.answerBuffer = finalResult.output;
       }
 

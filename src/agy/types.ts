@@ -87,6 +87,10 @@ export interface AgyRunResult {
    *  gemini-music, HTML documents from gemini-canvas). The caller is responsible
    *  for sending these via `session.sendMedia()` and cleaning up the temp files. */
   mediaFiles?: { path: string; type: 'photo' | 'audio' | 'video' | 'document'; caption?: string }[];
+  /** True when the run went through a media backend that suppressed text
+   *  streaming (see runWeb2Api): the final `output` is the only carrier of the
+   *  preamble text, even when no media files were extracted. */
+  mediaModel?: boolean;
 }
 
 /** A single step within an agy conversation transcript. Parsed from the
