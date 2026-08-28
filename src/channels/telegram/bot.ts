@@ -470,9 +470,22 @@ export class TelegramBot {
     }
 
     // ── Backend reachability ──
-    const probeBackend = (label: string, url: string) => {
-      const req = http.get(url, { timeout: 3000 }, (res) => {
-        logger.info(`[boot] ${label}  OK (HTTP ${res.statusCode})`);
+    // Probe the backend's /health endpoint, not its base URL: both backends
+    // answer 404 on "/" (only proves a process is listening), while /health
+    // actually reports service state.
+    const probeBackend = (label: string, baseUrl: string) => {
+      let healthUrl: string;
+      try {
+        healthUrl = new URL('/health', baseUrl).toString();
+      } catch {
+        healthUrl = baseUrl;
+      }
+      const req = http.get(healthUrl, { timeout: 3000 }, (res) => {
+        if (res.statusCode && res.statusCode < 400) {
+          logger.info(`[boot] ${label}  OK (HTTP ${res.statusCode})`);
+        } else {
+          logger.warn(`[boot] ${label}  DEGRADED — /health returned HTTP ${res.statusCode}.`);
+        }
         res.resume();
       });
       req.on('error', (e) => {
