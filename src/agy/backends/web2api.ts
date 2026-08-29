@@ -28,7 +28,7 @@ import type { AgyRunOptions, AgyRunResult, AgyStreamEvent } from '../types.js';
 const FALLBACK_MODEL_ID = 'gemini-3.1-pro';
 
 /** Model IDs that produce non-text media instead of plain text. */
-const MEDIA_MODEL_IDS = new Set(['gemini-image', 'gemini-music', 'gemini-canvas']);
+const MEDIA_MODEL_IDS = new Set(['gemini-image', 'gemini-music', 'gemini-canvas', 'gemini-video']);
 
 /** Resolve a user-facing alias to the upstream model ID the Go side expects. */
 function resolveModelId(alias: string): string {
@@ -110,7 +110,8 @@ async function extractMediaFiles(output: string, modelId: string): Promise<{ fil
         mediaType = 'audio';
       }
 
-      const prefix = modelId === 'gemini-image' ? 'web2api-img' : 'web2api-music';
+      const prefix = modelId === 'gemini-image' ? 'web2api-img'
+        : modelId === 'gemini-video' ? 'web2api-video' : 'web2api-music';
       const tmpPath = path.join(os.tmpdir(), `${prefix}-${crypto.randomUUID()}${ext}`);
       await fs.writeFile(tmpPath, buf);
       files.push({
@@ -170,7 +171,13 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
     // Set slightly above the Go-side request_timeout_sec (180s) so the Go
     // backend's own timeout fires first, surfacing the real upstream error
     // instead of a generic socket timeout here.
-    timeoutMs: 200_000,
+    // Video is the exception: the Go-side pipeline (prime + video turn + poll
+    // for the finished MP4) budgets 10 minutes, so this must stay above that.
+    // Deep research budgets 15 minutes there (plan + confirm + poll for the
+    // cited report), so it gets ~15.3 minutes here for the same reason.
+    timeoutMs: modelId === 'gemini-video' ? 620_000
+      : modelId === 'gemini-deep-research' ? 920_000
+      : 200_000,
     openThinking: '<thought>',
     closeThinking: '</thought>',
     // Web2API keeps the interleaved stream verbatim: reasoning and answer can
