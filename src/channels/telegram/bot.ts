@@ -473,10 +473,11 @@ export class TelegramBot {
     // Probe the backend's /health endpoint, not its base URL: both backends
     // answer 404 on "/" (only proves a process is listening), while /health
     // actually reports service state.
-    const probeBackend = (label: string, baseUrl: string) => {
+    // healthPath 可覆盖：HelloGML(GLM) 没有 /health，它的无鉴权探针是 /ping
+    const probeBackend = (label: string, baseUrl: string, healthPath = '/health') => {
       let healthUrl: string;
       try {
-        healthUrl = new URL('/health', baseUrl).toString();
+        healthUrl = new URL(healthPath, baseUrl).toString();
       } catch {
         healthUrl = baseUrl;
       }
@@ -484,7 +485,7 @@ export class TelegramBot {
         if (res.statusCode && res.statusCode < 400) {
           logger.info(`[boot] ${label}  OK (HTTP ${res.statusCode})`);
         } else {
-          logger.warn(`[boot] ${label}  DEGRADED — /health returned HTTP ${res.statusCode}.`);
+          logger.warn(`[boot] ${label}  DEGRADED — ${healthPath} returned HTTP ${res.statusCode}.`);
         }
         res.resume();
       });
@@ -509,6 +510,13 @@ export class TelegramBot {
       probeBackend('DeepSeek', deepseekUrl);
     } else {
       logger.info('[boot] DeepSeek             SKIPPED (not configured)');
+    }
+
+    const glmUrl = getBackendUrl('glm');
+    if (glmUrl) {
+      probeBackend('GLM', glmUrl, '/ping');
+    } else {
+      logger.info('[boot] GLM                  SKIPPED (not configured)');
     }
   }
 

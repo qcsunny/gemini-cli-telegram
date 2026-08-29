@@ -1,7 +1,7 @@
 /**
  * @file conversationManager.ts
  * @description In-memory conversation history management for every backend that
- * keeps no server-side session (web2api, deepseek, opencode, claude, codex).
+ * keeps no server-side session (web2api, deepseek, glm, opencode, claude, codex).
  * These services are stateless, so we must replay the full message history on
  * every request.
  */
@@ -16,6 +16,7 @@ interface Web2ApiMessage {
 
 export const web2apiHistories = new Map<string, Web2ApiMessage[]>();
 export const deepseekHistories = new Map<string, Web2ApiMessage[]>();
+export const glmHistories = new Map<string, Web2ApiMessage[]>();
 
 export const opencodeHistories = new Map<string, Web2ApiMessage[]>();
 export const claudeHistories = new Map<string, Web2ApiMessage[]>();
@@ -41,6 +42,10 @@ export function makeDeepSeekConvId(): string {
   return `deepseek-${globalThis.crypto.randomUUID()}`;
 }
 
+export function makeGlmConvId(): string {
+  return `glm-${globalThis.crypto.randomUUID()}`;
+}
+
 export function makeOpenCodeConvId(): string {
   return `opencode-${globalThis.crypto.randomUUID()}`;
 }
@@ -60,6 +65,10 @@ export function restoreHistoriesFromDb(): void {
 
 export function clearDeepSeekHistory(conversationId: string): void {
   deepseekHistories.delete(conversationId);
+}
+
+export function clearGlmHistory(conversationId: string): void {
+  glmHistories.delete(conversationId);
 }
 
 /** Clear the Web2API history for a given conversationId (called on /new). */

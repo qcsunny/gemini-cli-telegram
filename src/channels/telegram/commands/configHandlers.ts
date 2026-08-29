@@ -169,7 +169,7 @@ export function registerConfigHandlers(
 }
 
 /**
- * Format the real-time health and cooldown status of all 6 backend channels.
+ * Format the real-time health and cooldown status of all 7 backend channels.
  */
 export function formatBackendsStatus(): { text: string; keyboard: InlineKeyboard } {
   const statuses = getAllBackendHealthStatus();
@@ -180,6 +180,7 @@ export function formatBackendsStatus(): { text: string; keyboard: InlineKeyboard
     opencode: 'OpenCode Local Engine',
     deepseek: 'DeepSeek Proxy',
     web2api: 'Web2API Proxy',
+    glm: 'GLM Proxy (chatglm)',
   };
 
   const lines = statuses.map((s) => {

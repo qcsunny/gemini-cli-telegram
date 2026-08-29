@@ -216,11 +216,11 @@ interface ChannelHealthStatus {
 }
 
 /**
- * Returns health status overview for all 6 backend channels.
+ * Returns health status overview for all 7 backend channels.
  */
 export function getAllBackendHealthStatus(): ChannelHealthStatus[] {
   loadFromDbIfNeeded();
-  const allChannels = ['codex', 'claude', 'agy', 'opencode', 'deepseek', 'web2api'];
+  const allChannels = ['codex', 'claude', 'agy', 'opencode', 'deepseek', 'web2api', 'glm'];
   const now = Date.now();
   return allChannels.map((channel) => {
     const health = backendHealth.get(channel);

@@ -2,7 +2,7 @@
  * @file sseBackend.ts
  * @description Shared OpenAI-compatible SSE streaming backend.
  *
- * `deepseek` and `web2api` both POST to `<base>/chat/completions` with
+ * `deepseek`, `web2api` and `glm` all POST to `<base>/chat/completions` with
  * `stream: true` and read `data: {...}` frames whose `choices[0].delta` carries
  * `content` plus `reasoning_content`. Every mechanical part of that flow used to
  * exist twice, verbatim: line framing across chunk boundaries, the tail frame
@@ -43,7 +43,7 @@ interface SseOutputParts {
 /** Everything that differs between two OpenAI-compatible SSE backends. */
 interface SseBackendSpec {
   /** Backend id — selects the configured URL and namespaces stored history. */
-  backend: 'deepseek' | 'web2api';
+  backend: 'deepseek' | 'web2api' | 'glm';
   /** Human-readable name used in error strings (`DeepSeek HTTP 500: ...`). */
   label: string;
   /** In-memory history map for this backend. */

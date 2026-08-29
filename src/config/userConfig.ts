@@ -170,6 +170,10 @@ const userConfigSchema = z.object({
     web2apiKey: z.string().optional(),
     /** DeepSeek API proxy URL. Default: http://127.0.0.1:5001/v1 */
     deepseek: z.string().optional(),
+    /** GLM (chatglm.cn) proxy URL — HelloGML. Default: http://127.0.0.1:8093/v1 */
+    glm: z.string().optional(),
+    /** GLM proxy API key. No default: HelloGML generates one per install. */
+    glmKey: z.string().optional(),
   }).optional(),
   /**
    * Tuning parameters for runtime behavior.
@@ -416,6 +420,7 @@ let _cachedTuning: TuningConfig | undefined;
 export const BACKEND_URL_DEFAULTS = {
   web2api: 'http://127.0.0.1:8083/v1',
   deepseek: 'http://127.0.0.1:5001/v1',
+  glm: 'http://127.0.0.1:8093/v1',
   web2apiKey: 'sk-gemini-local',
 };
 
@@ -423,7 +428,7 @@ export const BACKEND_URL_DEFAULTS = {
  * Returns the configured backend URL for a given service, falling back to defaults.
  * Returns null if neither config nor default is set (backend not available).
  */
-export function getBackendUrl(service: 'web2api' | 'deepseek'): string | null {
+export function getBackendUrl(service: 'web2api' | 'deepseek' | 'glm'): string | null {
   const cfg = loadUserConfig();
   return cfg?.backends?.[service] || BACKEND_URL_DEFAULTS[service] || null;
 }

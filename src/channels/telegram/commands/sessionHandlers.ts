@@ -114,7 +114,7 @@ export function registerSessionHandlers(
     const model = session?.config?.getModel() || defaultOptions.model || 'unknown';
 
     const channel = getChannelModel(model);
-    if (channel === 'web2api' || channel === 'deepseek') {
+    if (channel === 'web2api' || channel === 'deepseek' || channel === 'glm') {
       await ctx.reply(
         `ℹ️ <b>当前模型（<code>${escapeHtml(model)}</code>）为 Web / 反代代理通道，无需统计 API Token 用量与计费。</b>\n\n<i>💡 <code>/usage</code> 命令主要用于统计 AGY、Claude CLI、Codex CLI、OpenCode 等计费后端的 Token 开销。</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },
@@ -150,7 +150,7 @@ export function registerSessionHandlers(
           .all();
 
         for (const r of rows) {
-          if (r.backend === 'web2api' || r.backend === 'deepseek') continue;
+          if (r.backend === 'web2api' || r.backend === 'deepseek' || r.backend === 'glm') continue;
           if (r.usage) {
             try {
               const u = JSON.parse(r.usage);

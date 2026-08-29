@@ -114,7 +114,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       conversation_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL,
-      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode','claude','codex')),
+      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','glm','gemini-direct','opencode','claude','codex')),
       created_at TEXT NOT NULL,
       usage TEXT
     );
@@ -169,13 +169,13 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlists_user_symbol ON watchlists(telegram_user_id, symbol);
   `);
 
-  // Migration: allow all 6 backends ('opencode', 'claude', 'codex') in the messages table CHECK
+  // Migration: allow all 7 backends ('opencode', 'claude', 'codex', 'glm') in the messages table CHECK
   // constraint. SQLite cannot ALTER a CHECK constraint, so rebuild the table
   // preserving all existing columns and data. Runs once on databases created
   // before new backends existed.
   try {
     const msgSql = sqlite.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'`).get() as { sql?: string } | undefined;
-    if (msgSql?.sql && (!msgSql.sql.includes("'opencode'") || !msgSql.sql.includes("'claude'") || !msgSql.sql.includes("'codex'"))) {
+    if (msgSql?.sql && (!msgSql.sql.includes("'opencode'") || !msgSql.sql.includes("'claude'") || !msgSql.sql.includes("'codex'") || !msgSql.sql.includes("'glm'"))) {
       const cols = sqlite.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
       const names = cols.map((c) => c.name);
       const colDefs = names.map((n) => {
@@ -183,7 +183,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
         if (n === 'conversation_id') return 'conversation_id TEXT NOT NULL';
         if (n === 'role') return "role TEXT NOT NULL CHECK(role IN ('user','assistant'))";
         if (n === 'content') return 'content TEXT NOT NULL';
-        if (n === 'backend') return "backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','gemini-direct','opencode','claude','codex'))";
+        if (n === 'backend') return "backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','glm','gemini-direct','opencode','claude','codex'))";
         if (n === 'created_at') return 'created_at TEXT NOT NULL';
         return `"${n}" TEXT`;
       });

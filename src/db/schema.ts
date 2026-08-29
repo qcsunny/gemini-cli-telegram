@@ -32,7 +32,7 @@ export const messages = sqliteTable('messages', {
   conversationId: text('conversation_id').notNull(),
   role: text('role', { enum: ['user', 'assistant'] }).notNull(),
   content: text('content').notNull(),
-  backend: text('backend', { enum: ['web2api', 'deepseek', 'gemini-direct', 'opencode', 'claude', 'codex'] }).notNull(),
+  backend: text('backend', { enum: ['web2api', 'deepseek', 'glm', 'gemini-direct', 'opencode', 'claude', 'codex'] }).notNull(),
   createdAt: text('created_at').notNull(),
   /** Token usage: input, output, cached, thinking */
   usage: text('usage'),

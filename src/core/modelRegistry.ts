@@ -149,7 +149,7 @@ export function getEffectiveTiers(): ModelTier[] | null {
 
 /**
  * Determines which backend channel a model belongs to, based on its display name prefix.
- * Returns one of the six channels ('agy' | 'deepseek' | 'web2api' | 'opencode'
+ * Returns one of the seven channels ('agy' | 'deepseek' | 'web2api' | 'glm' | 'opencode'
  * | 'claude' | 'codex') so the value is suitable for use as a backendHealth
  * tracker key, or 'agy' when the prefix is unrecognized (the local AGY CLI is
  * the catch-all fallback in `agyCli.runAgyPrint`).
@@ -157,6 +157,7 @@ export function getEffectiveTiers(): ModelTier[] | null {
 export function getChannelModel(model: string): string | null {
   if (model.startsWith('Web2API:')) return 'web2api';
   if (model.startsWith('DeepSeek:')) return 'deepseek';
+  if (model.startsWith('GLM:')) return 'glm';
   if (model.startsWith('OpenCode:')) return 'opencode';
   if (model.startsWith('Claude CLI:')) return 'claude';
   if (model.startsWith('Codex:')) return 'codex';
