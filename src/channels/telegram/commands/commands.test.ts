@@ -765,9 +765,9 @@ describe('Backends Health Monitor and /backends command', () => {
     clearBackendHealth();
   });
 
-  it('should list all 7 backends as healthy by default', () => {
+  it('should list all 8 backends as healthy by default', () => {
     const statuses = getAllBackendHealthStatus();
-    expect(statuses).toHaveLength(7);
+    expect(statuses).toHaveLength(8);
     expect(statuses.every((s) => s.isHealthy)).toBe(true);
 
     const { text, keyboard } = formatBackendsStatus();
@@ -779,6 +779,7 @@ describe('Backends Health Monitor and /backends command', () => {
     expect(text).toContain('DeepSeek Proxy');
     expect(text).toContain('Web2API Proxy');
     expect(text).toContain('GLM Proxy (chatglm)');
+    expect(text).toContain('Qwen Proxy (tongyi)');
     expect(text).toContain('正常运作 (Healthy)');
     expect(keyboard.inline_keyboard).toBeDefined();
   });

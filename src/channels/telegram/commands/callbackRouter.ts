@@ -330,7 +330,7 @@ export function registerCallbackRouter(
         const convId = session?.conversationId;
         const model = session?.model || '';
         if (convId) {
-          const backend = model.includes('DeepSeek') ? 'deepseek' as const : model.startsWith('GLM:') ? 'glm' as const : model.includes('Web2API') ? 'web2api' as const : 'gemini-direct' as const;
+          const backend = model.includes('DeepSeek') ? 'deepseek' as const : model.startsWith('GLM:') ? 'glm' as const : model.startsWith('Qwen:') ? 'qwen' as const : model.includes('Web2API') ? 'web2api' as const : 'gemini-direct' as const;
           const msgs = loadMessages(convId, backend);
           const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
           if (lastAssistant) {

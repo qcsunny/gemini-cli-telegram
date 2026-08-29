@@ -283,10 +283,11 @@ function buildFundDeepReportPrompt(result: FundAnalysisResult, ds: FundDataset):
   ].join('\n');
 }
 
-function toStoreBackend(channel: string | null): 'web2api' | 'deepseek' | 'glm' | 'gemini-direct' | 'opencode' {
+function toStoreBackend(channel: string | null): 'web2api' | 'deepseek' | 'glm' | 'qwen' | 'gemini-direct' | 'opencode' {
   if (channel === 'web2api') return 'web2api';
   if (channel === 'deepseek') return 'deepseek';
   if (channel === 'glm') return 'glm';
+  if (channel === 'qwen') return 'qwen';
   if (channel === 'opencode') return 'opencode';
   return 'gemini-direct';
 }

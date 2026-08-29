@@ -72,7 +72,11 @@
         "GLM: Flash Thinking",
         "GLM: Flash",
         "GLM: 5.3 Research",
-        "GLM: Flash Research"
+        "GLM: Flash Research",
+        "Qwen: 3.8 Max Thinking",
+        "Qwen: 3.7 Max Thinking",
+        "Qwen: Image 3.0",
+        "Qwen: Video"
       ]
     }
   ],
@@ -119,7 +123,11 @@
     "GLM: Flash Thinking",
     "GLM: Flash",
     "GLM: 5.3 Research",
-    "GLM: Flash Research"
+    "GLM: Flash Research",
+    "Qwen: 3.8 Max Thinking",
+    "Qwen: 3.7 Max Thinking",
+    "Qwen: Image 3.0",
+    "Qwen: Video"
   ],
   "routing": {
     "Web2API: Gemini 3.7 Flash": "gemini-3.7-flash",
@@ -158,7 +166,11 @@
     "GLM: Flash Thinking": "glm-5.3-flash-thinking",
     "GLM: Flash": "glm-5.3-flash",
     "GLM: 5.3 Research": "glm-5.3-deep-research",
-    "GLM: Flash Research": "glm-5.3-flash-deep-research"
+    "GLM: Flash Research": "glm-5.3-flash-deep-research",
+    "Qwen: 3.8 Max Thinking": "qwen3.8-max-thinking",
+    "Qwen: 3.7 Max Thinking": "qwen3.7-max-thinking",
+    "Qwen: Image 3.0": "qwen-image-3.0-image",
+    "Qwen: Video": "qwen3.8-max-video"
   },
   "descriptions": {
     "Codex: GPT-5.6 Sol": "本地 Codex CLI 驱动 · 适用：前沿算法突破、超复杂全栈重构、深度思考与系统推理",
@@ -185,6 +197,10 @@
     "GLM: Flash Thinking": "智谱 GLM-Flash 深度思考档 · 适用：轻量推理与代码解释，附思考过程",
     "GLM: Flash": "智谱 GLM-Flash 快速档 · 适用：极速中文问答、短文改写（响应最快）",
     "GLM: 5.3 Research": "智谱 GLM-5.3 深度研究 · 适用：多步联网调研（约 1-5 分钟），返回带来源的报告",
-    "GLM: Flash Research": "智谱 GLM-Flash 深度研究 · 适用：较快的联网调研，返回带来源的报告"
+    "GLM: Flash Research": "智谱 GLM-Flash 深度研究 · 适用：较快的联网调研，返回带来源的报告",
+    "Qwen: 3.8 Max Thinking": "通义千问 3.8-Max 思考档 · 适用：高难数理推理、长链分析（思考最久，可达数分钟）",
+    "Qwen: 3.7 Max Thinking": "通义千问 3.7-Max 思考档 · 适用：中高难度推理与中文写作，附思考过程（更快）",
+    "Qwen: Image 3.0": "通义千问 qwen-image-3.0 文生图 · 适用：插画/写实图生成，直接返回图片文件",
+    "Qwen: Video": "通义千问文生视频 · 适用：短视频片段生成（渲染需数分钟），直接返回 MP4"
   }
 }

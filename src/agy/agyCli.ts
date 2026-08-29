@@ -28,10 +28,11 @@ import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
 import { getAgyDataDir, getStockMarketApiKey, loadUserConfig, getTuningConfig } from '../config/userConfig.js';
 
-import { isWeb2ApiModel, isDeepSeekModel, isGlmModel, isOpenCodeModel, isClaudeCliModel, isCodexModel } from './modelDetection.js';
+import { isWeb2ApiModel, isDeepSeekModel, isGlmModel, isQwenModel, isOpenCodeModel, isClaudeCliModel, isCodexModel } from './modelDetection.js';
 import { runWeb2Api } from './backends/web2api.js';
 import { runDeepSeek } from './backends/deepseek.js';
 import { runGlm } from './backends/glm.js';
+import { runQwen } from './backends/qwen.js';
 
 import { runOpenCode } from './backends/opencode.js';
 import { runClaudeCli } from './backends/claude.js';
@@ -42,8 +43,8 @@ import type { AgyRunOptions, AgyRunResult, AgyStreamEvent } from './types.js';
 import { parseAgyTranscriptThoughtUpdates, describeAgyStreamEvent, pickNewConversationId } from './transcriptStream.js';
 
 // Re-export helper functions for backward compatibility with older call sites
-export { isWeb2ApiModel, isDeepSeekModel, isGlmModel, isClaudeCliModel, isCodexModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
-export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearGlmHistory, clearOpenCodeHistory, clearClaudeHistory, clearCodexHistory } from './conversationManager.js';
+export { isWeb2ApiModel, isDeepSeekModel, isGlmModel, isQwenModel, isClaudeCliModel, isCodexModel, clearDefaultModelsCache, getAvailableModels } from './modelDetection.js';
+export { restoreHistoriesFromDb, clearDeepSeekHistory, clearWeb2ApiHistory, clearGlmHistory, clearQwenHistory, clearOpenCodeHistory, clearClaudeHistory, clearCodexHistory } from './conversationManager.js';
 export { clearCodexThread } from './backends/codex.js';
 export { extractUsageFromProto, readUsageFromDatabase, readConversationHistory } from './protobuf.js';
 export { normalizeThinkingTags, extractThoughtBlocksAndSegments, extractThoughtAndContent } from './thoughtParser.js';
@@ -159,10 +160,11 @@ async function snapshotConversations(): Promise<Set<string>> {
  *   1. Web2API models (prefix "Web2API:") → OpenAI-compatible SSE endpoint
  *   2. DeepSeek models (prefix "DeepSeek:") → OpenAI-compatible SSE endpoint
  *   3. GLM models (prefix "GLM:") → OpenAI-compatible SSE endpoint
- *   4. OpenCode models (prefix "OpenCode:") → local opencode binary
- *   5. Claude CLI models (prefix "Claude CLI:" / "ClaudeCode:") → local claude binary
- *   6. Codex models (prefix "Codex:" / "Codex-CLI:") → local codex binary
- *   7. Everything else → native `agy` binary (C++ child process)
+ *   4. Qwen models (prefix "Qwen:") → OpenAI-compatible SSE endpoint
+ *   5. OpenCode models (prefix "OpenCode:") → local opencode binary
+ *   6. Claude CLI models (prefix "Claude CLI:" / "ClaudeCode:") → local claude binary
+ *   7. Codex models (prefix "Codex:" / "Codex-CLI:") → local codex binary
+ *   8. Everything else → native `agy` binary (C++ child process)
  */
 export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   const effectiveProxy = opts.proxy || loadUserConfig()?.proxy || process.env['HTTP_PROXY'] || process.env['http_proxy'];
@@ -184,6 +186,12 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   if (opts.model && isGlmModel(opts.model)) {
     logger.info(`[agyCli] Routing to GLM proxy: model=${opts.model}`);
     return runGlm(optsWithProxy);
+  }
+
+  // Route Qwen models to the local Qwen2API proxy
+  if (opts.model && isQwenModel(opts.model)) {
+    logger.info(`[agyCli] Routing to Qwen proxy: model=${opts.model}`);
+    return runQwen(optsWithProxy);
   }
 
   // Route OpenCode models to the local opencode binary

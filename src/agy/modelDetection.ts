@@ -27,6 +27,13 @@ export function isGlmModel(model: string): boolean {
   return model in cfg.routing && model.startsWith('GLM:');
 }
 
+/** Returns true if the model name has a routing entry pointing to the Qwen proxy */
+export function isQwenModel(model: string): boolean {
+  const cfg = loadModelsConfig();
+  if (!cfg) return false;
+  return model in cfg.routing && model.startsWith('Qwen:');
+}
+
 /** Returns true if the model name has a routing entry pointing to opencode */
 export function isOpenCodeModel(model: string): boolean {
   const cfg = loadModelsConfig();

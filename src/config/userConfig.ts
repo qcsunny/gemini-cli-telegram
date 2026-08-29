@@ -174,6 +174,10 @@ const userConfigSchema = z.object({
     glm: z.string().optional(),
     /** GLM proxy API key. No default: HelloGML generates one per install. */
     glmKey: z.string().optional(),
+    /** Qwen (chat.qwen.ai) proxy URL — Qwen2API. Default: http://127.0.0.1:8092/v1 */
+    qwen: z.string().optional(),
+    /** Qwen proxy API key. No default: Qwen2API generates one per install. */
+    qwenKey: z.string().optional(),
   }).optional(),
   /**
    * Tuning parameters for runtime behavior.
@@ -421,6 +425,7 @@ export const BACKEND_URL_DEFAULTS = {
   web2api: 'http://127.0.0.1:8083/v1',
   deepseek: 'http://127.0.0.1:5001/v1',
   glm: 'http://127.0.0.1:8093/v1',
+  qwen: 'http://127.0.0.1:8092/v1',
   web2apiKey: 'sk-gemini-local',
 };
 
@@ -428,7 +433,7 @@ export const BACKEND_URL_DEFAULTS = {
  * Returns the configured backend URL for a given service, falling back to defaults.
  * Returns null if neither config nor default is set (backend not available).
  */
-export function getBackendUrl(service: 'web2api' | 'deepseek' | 'glm'): string | null {
+export function getBackendUrl(service: 'web2api' | 'deepseek' | 'glm' | 'qwen'): string | null {
   const cfg = loadUserConfig();
   return cfg?.backends?.[service] || BACKEND_URL_DEFAULTS[service] || null;
 }

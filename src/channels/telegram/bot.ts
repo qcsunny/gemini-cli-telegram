@@ -518,6 +518,14 @@ export class TelegramBot {
     } else {
       logger.info('[boot] GLM                  SKIPPED (not configured)');
     }
+
+    // Qwen2API 没有健康端点（/health、/ping、/ 都 500），它唯一免鉴权的 200 是 /models
+    const qwenUrl = getBackendUrl('qwen');
+    if (qwenUrl) {
+      probeBackend('Qwen', qwenUrl, '/models');
+    } else {
+      logger.info('[boot] Qwen                 SKIPPED (not configured)');
+    }
   }
 
   private stopHealthCheck(): void {
