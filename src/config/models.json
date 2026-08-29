@@ -64,7 +64,15 @@
         "DeepSeek: Pro Thinking",
         "DeepSeek: Pro",
         "DeepSeek: Flash Thinking",
-        "DeepSeek: Flash"
+        "DeepSeek: Flash",
+        "GLM: 5.3 Ultra Thinking",
+        "GLM: 5.3 Thinking",
+        "GLM: 5.3",
+        "GLM: Flash Ultra Thinking",
+        "GLM: Flash Thinking",
+        "GLM: Flash",
+        "GLM: 5.3 Research",
+        "GLM: Flash Research"
       ]
     }
   ],
@@ -103,7 +111,15 @@
     "DeepSeek: Pro Thinking",
     "DeepSeek: Pro",
     "DeepSeek: Flash Thinking",
-    "DeepSeek: Flash"
+    "DeepSeek: Flash",
+    "GLM: 5.3 Ultra Thinking",
+    "GLM: 5.3 Thinking",
+    "GLM: 5.3",
+    "GLM: Flash Ultra Thinking",
+    "GLM: Flash Thinking",
+    "GLM: Flash",
+    "GLM: 5.3 Research",
+    "GLM: Flash Research"
   ],
   "routing": {
     "Web2API: Gemini 3.7 Flash": "gemini-3.7-flash",
@@ -134,7 +150,15 @@
     "Claude CLI: Claude Opus 5": "claude-opus-5",
     "Codex: GPT-5.6 Sol": "gpt-5.6-sol",
     "Web2API: Gemini Video": "gemini-video",
-    "Web2API: Gemini Deep Research": "gemini-deep-research"
+    "Web2API: Gemini Deep Research": "gemini-deep-research",
+    "GLM: 5.3 Ultra Thinking": "glm-5.3-deep-thinking",
+    "GLM: 5.3 Thinking": "glm-5.3-thinking",
+    "GLM: 5.3": "glm-5.3",
+    "GLM: Flash Ultra Thinking": "glm-5.3-flash-deep-thinking",
+    "GLM: Flash Thinking": "glm-5.3-flash-thinking",
+    "GLM: Flash": "glm-5.3-flash",
+    "GLM: 5.3 Research": "glm-5.3-deep-research",
+    "GLM: Flash Research": "glm-5.3-flash-deep-research"
   },
   "descriptions": {
     "Codex: GPT-5.6 Sol": "本地 Codex CLI 驱动 · 适用：前沿算法突破、超复杂全栈重构、深度思考与系统推理",
@@ -153,6 +177,14 @@
     "Web2API: Gemini Music": "Gemini 生音乐 (Lyria, ~30s) · 适用：文本生成音乐，返回 MP3",
     "Web2API: Gemini Canvas": "Gemini Canvas · 适用：生成交互式 HTML 文档",
     "Web2API: Gemini Video": "Veo 视频生成（约 8 秒 720p，需 2-5 分钟）",
-    "Web2API: Gemini Deep Research": "Gemini 深度研究 · 适用：多步联网调研（约 5-15 分钟），返回带引用来源的 Markdown 报告"
+    "Web2API: Gemini Deep Research": "Gemini 深度研究 · 适用：多步联网调研（约 5-15 分钟），返回带引用来源的 Markdown 报告",
+    "GLM: 5.3 Ultra Thinking": "智谱 GLM-5.3 极致思考档 · 适用：高难数理推理、复杂代码设计（思考链最长）",
+    "GLM: 5.3 Thinking": "智谱 GLM-5.3 深度思考档 · 适用：技术方案推演、多步分析，附思考过程",
+    "GLM: 5.3": "智谱 GLM-5.3 快速档 · 适用：中文日常问答、写作润色、快速代码片段",
+    "GLM: Flash Ultra Thinking": "智谱 GLM-Flash 极致思考档 · 适用：需要推理但要控制耗时的题目",
+    "GLM: Flash Thinking": "智谱 GLM-Flash 深度思考档 · 适用：轻量推理与代码解释，附思考过程",
+    "GLM: Flash": "智谱 GLM-Flash 快速档 · 适用：极速中文问答、短文改写（响应最快）",
+    "GLM: 5.3 Research": "智谱 GLM-5.3 深度研究 · 适用：多步联网调研（约 1-5 分钟），返回带来源的报告",
+    "GLM: Flash Research": "智谱 GLM-Flash 深度研究 · 适用：较快的联网调研，返回带来源的报告"
   }
 }
