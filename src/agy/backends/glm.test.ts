@@ -133,11 +133,13 @@ describe('runGlm', () => {
 describe('models.json GLM entries', () => {
   const cfg = JSON.parse(fs.readFileSync(new URL('../../config/models.json', import.meta.url), 'utf-8'));
 
-  it('routes all eight ids: two models × (three depths + research)', () => {
+  it('routes six ids — the plain no-thinking depths were retired', () => {
     const glm = Object.entries(cfg.routing as Record<string, string>)
       .filter(([name]) => name.startsWith('GLM:'));
-    expect(glm.length).toBe(8);
-    expect(new Set(glm.map(([, id]) => id)).size).toBe(8);
+    expect(glm.length).toBe(6);
+    expect(new Set(glm.map(([, id]) => id)).size).toBe(6);
+    for (const [name] of glm) expect(name).not.toBe('GLM: 5.3');
+    for (const [name] of glm) expect(name).not.toBe('GLM: Flash');
     for (const [, id] of glm) expect(id).toMatch(/^glm-5\.3(-flash)?(-(deep-)?(thinking|research))?$/);
   });
 

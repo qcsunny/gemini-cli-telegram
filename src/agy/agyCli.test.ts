@@ -278,24 +278,24 @@ describe('readConversationHistory', () => {
 
 describe('isWeb2ApiModel / isDeepSeekModel', () => {
   it('should identify Web2API models', async () => {
-    expect(isWeb2ApiModel('Web2API: Gemini 3.7 Flash')).toBe(true);
-    expect(isWeb2ApiModel('Web2API: Gemini 3.5 Flash Lite')).toBe(true);
+    expect(isWeb2ApiModel('Web2API: Gemini 3.7 Flash Thinking')).toBe(true);
+    expect(isWeb2ApiModel('Web2API: Gemini Image')).toBe(true);
   });
 
   it('should not identify non-Web2API models', async () => {
     expect(isWeb2ApiModel('Gemini 3.6 Flash (High)')).toBe(false);
-    expect(isWeb2ApiModel('DeepSeek: Pro')).toBe(false);
+    expect(isWeb2ApiModel('DeepSeek: Pro Thinking')).toBe(false);
     expect(isWeb2ApiModel('Claude Opus 4.6 (Thinking)')).toBe(false);
   });
 
   it('should identify DeepSeek models', async () => {
-    expect(isDeepSeekModel('DeepSeek: Pro')).toBe(true);
-    expect(isDeepSeekModel('DeepSeek: Flash Thinking')).toBe(true);
+    expect(isDeepSeekModel('DeepSeek: Pro Thinking')).toBe(true);
+    expect(isDeepSeekModel('DeepSeek: Flash Thinking Search')).toBe(true);
   });
 
   it('should not identify non-DeepSeek models', async () => {
     expect(isDeepSeekModel('Gemini 3.6 Flash (High)')).toBe(false);
-    expect(isDeepSeekModel('Web2API: Gemini 3.5 Flash Lite')).toBe(false);
+    expect(isDeepSeekModel('Web2API: Gemini Image')).toBe(false);
   });
 
   it('should identify Claude CLI models', async () => {
