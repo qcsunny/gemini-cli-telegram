@@ -16,9 +16,7 @@
       "priority": 1,
       "models": [
         "Gemini 3.7 Flash (High)",
-        "OpenCode: Muse Spark 1.2 Free",
         "Gemini 3.1 Pro (Low)",
-        "OpenCode: X Preview F Free",
         "OpenCode: Big Pickle"
       ]
     },
@@ -27,7 +25,6 @@
       "priority": 2,
       "models": [
         "Gemini 3.7 Flash (Medium)",
-        "OpenCode: Nemotron 3 Ultra Free",
         "OpenCode: Hunyuan 3.0 Free",
         "GPT-OSS 120B (Medium)",
         "OpenCode: MiMo V2.5 Free"
@@ -39,9 +36,9 @@
       "models": [
         "Gemini 3.7 Flash (Low)",
         "OpenCode: GLM 4.7 Flash",
-        "OpenCode: Nemotron 3.5 Lightning Free",
         "OpenCode: Qwen 3.6 35B A3B",
-        "OpenCode: OpenRouter Free"
+        "OpenCode: OpenRouter Free",
+        "OpenCode: Muse Spark 1.2 Free"
       ]
     },
     {
@@ -79,16 +76,13 @@
     "Gemini 3.7 Flash (High)",
     "OpenCode: Muse Spark 1.2 Free",
     "Gemini 3.1 Pro (Low)",
-    "OpenCode: X Preview F Free",
     "OpenCode: Big Pickle",
     "Gemini 3.7 Flash (Medium)",
-    "OpenCode: Nemotron 3 Ultra Free",
     "OpenCode: Hunyuan 3.0 Free",
     "GPT-OSS 120B (Medium)",
     "OpenCode: MiMo V2.5 Free",
     "Gemini 3.7 Flash (Low)",
     "OpenCode: GLM 4.7 Flash",
-    "OpenCode: Nemotron 3.5 Lightning Free",
     "OpenCode: Qwen 3.6 35B A3B",
     "OpenCode: OpenRouter Free",
     "Web2API: Gemini 3.1 Pro Thinking",
@@ -118,15 +112,9 @@
     "DeepSeek: Flash Thinking Search": "deepseek-v4-flash-thinking-search",
     "DeepSeek: Pro Thinking": "deepseek-v4-pro-thinking",
     "OpenCode: Muse Spark 1.2 Free": "opencode/muse-spark-1.2-contributor-free",
-    "OpenCode: Nemotron 3 Ultra Free": "opencode/nemotron-3-ultra-free",
-    "OpenCode: Nemotron 3.5 Lightning Free": "opencode/nemotron-3.5-lightning-free",
     "OpenCode: Hunyuan 3.0 Free": "opencode/hy3-free",
-    "OpenCode: X Preview F Free": "opencode/x-preview-f-free",
     "OpenCode: MiMo V2.5 Free": "opencode/mimo-v2.5-free",
-    "OpenCode: OpenRouter Free": "openrouter/openrouter/free",
-    "OpenCode: GLM 4.7 Flash": "zhipuai/glm-4.7-flash",
     "OpenCode: Big Pickle": "opencode/big-pickle",
-    "OpenCode: Qwen 3.6 35B A3B": "hetzner/Qwen/Qwen3.6-35B-A3B-FP8",
     "Claude CLI: Claude Opus 5": "claude-opus-5",
     "Codex: GPT-5.6 Sol": "gpt-5.6-sol",
     "Web2API: Gemini Video": "gemini-video",
@@ -140,20 +128,17 @@
     "Qwen: 3.8 Max Thinking": "qwen3.8-max-thinking",
     "Qwen: 3.7 Max Thinking": "qwen3.7-max-thinking",
     "Qwen: Image 3.0": "qwen-image-3.0-image",
-    "Qwen: Video": "qwen3.8-max-video"
+    "Qwen: Video": "qwen3.8-max-video",
+    "OpenCode: OpenRouter Free": "openrouter/openrouter/free",
+    "OpenCode: GLM 4.7 Flash": "zhipuai/glm-4.7-flash",
+    "OpenCode: Qwen 3.6 35B A3B": "hetzner/Qwen/Qwen3.6-35B-A3B-FP8"
   },
   "descriptions": {
     "Codex: GPT-5.6 Sol": "本地 Codex CLI 驱动 · 适用：前沿算法突破、超复杂全栈重构、深度思考与系统推理",
     "Claude CLI: Claude Opus 5": "本地 Claude Code CLI 驱动 · 适用：超高复杂度全栈架构、代码审计与深度思考",
-    "OpenCode: GLM 4.7 Flash": "智谱 GLM-4.7 Flash 极速模型 · 适用：快速代码生成、日常中文问答、高并发轻量任务",
     "OpenCode: Hunyuan 3.0 Free": "腾讯混元 3.0 大模型免费版 · 适用：中文深度对话、长篇写作、多领域常识问答",
-    "OpenCode: Nemotron 3.5 Lightning Free": "NVIDIA Nemotron 3.5 Lightning 闪电极速模型 · 适用：极速首字输出、低延迟代码编写、日常轻量问答",
-    "OpenCode: OpenRouter Free": "OpenRouter 自动免费路由模型 · 适用：免费兜底、基础问答、零成本对话",
     "OpenCode: Big Pickle": "Big Pickle 全栈编程强模型 · 适用：多轮项目开发、复杂架构设计与重构",
-    "OpenCode: Qwen 3.6 35B A3B": "通义千问 3.6 35B 极速轻量模型 (3B激活) · 适用：快速代码片段生成、日常快答、极速响应",
-    "OpenCode: Nemotron 3 Ultra Free": "综合推理最强，代码能力顶级 · 适用：复杂算法设计、架构决策、高难度调试",
     "OpenCode: Muse Spark 1.2 Free": "Meta Muse Spark 1.2 贡献者免费档 (1M上下文) · 适用：复杂编码、多模态理解、长任务规划",
-    "OpenCode: X Preview F Free": "Ox Alpha 匿名预览模型免费档 · 适用：日常问答、轻量编码、快速响应",
     "OpenCode: MiMo V2.5 Free": "多模态专家，长上下文处理 · 适用：图片转代码、前端开发、大型代码库理解",
     "Web2API: Gemini Image": "Gemini 生图 (Nano Banana) · 适用：文本生成图片，返回 JPEG",
     "Web2API: Gemini Music": "Gemini 生音乐 (Lyria, ~30s) · 适用：文本生成音乐，返回 MP3",
@@ -169,6 +154,9 @@
     "Qwen: 3.8 Max Thinking": "通义千问 3.8-Max 思考档 · 适用：高难数理推理、长链分析（思考最久，可达数分钟）",
     "Qwen: 3.7 Max Thinking": "通义千问 3.7-Max 思考档 · 适用：中高难度推理与中文写作，附思考过程（更快）",
     "Qwen: Image 3.0": "通义千问 qwen-image-3.0 文生图 · 适用：插画/写实图生成，直接返回图片文件",
-    "Qwen: Video": "通义千问文生视频 · 适用：短视频片段生成（渲染需数分钟），直接返回 MP4"
+    "Qwen: Video": "通义千问文生视频 · 适用：短视频片段生成（渲染需数分钟），直接返回 MP4",
+    "OpenCode: OpenRouter Free": "OpenRouter 自动免费路由模型 · 适用：免费兜底、基础问答、零成本对话",
+    "OpenCode: GLM 4.7 Flash": "智谱 GLM-4.7 Flash 极速模型 · 适用：快速代码生成、日常中文问答、高并发轻量任务",
+    "OpenCode: Qwen 3.6 35B A3B": "通义千问 3.6 35B 极速轻量模型 (3B激活) · 适用：快速代码片段生成、日常快答、极速响应"
   }
 }
