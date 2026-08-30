@@ -41,8 +41,7 @@ vi.mock('../../config/userConfig.js', () => ({
 }));
 
 const routing: Record<string, string> = {
-  'Qwen: 3.8 Max Thinking': 'qwen3.8-max-thinking',
-  'Qwen: 3.7 Max Thinking': 'qwen3.7-max-thinking',
+  'Qwen: 3.8 Max': 'qwen3.8-max-thinking',
   'Qwen: Image 3.0': 'qwen-image-3.0-image',
   'Qwen: Video': 'qwen3.8-max-video',
 };
@@ -102,9 +101,9 @@ function origin(): string {
 
 describe('runQwen', () => {
   it('maps the display name onto the upstream model id', async () => {
-    const res = await runQwen(opts({ model: 'Qwen: 3.7 Max Thinking', conversationId: 'qwen-a' }));
+    const res = await runQwen(opts({ model: 'Qwen: 3.8 Max', conversationId: 'qwen-a' }));
     expect(res.exitCode).toBe(0);
-    expect(captured[0]!.body.model).toBe('qwen3.7-max-thinking');
+    expect(captured[0]!.body.model).toBe('qwen3.8-max-thinking');
     expect(captured[0]!.body.stream).toBe(true);
   });
 
@@ -114,7 +113,7 @@ describe('runQwen', () => {
   });
 
   it('sends the configured API key', async () => {
-    await runQwen(opts({ model: 'Qwen: 3.7 Max Thinking', conversationId: 'qwen-c' }));
+    await runQwen(opts({ model: 'Qwen: 3.8 Max', conversationId: 'qwen-c' }));
     expect(captured[0]!.headers['authorization']).toBe('Bearer sk-test-qwen');
   });
 
@@ -124,13 +123,13 @@ describe('runQwen', () => {
       { choices: [{ delta: { reasoning_content: '，得 4' } }] },
       { choices: [{ delta: { content: '答案是 4。' } }] },
     ];
-    const res = await runQwen(opts({ model: 'Qwen: 3.8 Max Thinking', conversationId: 'qwen-d' }));
+    const res = await runQwen(opts({ model: 'Qwen: 3.8 Max', conversationId: 'qwen-d' }));
     expect(res.output).toMatch(/^<thinking time="\d+\.\d">先算 2\+2，得 4<\/thinking>\n\n答案是 4。$/);
   });
 
   it('fails the run when upstream replies 200 with no content', async () => {
     frames = [];
-    const res = await runQwen(opts({ model: 'Qwen: 3.7 Max Thinking', conversationId: 'qwen-e' }));
+    const res = await runQwen(opts({ model: 'Qwen: 3.8 Max', conversationId: 'qwen-e' }));
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain('Qwen 上游返回空内容');
   });
@@ -175,7 +174,7 @@ describe('runQwen', () => {
 
   it('streams text chunks normally for non-media models', async () => {
     const chunks: string[] = [];
-    await runQwen(opts({ model: 'Qwen: 3.7 Max Thinking', conversationId: 'qwen-j', onChunk: (t: string) => chunks.push(t) }));
+    await runQwen(opts({ model: 'Qwen: 3.8 Max', conversationId: 'qwen-j', onChunk: (t: string) => chunks.push(t) }));
     expect(chunks.join('')).toBe('答案是 4。');
   });
 });
@@ -184,10 +183,10 @@ describe('models.json Qwen entries', () => {
   const cfg = JSON.parse(fs.readFileSync(new URL('../../config/models.json', import.meta.url), 'utf-8'));
   const names = Object.keys(cfg.routing as Record<string, string>).filter((n) => n.startsWith('Qwen:'));
 
-  it('routes exactly the four requested ids', () => {
+  it('routes exactly the three requested ids', () => {
     expect(new Set(Object.entries(cfg.routing as Record<string, string>)
       .filter(([n]) => n.startsWith('Qwen:')).map(([, id]) => id)))
-      .toEqual(new Set(['qwen3.8-max-thinking', 'qwen3.7-max-thinking', 'qwen-image-3.0-image', 'qwen3.8-max-video']));
+      .toEqual(new Set(['qwen3.8-max-thinking', 'qwen-image-3.0-image', 'qwen3.8-max-video']));
   });
 
   it('lists every routed Qwen model in the remote tier and describes it', () => {
