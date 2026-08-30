@@ -90,6 +90,14 @@ export async function runInlineGeneration(
     onEvent,
   );
 
+  // Remote media backends (Qwen t2i/t2v) hand their artifacts back as local
+  // files on result.mediaFiles with the URL stripped from the text — render
+  // those before the generic empty-output handling rejects the turn.
+  if (result?.mediaFiles?.length) {
+    await finalizeMediaResult(ctx, resultId, inlineMessageId, fromId, prompt, result, modelUsed);
+    return;
+  }
+
   if (task === 'image') {
     await finalizeImageResult(ctx, resultId, inlineMessageId, fromId, prompt, result, modelUsed);
     return;
@@ -245,54 +253,20 @@ export async function runInlineGeneration(
   }
 }
 
-async function finalizeImageResult(
-  ctx: Context,
-  resultId: string,
-  inlineMessageId: string,
-  fromId: number,
-  prompt: string,
-  result: AgyRunResult | null,
-  modelUsed: string,
-): Promise<void> {
-  const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
-
-  if (!result?.conversationId) {
-    await editInlineMessage(ctx.api, {
-      inline_message_id: inlineMessageId,
-      text: `<b>🎨 Image generation failed</b>\nThe model returned no session info, please retry.`,
-      parse_mode: 'HTML',
-    }).catch(() => {});
-    return;
-  }
-
-  const images = await findNewImageArtifacts(result.conversationId, Date.now() - (result.durationMs || 60_000));
-  if (images.length === 0) {
-    const output = (result.output || '').trim();
-    await editInlineMessage(ctx.api, {
-      inline_message_id: inlineMessageId,
-      rich_message: {
-        markdown: `**🎨 Image generation result**\n\n**💬 Prompt:** ${displayPrompt}\n\n${output || 'The model did not generate image files.'}`,
-      },
-      reply_markup: {
-        inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
-      },
-    }).catch(() => {});
-    return;
-  }
-
+/**
+ * Relay-uploads local image files through a transient rich-message collage in
+ * the user's private chat and returns the largest photo file_id for each.
+ * Inline messages can only reference media via a URL or an existing file_id,
+ * so this relay is how local artifacts become inline-renderable.
+ */
+async function relayUploadPhotos(ctx: Context, fromId: number, images: string[]): Promise<string[]> {
+  const fileIds: string[] = [];
+  if (images.length === 0) return fileIds;
   // Chunk into collages of MAX_COLLAGE_IMAGES so >10 photos still render.
   const chunks: string[][] = [];
   for (let i = 0; i < images.length; i += MAX_COLLAGE_IMAGES) {
     chunks.push(images.slice(i, i + MAX_COLLAGE_IMAGES));
   }
-  const imageCount = images.length;
-
-  // Inline messages can only reference media via a URL or an existing
-  // file_id (no local upload). Upload every generated image through a transient
-  // rich-message relay to the user's private chat to obtain file_ids, then
-  // delete the relay message so the images only ever appear in-place in the
-  // inline message.
-  const fileIds: string[] = [];
   let relayMessageId: number | null = null;
   try {
     const relayMarkdown = chunks
@@ -335,7 +309,7 @@ async function finalizeImageResult(
       const largest = sizes.slice().sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
       if (largest?.file_id) fileIds.push(largest.file_id);
     }
-    logger.info(`[InlineResult] Uploaded ${fileIds.length}/${imageCount} image(s) via rich-message relay`);
+    logger.info(`[InlineResult] Uploaded ${fileIds.length}/${images.length} image(s) via rich-message relay`);
   } catch (e) {
     logger.error(`[InlineResult] Failed to relay-upload images: ${e}`);
   } finally {
@@ -344,6 +318,132 @@ async function finalizeImageResult(
       await ctx.api.deleteMessage(fromId, relayMessageId).catch(() => {});
     }
   }
+  return fileIds;
+}
+
+/**
+ * Renders result.mediaFiles in-place for remote media backends (Qwen t2i/t2v):
+ * they download the generated asset to a local temp file and strip the URL
+ * from the text, so the answer body is empty and the artifacts only exist as
+ * local paths on result.mediaFiles.
+ *
+ * Inline edits cannot upload new files (editMessageText's rich_message spec:
+ * "Direct upload of new files isn't supported when an inline message is
+ * edited"), so every artifact is first relay-uploaded in the user's private
+ * chat to obtain a file_id. Photos go through the collage relay; videos are
+ * sent via sendVideo. The file_ids are then rendered in one rich_message whose
+ * media array mixes InputMediaPhoto/Video — the same transport the local
+ * image-artifact path uses, so editMessageMedia (single-media only) isn't needed.
+ */
+async function finalizeMediaResult(
+  ctx: Context,
+  resultId: string,
+  inlineMessageId: string,
+  fromId: number,
+  prompt: string,
+  result: AgyRunResult,
+  modelUsed: string,
+): Promise<void> {
+  const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
+  const media = result.mediaFiles ?? [];
+  const photos = media.filter((f) => f.type === 'photo');
+  const videos = media.filter((f) => f.type === 'video');
+  const regenButton = {
+    inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
+  };
+  const caption = `**💬 Prompt:** ${displayPrompt}\n\n_Model: ${displayModelName(modelUsed)} · ${media.length} media file(s)_`;
+
+  const photoFileIds = await relayUploadPhotos(ctx, fromId, photos.map((f) => f.path)).catch(() => [] as string[]);
+  const videoFileIds: string[] = [];
+  for (const v of videos) {
+    try {
+      const sent = await ctx.api.sendVideo(fromId, new InputFile(v.path));
+      if (sent?.video?.file_id) videoFileIds.push(sent.video.file_id);
+    } catch (e) {
+      logger.warn(`[InlineResult] Video relay upload failed (${v.path}): ${e}`);
+    }
+  }
+
+  if (photoFileIds.length + videoFileIds.length > 0) {
+    // Media blocks live on their own line: photos as collages of up to
+    // MAX_COLLAGE_IMAGES, each video as a standalone block.
+    const photoChunks: string[][] = [];
+    for (let i = 0; i < photoFileIds.length; i += MAX_COLLAGE_IMAGES) {
+      photoChunks.push(photoFileIds.slice(i, i + MAX_COLLAGE_IMAGES));
+    }
+    const richMarkdown = [
+      ...photoChunks.map((chunk, ci) =>
+        `<tg-collage>\n${chunk.map((_, i) => `![generated image](tg://photo?id=p${ci}_${i})`).join('\n')}\n</tg-collage>`),
+      ...videoFileIds.map((_, i) => `![](tg://video?id=v${i})`),
+      `\n${caption}\n\n_🖼️ Media generated, tap 🔄 to regenerate._`,
+    ].join('\n\n');
+    const mediaArr = [
+      ...photoChunks.flatMap((chunk, ci) =>
+        chunk.map((fileId, i) => ({ id: `p${ci}_${i}`, media: { type: 'photo' as const, media: fileId } }))),
+      ...videoFileIds.map((fileId, i) => ({ id: `v${i}`, media: { type: 'video' as const, media: fileId } })),
+    ];
+    await editInlineMessage(ctx.api, {
+      inline_message_id: inlineMessageId,
+      rich_message: { markdown: richMarkdown, media: mediaArr },
+      reply_markup: regenButton,
+    }).catch(async (e: Error) => {
+      logger.error(`[InlineResult] rich_message media edit failed, falling back to text: ${e}`);
+      await editInlineMessage(ctx.api, {
+        inline_message_id: inlineMessageId,
+        rich_message: { markdown: `**🖼️ Media generated**\n\n${caption}\n\n_⚠️ In-place rendering failed._` },
+        reply_markup: regenButton,
+      }).catch(() => {});
+    });
+    return;
+  }
+
+  // Nothing relayed (e.g. user never DMed the bot): describe as text.
+  const filesText = media.map((f) => path.basename(f.path)).join(', ');
+  await editInlineMessage(ctx.api, {
+    inline_message_id: inlineMessageId,
+    rich_message: { markdown: `**🖼️ Media generated**\n\n${caption}\n\n_⚠️ Could not render via upload (message the bot first to enable DM)_\n\n_Files: ${filesText}_` },
+    reply_markup: regenButton,
+  }).catch(() => {});
+}
+
+async function finalizeImageResult(
+  ctx: Context,
+  resultId: string,
+  inlineMessageId: string,
+  fromId: number,
+  prompt: string,
+  result: AgyRunResult | null,
+  modelUsed: string,
+): Promise<void> {
+  const displayPrompt = prompt.length > 300 ? prompt.slice(0, 300) + '...' : prompt;
+
+  if (!result?.conversationId) {
+    await editInlineMessage(ctx.api, {
+      inline_message_id: inlineMessageId,
+      text: `<b>🎨 Image generation failed</b>\nThe model returned no session info, please retry.`,
+      parse_mode: 'HTML',
+    }).catch(() => {});
+    return;
+  }
+
+  const images = await findNewImageArtifacts(result.conversationId, Date.now() - (result.durationMs || 60_000));
+  if (images.length === 0) {
+    const output = (result.output || '').trim();
+    await editInlineMessage(ctx.api, {
+      inline_message_id: inlineMessageId,
+      rich_message: {
+        markdown: `**🎨 Image generation result**\n\n**💬 Prompt:** ${displayPrompt}\n\n${output || 'The model did not generate image files.'}`,
+      },
+      reply_markup: {
+        inline_keyboard: [[{ text: '🔄 Regenerate', callback_data: `inline_regenerate:${resultId}` }]],
+      },
+    }).catch(() => {});
+    return;
+  }
+
+  // Inline messages can only reference media via a URL or an existing
+  // file_id (no local upload) — relay through the user's private chat.
+  const fileIds = await relayUploadPhotos(ctx, fromId, images);
 
   const caption = `**💬 Prompt:** ${displayPrompt}\n\n_Model: ${displayModelName(modelUsed)} · ${images.length} image(s) total_`;
   const regenButton = {

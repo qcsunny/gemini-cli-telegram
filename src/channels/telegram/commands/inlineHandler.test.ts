@@ -1118,6 +1118,88 @@ describe('registerInlineHandler', () => {
     });
   });
 
+  it('should render result.mediaFiles from remote media backends (Qwen t2i/t2v)', async () => {
+    // Qwen media turns return local temp files with the URL stripped from the
+    // text; the inline card must relay-upload them instead of failing on the
+    // empty output.
+    const tmpPng = '/tmp/qwen-test-photo.png';
+    const tmpMp4 = '/tmp/qwen-test-video.mp4';
+    require('node:fs').writeFileSync(tmpPng, 'png');
+    require('node:fs').writeFileSync(tmpMp4, 'mp4');
+    vi.mocked(runAgyPrint).mockImplementation(async () => ({
+      output: '',
+      exitCode: 0,
+      mediaFiles: [
+        { path: tmpPng, type: 'photo' as const },
+        { path: tmpMp4, type: 'video' as const },
+      ],
+    }));
+
+    registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
+
+    const inlineCtx = {
+      from: { id: 12345 },
+      inlineQuery: { query: '画一只猫' },
+      answerInlineQuery: vi.fn().mockResolvedValue(true),
+    };
+    await inlineQueryHandler!(inlineCtx);
+    const callArg = inlineCtx.answerInlineQuery.mock.calls[0][0];
+    const aiResultId = callArg.find((r: any) => r.id.startsWith('ai-')).id;
+
+    const mockChosenCtx = {
+      me: { username: 'testbot' },
+      chosenInlineResult: {
+        result_id: aiResultId,
+        from: { id: 12345 },
+        query: '画一只猫',
+        inline_message_id: 'test_inline_msg_media_1',
+      },
+      api: {
+        sendRichMessage: vi.fn().mockResolvedValue({
+          message_id: 998,
+          rich_message: { blocks: [{ type: 'photo', photo: [{ file_id: 'relay_photo', file_size: 5000 }] }] },
+        }),
+        sendVideo: vi.fn().mockResolvedValue({ video: { file_id: 'relay_video' } }),
+        deleteMessage: vi.fn().mockResolvedValue(true),
+        raw: {
+          editMessageText: vi.fn().mockResolvedValue(true),
+          editMessageMedia: vi.fn().mockResolvedValue(true),
+        },
+      },
+    };
+    await chosenInlineResultHandler!(mockChosenCtx);
+
+    await vi.waitFor(() => {
+      expect(mockChosenCtx.api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inline_message_id: 'test_inline_msg_media_1',
+          rich_message: expect.objectContaining({
+            markdown: expect.stringMatching(/tg:\/\/photo\?id=|tg:\/\/video\?id=/),
+            media: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'p0_0',
+                media: expect.objectContaining({ type: 'photo', media: 'relay_photo' }),
+              }),
+              expect.objectContaining({
+                id: 'v0',
+                media: expect.objectContaining({ type: 'video', media: 'relay_video' }),
+              }),
+            ]),
+          }),
+        }),
+      );
+    });
+    // Photos relay through a transient rich-message collage…
+    expect(mockChosenCtx.api.sendRichMessage).toHaveBeenCalled();
+    // …videos through sendVideo (inline edits can't upload new files, so both
+    // paths only obtain a file_id to reference from the inline message).
+    expect(mockChosenCtx.api.sendVideo).toHaveBeenCalledWith(12345, expect.anything());
+    // The relay copy is removed so the media only appears in the inline message.
+    expect(mockChosenCtx.api.deleteMessage).toHaveBeenCalledWith(12345, 998);
+    require('node:fs').unlinkSync(tmpPng);
+    require('node:fs').unlinkSync(tmpMp4);
+  });
+
   it('should render compare picker with pagination and dynamic buttons', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 

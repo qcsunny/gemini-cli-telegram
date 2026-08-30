@@ -41,14 +41,15 @@ export type InlineReplyMarkupPayload = {
   reply_markup: InlineKeyboardMarkup;
 };
 
+// rich_message has been a first-class editMessageText parameter since Bot API
+// 10.2 (and @grammyjs/types 4.0.0 carries it), so these call the raw methods
+// directly — no more casting around a type that no longer needs it.
 export function editInlineMessage(api: Context['api'], payload: InlineRawEditPayload): Promise<unknown> {
-  const edit = api.raw.editMessageText as unknown as (value: InlineRawEditPayload) => Promise<unknown>;
-  return edit(payload);
+  return api.raw.editMessageText(payload);
 }
 
 export function editInlineReplyMarkup(api: Context['api'], payload: InlineReplyMarkupPayload): Promise<unknown> {
-  const edit = api.raw.editMessageReplyMarkup as unknown as (value: InlineReplyMarkupPayload) => Promise<unknown>;
-  return edit(payload);
+  return api.raw.editMessageReplyMarkup(payload);
 }
 
 /** Inactivity timeout — aborts when no stream activity for 3 minutes (allows agy context loading & deep thinking). */
@@ -179,7 +180,9 @@ export async function runModelWithFallbackChain(
         // than returning a truncated "successful" answer. Same for a user stop:
         // web2api/deepseek/opencode backends resolve with partial output (isTimeout
         // stays undefined) when their request is aborted, so guard on the signal too.
-        if (result?.output && !result.isTimeout && !signal?.aborted) {
+        // Remote media backends (Qwen t2i/t2v) legitimately return an empty body
+        // with the artifacts on result.mediaFiles — that is a success, not a retry.
+        if ((result?.output || result?.mediaFiles?.length) && !result.isTimeout && !signal?.aborted) {
           return {
             result,
             modelUsed: modelToUse,
