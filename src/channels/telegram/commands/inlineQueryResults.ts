@@ -236,27 +236,11 @@ export async function handleInlineQuery(
   if (task !== 'image') {
     const availableModels = getEffectiveModelOrder();
     if (families.length > 0) {
-      let matched: string[] = [];
-      // Channel tags (e.g. @deep → "DeepSeek:") filter EXCLUSIVELY by channel —
-      // a bare substring match here leaks cross-channel look-alikes into the
-      // family cards (@deep used to surface "Web2API: Gemini Deep Research").
-      const channels = new Set(availableModels.map((m) => /^([^:]+)\s*:/.exec(m)?.[1]?.toLowerCase()).filter(Boolean) as string[]);
-      const channelTags = families.filter((tag) => [...channels].some((c) => c.includes(tag)));
-      if (channelTags.length > 0) {
-        const restTags = families.filter((tag) => !channelTags.includes(tag));
-        matched = availableModels.filter((m) => {
-          const channel = /^([^:]+)\s*:/.exec(m)?.[1]?.toLowerCase() ?? '';
-          return channelTags.every((tag) => channel.includes(tag))
-            && restTags.every((tag) => m.toLowerCase().includes(tag));
-        });
-      }
       // Match models containing ALL keywords first (intersection)
-      if (matched.length === 0) {
-        matched = availableModels.filter((m) => {
-          const lower = m.toLowerCase();
-          return families.every((tag) => lower.includes(tag));
-        });
-      }
+      let matched = availableModels.filter((m) => {
+        const lower = m.toLowerCase();
+        return families.every((tag) => lower.includes(tag));
+      });
       // Fallback to union if intersection is empty
       if (matched.length === 0) {
         matched = availableModels.filter((m) => {
