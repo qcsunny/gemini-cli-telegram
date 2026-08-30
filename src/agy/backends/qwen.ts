@@ -144,6 +144,9 @@ export async function runQwen(opts: AgyRunOptions): Promise<AgyRunResult> {
 
   const result = await runSseBackend(runOpts, {
     backend: 'qwen',
+    // Qwen2API 的中间件默认就是 Auto（不占手动 Thinking 的 2 次/小时配额），
+    // 这里显式钉住，避免上游未来改默认值时行为漂移；要深度思考改传 'Thinking'。
+    extraBody: { thinking_mode: 'Auto' },
     label: 'Qwen',
     histories: qwenHistories,
     makeConvId: makeQwenConvId,

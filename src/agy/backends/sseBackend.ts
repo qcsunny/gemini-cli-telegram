@@ -44,6 +44,8 @@ interface SseOutputParts {
 interface SseBackendSpec {
   /** Backend id — selects the configured URL and namespaces stored history. */
   backend: 'deepseek' | 'web2api' | 'glm' | 'qwen' | 'mimo';
+  /** Extra top-level body fields merged into the request (e.g. thinking_mode). */
+  extraBody?: Record<string, unknown>;
   /** Human-readable name used in error strings (`DeepSeek HTTP 500: ...`). */
   label: string;
   /** In-memory history map for this backend. */
@@ -105,6 +107,7 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
     // Send only the wire fields — stored turns also carry bookkeeping like
     // `createdAt`, which strict upstreams reject.
     messages: history.map(h => ({ role: h.role, content: h.content })),
+    ...spec.extraBody,
   });
 
   const backendUrl = getBackendUrl(spec.backend);
