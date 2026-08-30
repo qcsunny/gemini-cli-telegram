@@ -43,7 +43,7 @@ interface SseOutputParts {
 /** Everything that differs between two OpenAI-compatible SSE backends. */
 interface SseBackendSpec {
   /** Backend id — selects the configured URL and namespaces stored history. */
-  backend: 'deepseek' | 'web2api' | 'glm' | 'qwen';
+  backend: 'deepseek' | 'web2api' | 'glm' | 'qwen' | 'mimo';
   /** Human-readable name used in error strings (`DeepSeek HTTP 500: ...`). */
   label: string;
   /** In-memory history map for this backend. */

@@ -11,7 +11,7 @@ import { eq, and } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import { logger } from '../utils/logger.js';
 
-type Backend = 'web2api' | 'deepseek' | 'glm' | 'qwen' | 'gemini-direct' | 'opencode' | 'claude' | 'codex';
+type Backend = 'web2api' | 'deepseek' | 'glm' | 'qwen' | 'mimo' | 'gemini-direct' | 'opencode' | 'claude' | 'codex';
 
 export interface StoredMessage {
   role: 'user' | 'assistant';

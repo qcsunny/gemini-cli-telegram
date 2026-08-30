@@ -28,11 +28,12 @@ import { StringDecoder } from 'node:string_decoder';
 import { logger } from '../utils/logger.js';
 import { getAgyDataDir, getStockMarketApiKey, loadUserConfig, getTuningConfig } from '../config/userConfig.js';
 
-import { isWeb2ApiModel, isDeepSeekModel, isGlmModel, isQwenModel, isOpenCodeModel, isClaudeCliModel, isCodexModel } from './modelDetection.js';
+import { isWeb2ApiModel, isDeepSeekModel, isGlmModel, isQwenModel, isMiMoModel, isOpenCodeModel, isClaudeCliModel, isCodexModel } from './modelDetection.js';
 import { runWeb2Api } from './backends/web2api.js';
 import { runDeepSeek } from './backends/deepseek.js';
 import { runGlm } from './backends/glm.js';
 import { runQwen } from './backends/qwen.js';
+import { runMiMo } from './backends/mimo.js';
 
 import { runOpenCode } from './backends/opencode.js';
 import { runClaudeCli } from './backends/claude.js';
@@ -161,6 +162,7 @@ async function snapshotConversations(): Promise<Set<string>> {
  *   2. DeepSeek models (prefix "DeepSeek:") → OpenAI-compatible SSE endpoint
  *   3. GLM models (prefix "GLM:") → OpenAI-compatible SSE endpoint
  *   4. Qwen models (prefix "Qwen:") → OpenAI-compatible SSE endpoint
+ *   4b. MiMo models (prefix "MiMo:") → OpenAI-compatible SSE endpoint
  *   5. OpenCode models (prefix "OpenCode:") → local opencode binary
  *   6. Claude CLI models (prefix "Claude CLI:" / "ClaudeCode:") → local claude binary
  *   7. Codex models (prefix "Codex:" / "Codex-CLI:") → local codex binary
@@ -192,6 +194,12 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
   if (opts.model && isQwenModel(opts.model)) {
     logger.info(`[agyCli] Routing to Qwen proxy: model=${opts.model}`);
     return runQwen(optsWithProxy);
+  }
+
+  // Route MiMo models to the local mimo-2api proxy
+  if (opts.model && isMiMoModel(opts.model)) {
+    logger.info(`[agyCli] Routing to MiMo proxy: model=${opts.model}`);
+    return runMiMo(optsWithProxy);
   }
 
   // Route OpenCode models to the local opencode binary

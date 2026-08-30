@@ -519,12 +519,19 @@ export class TelegramBot {
       logger.info('[boot] GLM                  SKIPPED (not configured)');
     }
 
-    // Qwen2API 没有健康端点（/health、/ping、/ 都 500），它唯一免鉴权的 200 是 /models
+    // Qwen2API@0eb31e4 起有免鉴权 /health（账号池聚合，全灭回 503）
     const qwenUrl = getBackendUrl('qwen');
     if (qwenUrl) {
-      probeBackend('Qwen', qwenUrl, '/models');
+      probeBackend('Qwen', qwenUrl, '/health');
     } else {
       logger.info('[boot] Qwen                 SKIPPED (not configured)');
+    }
+
+    const mimoUrl = getBackendUrl('mimo');
+    if (mimoUrl) {
+      probeBackend('MiMo', mimoUrl, '/health');
+    } else {
+      logger.info('[boot] MiMo                 SKIPPED (not configured)');
     }
   }
 

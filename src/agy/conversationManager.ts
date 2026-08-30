@@ -19,6 +19,7 @@ export const web2apiHistories = new Map<string, Web2ApiMessage[]>();
 export const deepseekHistories = new Map<string, Web2ApiMessage[]>();
 export const glmHistories = new Map<string, Web2ApiMessage[]>();
 export const qwenHistories = new Map<string, Web2ApiMessage[]>();
+export const mimoHistories = new Map<string, Web2ApiMessage[]>();
 
 export const opencodeHistories = new Map<string, Web2ApiMessage[]>();
 export const claudeHistories = new Map<string, Web2ApiMessage[]>();
@@ -52,6 +53,10 @@ export function makeQwenConvId(): string {
   return `qwen-${globalThis.crypto.randomUUID()}`;
 }
 
+export function makeMimoConvId(): string {
+  return `mimo-${globalThis.crypto.randomUUID()}`;
+}
+
 export function makeOpenCodeConvId(): string {
   return `opencode-${globalThis.crypto.randomUUID()}`;
 }
@@ -79,6 +84,10 @@ export function clearGlmHistory(conversationId: string): void {
 
 export function clearQwenHistory(conversationId: string): void {
   qwenHistories.delete(conversationId);
+}
+
+export function clearMimoHistory(conversationId: string): void {
+  mimoHistories.delete(conversationId);
 }
 
 /** Clear the Web2API history for a given conversationId (called on /new). */

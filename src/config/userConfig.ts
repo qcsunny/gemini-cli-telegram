@@ -178,6 +178,10 @@ const userConfigSchema = z.object({
     qwen: z.string().optional(),
     /** Qwen proxy API key. No default: Qwen2API generates one per install. */
     qwenKey: z.string().optional(),
+    /** MiMo (aistudio.xiaomimimo.com) proxy URL — mimo-2api. Default: http://127.0.0.1:8090/v1 */
+    mimo: z.string().optional(),
+    /** MiMo proxy API key. No default: mimo-2api takes one via -apikey. */
+    mimoKey: z.string().optional(),
   }).optional(),
   /**
    * Tuning parameters for runtime behavior.
@@ -426,6 +430,7 @@ export const BACKEND_URL_DEFAULTS = {
   deepseek: 'http://127.0.0.1:5001/v1',
   glm: 'http://127.0.0.1:8093/v1',
   qwen: 'http://127.0.0.1:8092/v1',
+  mimo: 'http://127.0.0.1:8090/v1',
   web2apiKey: 'sk-gemini-local',
 };
 
@@ -433,7 +438,7 @@ export const BACKEND_URL_DEFAULTS = {
  * Returns the configured backend URL for a given service, falling back to defaults.
  * Returns null if neither config nor default is set (backend not available).
  */
-export function getBackendUrl(service: 'web2api' | 'deepseek' | 'glm' | 'qwen'): string | null {
+export function getBackendUrl(service: 'web2api' | 'deepseek' | 'glm' | 'qwen' | 'mimo'): string | null {
   const cfg = loadUserConfig();
   return cfg?.backends?.[service] || BACKEND_URL_DEFAULTS[service] || null;
 }
