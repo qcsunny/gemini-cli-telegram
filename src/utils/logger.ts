@@ -194,6 +194,24 @@ function createInfoWarnStream(dest: LogSink): LogSink {
 }
 
 /**
+ * Log timestamp in the machine's local time zone (system time), e.g.
+ * `2026-08-30T14:58:06.349+08:00` on Asia/Shanghai.
+ *
+ * `toISOString()` always renders the UTC clock reading, so the local offset
+ * suffix can only be appended after shifting the reading to local wall time —
+ * otherwise every line claims `+08:00` while showing UTC digits, putting the
+ * whole log 8 hours behind the system clock.
+ */
+export function localIsoTimestamp(date = new Date()): string {
+  const offsetMin = -date.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const offset = `${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+  const localWallClock = new Date(date.getTime() + offsetMin * 60_000);
+  return localWallClock.toISOString().replace('Z', `${sign}${offset}`);
+}
+
+/**
  * Underlying Pino logger instance.
  *
  * - Dev mode: pino-pretty transport → stdout (colorized, human-readable).
@@ -221,14 +239,7 @@ export const pinoInstance = (() => {
   return pino(
     {
       level,
-      timestamp: () => {
-        const d = new Date();
-        const offsetMin = -d.getTimezoneOffset();
-        const sign = offsetMin >= 0 ? '+' : '-';
-        const abs = Math.abs(offsetMin);
-        const offset = `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-        return ',"time":"' + d.toISOString().replace('Z', offset) + '"';
-      },
+      timestamp: () => `,"time":"${localIsoTimestamp()}"`,
       base: { pid: process.pid },
     },
     pino.multistream([
