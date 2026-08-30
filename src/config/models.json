@@ -62,6 +62,7 @@
         "GLM: Flash Research",
         "Qwen: 3.8 Max",
         "MiMo: 2.5 Pro",
+        "Qwen: Image 2.0",
         "Qwen: Image 3.0",
         "Qwen: Video"
       ]
@@ -130,7 +131,8 @@
     "Qwen: Video": "qwen3.8-max-video",
     "OpenCode: OpenRouter Free": "openrouter/openrouter/free",
     "OpenCode: GLM 4.7 Flash": "zhipuai/glm-4.7-flash",
-    "OpenCode: Qwen 3.6 35B A3B": "hetzner/Qwen/Qwen3.6-35B-A3B-FP8"
+    "OpenCode: Qwen 3.6 35B A3B": "hetzner/Qwen/Qwen3.6-35B-A3B-FP8",
+    "Qwen: Image 2.0": "qwen-image-2.0-image"
   },
   "descriptions": {
     "Codex: GPT-5.6 Sol": "本地 Codex CLI 驱动 · 适用：前沿算法突破、超复杂全栈重构、深度思考与系统推理",
@@ -156,6 +158,7 @@
     "OpenCode: OpenRouter Free": "OpenRouter 自动免费路由模型 · 适用：免费兜底、基础问答、零成本对话",
     "OpenCode: GLM 4.7 Flash": "智谱 GLM-4.7 Flash 极速模型 · 适用：快速代码生成、日常中文问答、高并发轻量任务",
     "OpenCode: Qwen 3.6 35B A3B": "通义千问 3.6 35B 极速轻量模型 (3B激活) · 适用：快速代码片段生成、日常快答、极速响应",
-    "MiMo: 2.5 Pro": "小米 MiMo 2.5 Pro · 适用：中文问答与日常推理，自带联网搜索（上游自动触发），思考链随流式返回"
+    "MiMo: 2.5 Pro": "小米 MiMo 2.5 Pro · 适用：中文问答与日常推理，自带联网搜索（上游自动触发），思考链随流式返回",
+    "Qwen: Image 2.0": "Qwen 生图（2.0 引擎）· 适用：文生图，prompt 里 @16:9/@9:16 等可指定比例"
   }
 }

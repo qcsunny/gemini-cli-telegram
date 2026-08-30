@@ -42,6 +42,7 @@ vi.mock('../../config/userConfig.js', () => ({
 
 const routing: Record<string, string> = {
   'Qwen: 3.8 Max': 'qwen3.8-max-thinking',
+  'Qwen: Image 2.0': 'qwen-image-2.0-image',
   'Qwen: Image 3.0': 'qwen-image-3.0-image',
   'Qwen: Video': 'qwen3.8-max-video',
 };
@@ -117,6 +118,14 @@ describe('runQwen', () => {
     expect(captured[0]!.headers['authorization']).toBe('Bearer sk-test-qwen');
   });
 
+  it('pins thinking_mode to Auto so the turn never burns the manual-Thinking quota', async () => {
+    await runQwen(opts({ model: 'Qwen: 3.8 Max', conversationId: 'qwen-c2' }));
+    // Auto is Qwen2API's middleware default and is exempt from the
+    // 2-per-hour manual Thinking quota; pinning it guards against upstream
+    // changing that default later.
+    expect(captured[0]!.body.thinking_mode).toBe('Auto');
+  });
+
   it('wraps reasoning_content in a timed thinking block ahead of the answer', async () => {
     frames = [
       { choices: [{ delta: { reasoning_content: '先算 2+2' } }] },
@@ -183,10 +192,10 @@ describe('models.json Qwen entries', () => {
   const cfg = JSON.parse(fs.readFileSync(new URL('../../config/models.json', import.meta.url), 'utf-8'));
   const names = Object.keys(cfg.routing as Record<string, string>).filter((n) => n.startsWith('Qwen:'));
 
-  it('routes exactly the three requested ids', () => {
+  it('routes exactly the four requested ids', () => {
     expect(new Set(Object.entries(cfg.routing as Record<string, string>)
       .filter(([n]) => n.startsWith('Qwen:')).map(([, id]) => id)))
-      .toEqual(new Set(['qwen3.8-max-thinking', 'qwen-image-3.0-image', 'qwen3.8-max-video']));
+      .toEqual(new Set(['qwen3.8-max-thinking', 'qwen-image-2.0-image', 'qwen-image-3.0-image', 'qwen3.8-max-video']));
   });
 
   it('lists every routed Qwen model in the remote tier and describes it', () => {
