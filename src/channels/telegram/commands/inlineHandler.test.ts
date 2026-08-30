@@ -880,7 +880,7 @@ describe('registerInlineHandler', () => {
     }
   });
 
-  it('should list deepseek family models when @deep keyword is used', async () => {
+  it('should list all models whose names contain "deep" when @deep keyword is used', async () => {
     registerInlineHandler(mockBot as unknown as Bot, mockSessionManager as unknown as SessionManager, defaultOptions);
 
     const mockCtx = {
@@ -892,11 +892,15 @@ describe('registerInlineHandler', () => {
     await inlineQueryHandler!(mockCtx);
 
     const callArg = mockCtx.answerInlineQuery.mock.calls[0][0];
+    // @deep is a fuzzy substring match, not a channel-exclusive filter: every
+    // model whose display name contains "deep" shows up — the DeepSeek family
+    // as well as "Web2API: Gemini Deep Research".
     const suggestionCards = callArg.filter((r: any) => r.id.startsWith('m-'));
     expect(suggestionCards.length).toBeGreaterThan(0);
     for (const card of suggestionCards) {
-      expect(card.title).toMatch(/DeepSeek|deepseek/i);
+      expect(card.title).toMatch(/deep/i);
     }
+    expect(suggestionCards.some((card: any) => /DeepSeek/i.test(card.title))).toBe(true);
   });
 
   it('should list thinking models when @think keyword is used', async () => {
