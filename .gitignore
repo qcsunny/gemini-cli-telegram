@@ -5,7 +5,7 @@ coverage/
 *.tsbuildinfo
 .env
 config.json
-config.json.bak
+config.json.bak*
 *.log
 *.log.*
 logs/
