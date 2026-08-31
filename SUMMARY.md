@@ -2,7 +2,7 @@
 
 ## Objective
 - Keep the repo documentation aligned with current architecture and deployment.
-- Current release line: **v1.25.6**.
+- Current release line: **v1.27.1**.
 
 ## Important Details
 - **Six model backends**, routed by display-name prefix in `runAgyPrint()` (src/agy/agyCli.ts): `Web2API:` → web2api HTTP proxy (:8083), `DeepSeek:` → deepseek proxy (:5001), `OpenCode:` → opencode CLI (run --format json), `Claude CLI:` → claude -p, `Codex:` → codex exec, others → native agy subprocess.
@@ -29,4 +29,4 @@
 - (none)
 
 ## Next Move
-- Run integration tests against live backends; release as **v1.25.7** or next PATCH via Tag + GitHub Release + service restart.
+- Run integration tests against live backends; release as **v1.27.2** or next PATCH via Tag + GitHub Release + service restart.
