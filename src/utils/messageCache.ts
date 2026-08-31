@@ -43,7 +43,7 @@ interface CacheEntry {
 export class MessageCache {
   private cache: LRUCache<number, CacheEntry>;
   /** Tracks the most recent reply context per chat, enabling per-chat retrieval. */
-  private lastReplyContexts: LRUCache<number, ReplyContext>;
+  private lastReplyContexts: LRUCache<string, ReplyContext>;
   /** Fallback to the most recently stored context (when no chatId is available). */
   private lastReplyContext: ReplyContext | null = null;
 
@@ -56,7 +56,7 @@ export class MessageCache {
       max: maxSize,
       ttl: ttlMs,
     });
-    this.lastReplyContexts = new LRUCache<number, ReplyContext>({
+    this.lastReplyContexts = new LRUCache<string, ReplyContext>({
       max: maxSize,
       ttl: ttlMs,
     });
@@ -72,6 +72,7 @@ export class MessageCache {
    * @param chatId - Optional Telegram chat ID to trigger SQLite persistence.
    * @param model - Optional model name for database record.
    * @param conversationId - Optional conversation UUID for database record.
+   * @param threadId - Optional Telegram topic id; 0 represents the main chat.
    */
   set(
     messageId: number,
@@ -79,7 +80,8 @@ export class MessageCache {
     replyContext?: ReplyContext,
     chatId?: number,
     model?: string,
-    conversationId?: string
+    conversationId?: string,
+    threadId?: number
   ): void {
     let finalContext = replyContext;
     if (!finalContext && text) {
@@ -92,7 +94,7 @@ export class MessageCache {
     this.cache.set(messageId, { text, replyContext: finalContext });
     if (finalContext) {
       if (chatId !== undefined) {
-        this.lastReplyContexts.set(chatId, finalContext);
+        this.lastReplyContexts.set(this.contextKey(chatId, threadId), finalContext);
       }
       this.lastReplyContext = finalContext;
     }
@@ -106,6 +108,7 @@ export class MessageCache {
             .values({
               chatId: String(chatId),
               messageId,
+              threadId: threadId ?? 0,
               conversationId: conversationId || null,
               model: model || null,
               title: finalContext?.title || null,
@@ -114,7 +117,7 @@ export class MessageCache {
               createdAt: nowStr,
             })
             .onConflictDoUpdate({
-              target: [modelOutputs.chatId, modelOutputs.messageId],
+              target: [modelOutputs.chatId, modelOutputs.messageId, modelOutputs.threadId],
               set: {
                 conversationId: conversationId || null,
                 model: model || null,
@@ -149,8 +152,12 @@ export class MessageCache {
   /**
    * Retrieves the last stored ReplyContext for a specific chat if any exists.
    */
-  getLastReplyContextForChat(chatId: number): ReplyContext | null {
-    return this.lastReplyContexts.get(chatId) ?? null;
+  private contextKey(chatId: number, threadId?: number): string {
+    return `${chatId}:${threadId ?? 0}`;
+  }
+
+  getLastReplyContextForChat(chatId: number, threadId?: number): ReplyContext | null {
+    return this.lastReplyContexts.get(this.contextKey(chatId, threadId)) ?? null;
   }
 
   /**

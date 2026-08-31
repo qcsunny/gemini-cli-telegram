@@ -28,6 +28,7 @@ export function registerContentHandlers(
 ): void {
   bot.command('save', async (ctx: Context) => {
     const chatId = ctx.chat?.id;
+    const threadId = ctx.message?.message_thread_id ?? ctx.update?.message?.message_thread_id;
     if (!chatId) return;
 
     const replyToMessage = ctx.message?.reply_to_message;
@@ -49,7 +50,8 @@ export function registerContentHandlers(
               .where(
                 and(
                   eq(modelOutputs.chatId, String(chatId)),
-                  eq(modelOutputs.messageId, replyToMessage.message_id)
+                  eq(modelOutputs.messageId, replyToMessage.message_id),
+                  eq(modelOutputs.threadId, threadId ?? 0)
                 )
               )
               .limit(1)
@@ -62,7 +64,7 @@ export function registerContentHandlers(
                 thinkingMarkdown: record.thinkingMarkdown || '',
               };
               // Backfill the in-memory cache so subsequent reads are instant
-              messageCache.set(replyToMessage.message_id, record.answerMarkdown, replyContext);
+              messageCache.set(replyToMessage.message_id, record.answerMarkdown, replyContext, chatId, record.model || undefined, record.conversationId || undefined, threadId);
             }
           } catch (dbErr) {
             logger.warn(`[saveCommand] Failed to retrieve from model_outputs DB: ${dbErr}`);
@@ -88,14 +90,17 @@ export function registerContentHandlers(
         }
       } else {
         // Option B: Auto-save latest AI response in session
-        let lastContext: ReplyContext | null = messageCache.getLastReplyContextForChat(chatId);
+        let lastContext: ReplyContext | null = messageCache.getLastReplyContextForChat(chatId, threadId);
         if (!lastContext) {
           // If cache missed, try loading the most recent output from database for this chat
           try {
             const db = getDb();
             const record = await db.select()
               .from(modelOutputs)
-              .where(eq(modelOutputs.chatId, String(chatId)))
+              .where(and(
+                eq(modelOutputs.chatId, String(chatId)),
+                eq(modelOutputs.threadId, threadId ?? 0),
+              ))
               .orderBy(desc(modelOutputs.id))
               .limit(1)
               .then(rows => rows[0]);
@@ -227,7 +232,10 @@ export function registerContentHandlers(
       const db = getDb();
       const records = db.select()
         .from(modelOutputs)
-        .where(eq(modelOutputs.chatId, String(chatId)))
+        .where(and(
+          eq(modelOutputs.chatId, String(chatId)),
+          eq(modelOutputs.threadId, threadId ?? 0),
+        ))
         .orderBy(modelOutputs.id)
         .all();
 

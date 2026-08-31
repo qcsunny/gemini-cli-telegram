@@ -176,7 +176,7 @@ describe('processMessage', () => {
     // ...finalize edited the draft id and adopted the returned real id 9001,
     // which becomes the cache key (draft id → real message id handoff).
     expect(richReply.editRich).toHaveBeenCalledWith(42, expect.objectContaining({ content: 'draft body' }));
-    expect(mockMessageCache.set).toHaveBeenCalledWith(9001, 'draft body', expect.anything(), 123456, 'test-model', 'conv-draft');
+    expect(mockMessageCache.set).toHaveBeenCalledWith(9001, 'draft body', expect.anything(), 123456, 'test-model', 'conv-draft', undefined);
     // No duplicate real message was sent by messageLoop itself.
     expect(richReply.sendRich).not.toHaveBeenCalled();
   });

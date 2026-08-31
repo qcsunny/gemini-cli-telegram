@@ -11,6 +11,7 @@
 
 import type { ParsedLinkType, ParsedLinkContent } from './types.js';
 import { logger } from '../../utils/logger.js';
+import { assertSafeRemoteUrl, fetchSafeRemote } from '../../utils/safeUrl.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -115,6 +116,7 @@ export function cleanHtmlToMarkdown(html: string): string {
 
 export async function parseArXiv(urlStr: string): Promise<ParsedLinkContent> {
   const url = new URL(urlStr);
+  await assertSafeRemoteUrl(urlStr);
   const match = /(?:abs|pdf)\/([a-zA-Z0-9.\-_/]+)(?:\.pdf)?/i.exec(url.pathname);
   const arxivId = match ? match[1].replace(/\.pdf$/, '') : '';
 
@@ -123,7 +125,7 @@ export async function parseArXiv(urlStr: string): Promise<ParsedLinkContent> {
   }
 
   const apiUrl = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`;
-  const res = await fetch(apiUrl, {
+  const res = await fetchSafeRemote(apiUrl, {
     headers: { 'User-Agent': USER_AGENT_BROWSER },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -190,7 +192,7 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
   // 1. Fetch repo metadata via GitHub REST API
   let repoData: GitHubRepoData | null = null;
   try {
-    const apiRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+    const apiRes = await fetchSafeRemote(`https://api.github.com/repos/${owner}/${repo}`, {
       headers: {
         'User-Agent': 'gemini-cli-telegram-bot',
         Accept: 'application/vnd.github.v3+json',
@@ -209,7 +211,7 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
   const branches = ['main', 'master', 'HEAD'];
   for (const branch of branches) {
     try {
-      const readmeRes = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/README.md`, {
+      const readmeRes = await fetchSafeRemote(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/README.md`, {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (readmeRes.ok) {
@@ -250,7 +252,7 @@ export async function parseGitHub(urlStr: string): Promise<ParsedLinkContent> {
 // ── 3. WeChat Official Account Parser ───────────────────────────────────────
 
 export async function parseWeChat(urlStr: string): Promise<ParsedLinkContent> {
-  const res = await fetch(urlStr, {
+  const res = await fetchSafeRemote(urlStr, {
     headers: {
       'User-Agent': USER_AGENT_WECHAT,
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -306,7 +308,7 @@ export async function parseWeChat(urlStr: string): Promise<ParsedLinkContent> {
 // ── 4. Zhihu Parser ─────────────────────────────────────────────────────────
 
 export async function parseZhihu(urlStr: string): Promise<ParsedLinkContent> {
-  const res = await fetch(urlStr, {
+  const res = await fetchSafeRemote(urlStr, {
     headers: {
       'User-Agent': USER_AGENT_BROWSER,
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -369,7 +371,7 @@ export async function parseTwitter(urlStr: string): Promise<ParsedLinkContent> {
   // Use reliable fxtwitter JSON API
   try {
     const apiUrl = `https://api.fxtwitter.com/${user}/status/${tweetId}`;
-    const res = await fetch(apiUrl, {
+    const res = await fetchSafeRemote(apiUrl, {
       headers: { 'User-Agent': 'gemini-cli-telegram-bot' },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -416,7 +418,7 @@ export async function parseTwitter(urlStr: string): Promise<ParsedLinkContent> {
 // ── 6. General Web Parser (Fallback) ────────────────────────────────────────
 
 export async function parseGeneralWeb(urlStr: string): Promise<ParsedLinkContent> {
-  const res = await fetch(urlStr, {
+  const res = await fetchSafeRemote(urlStr, {
     headers: {
       'User-Agent': USER_AGENT_BROWSER,
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -464,6 +466,7 @@ export async function parseGeneralWeb(urlStr: string): Promise<ParsedLinkContent
  * Universal content fetcher that automatically routes to the appropriate platform parser.
  */
 export async function parseUrlContent(urlStr: string): Promise<ParsedLinkContent> {
+  await assertSafeRemoteUrl(urlStr);
   const type = detectLinkType(urlStr);
   logger.info(`[UrlParser] Parsing link="${urlStr}" detectedType="${type}"`);
 

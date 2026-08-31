@@ -23,7 +23,7 @@ let sqliteDb: InstanceType<typeof Database> | null = null;
 let dbInstancePath: string | null = null;
 
 /** Current schema revision embedded in SQLite PRAGMA user_version. */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 /**
  * Returns default absolute path to the SQLite database file.
@@ -114,7 +114,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       conversation_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL,
-      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','glm','qwen','gemini-direct','opencode','claude','codex')),
+      backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','glm','qwen','mimo','gemini-direct','opencode','claude','codex')),
       created_at TEXT NOT NULL,
       usage TEXT
     );
@@ -129,11 +129,37 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
       title TEXT,
       answer_markdown TEXT NOT NULL,
       thinking_markdown TEXT,
+      thread_id INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
   `);
+  // Add the topic column before touching existing rows. On legacy databases
+  // model_outputs was created without thread_id, so updating it first would
+  // abort startup before the ALTER TABLE migration could run.
+  try {
+    sqlite.exec(`ALTER TABLE model_outputs ADD COLUMN thread_id INTEGER NOT NULL DEFAULT 0;`);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!message.includes('duplicate column name')) {
+      logger.warn(`[db] Notice on adding 'thread_id' column: ${message}`);
+    }
+  }
+  sqlite.exec(`UPDATE model_outputs SET thread_id = 0 WHERE thread_id IS NULL;`);
+  // Old versions keyed outputs only by (chat_id, message_id). If a retry or
+  // legacy bug already left duplicates, remove all but the newest row before
+  // creating the topic-aware unique index; otherwise every startup would fail
+  // while rebuilding the index.
   sqlite.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_outputs_chat_msg ON model_outputs(chat_id, message_id);
+    DELETE FROM model_outputs
+    WHERE id NOT IN (
+      SELECT MAX(id) FROM model_outputs
+      GROUP BY chat_id, message_id, thread_id
+    );
+  `);
+  sqlite.exec(`DROP INDEX IF EXISTS idx_model_outputs_chat_msg;`);
+  sqlite.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_outputs_chat_msg_thread
+      ON model_outputs(chat_id, message_id, thread_id);
   `);
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS runtime_states (
@@ -175,7 +201,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
   // before new backends existed.
   try {
     const msgSql = sqlite.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'`).get() as { sql?: string } | undefined;
-    if (msgSql?.sql && (!msgSql.sql.includes("'opencode'") || !msgSql.sql.includes("'claude'") || !msgSql.sql.includes("'codex'") || !msgSql.sql.includes("'glm'") || !msgSql.sql.includes("'qwen'"))) {
+    if (msgSql?.sql && (!msgSql.sql.includes("'opencode'") || !msgSql.sql.includes("'claude'") || !msgSql.sql.includes("'codex'") || !msgSql.sql.includes("'glm'") || !msgSql.sql.includes("'qwen'") || !msgSql.sql.includes("'mimo'"))) {
       const cols = sqlite.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
       const names = cols.map((c) => c.name);
       const colDefs = names.map((n) => {
@@ -183,7 +209,7 @@ export function getDb(dbPath?: string): BetterSQLite3Database<typeof schema> {
         if (n === 'conversation_id') return 'conversation_id TEXT NOT NULL';
         if (n === 'role') return "role TEXT NOT NULL CHECK(role IN ('user','assistant'))";
         if (n === 'content') return 'content TEXT NOT NULL';
-        if (n === 'backend') return "backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','glm','qwen','gemini-direct','opencode','claude','codex'))";
+        if (n === 'backend') return "backend TEXT NOT NULL CHECK(backend IN ('web2api','deepseek','glm','qwen','mimo','gemini-direct','opencode','claude','codex'))";
         if (n === 'created_at') return 'created_at TEXT NOT NULL';
         return `"${n}" TEXT`;
       });

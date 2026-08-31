@@ -92,13 +92,21 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
 
   const convId = existingConvId || spec.makeConvId();
 
+  const backendUrl = getBackendUrl(spec.backend);
+  if (!backendUrl) {
+    return { conversationId: '', output: '', exitCode: 1, stderr: `${spec.label} backend URL not configured` };
+  }
+
   // Replay the whole conversation on every request. web2api is stateless;
   // deepseek-web2api is stateful but expects the full history too — it diffs
   // against the previous turn server-side and forwards only the new user
   // message upstream. The full history doubles as the recovery path when its
   // session cache misses (restart, TTL expiry, history divergence).
   const history = getHistory(spec.histories, convId, spec.backend);
-  history.push({ role: 'user', content: prompt });
+  // Keep the exact object so a failed/aborted turn can be rolled back without
+  // disturbing messages that another caller may have appended later.
+  const userTurn = { role: 'user' as const, content: prompt };
+  history.push(userTurn);
 
   const body = JSON.stringify({
     model: modelId,
@@ -110,10 +118,6 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
     ...spec.extraBody,
   });
 
-  const backendUrl = getBackendUrl(spec.backend);
-  if (!backendUrl) {
-    return { conversationId: '', output: '', exitCode: 1, stderr: `${spec.label} backend URL not configured` };
-  }
   const url = new URL(`${backendUrl}/chat/completions`);
   const reqOptions: http.RequestOptions = {
     hostname: url.hostname,
@@ -138,15 +142,31 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
     let inThoughts = false;
     let chunkCount = 0;
     let settled = false;
+    let abortHandler: (() => void) | undefined;
+
+    const rollbackUserTurn = (): void => {
+      const index = history.indexOf(userTurn);
+      if (index >= 0) history.splice(index, 1);
+    };
 
     const finish = (result: AgyRunResult): void => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', abortHandler!);
+      if (result.exitCode !== 0) rollbackUserTurn();
       resolve(result);
     };
 
     /** Resolve only once every queued event handler has settled, so a caller's
      *  finalize step never runs before the last streamed edit it depends on. */
+    const fail = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abortHandler!);
+      rollbackUserTurn();
+      reject(err);
+    };
+
     const finishAfterDrain = (result: AgyRunResult): void => {
       events.drain()
         .then(() => finish(result))
@@ -254,7 +274,8 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
 
         const finalOutput = buildOutput();
 
-        if (finalOutput) {
+        const isEmptyResponse = !!spec.emptyOutputError && !contentBuf.trim();
+        if (finalOutput && !isEmptyResponse) {
           history.push({ role: 'assistant', content: finalOutput });
           // Cap history at maxHistoryMessages (configurable via tuning) to avoid memory growth
           const maxMessages = getTuningConfig().maxHistoryMessages;
@@ -267,12 +288,19 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
             if (firstKey !== undefined) spec.histories.delete(firstKey);
           }
         }
-        // Persist to SQLite atomically for restart survival
-        saveMessageTurn(convId, spec.backend, prompt, finalOutput);
+        // Upstream returned no content (e.g. web rate-limit / empty reply).
+        // Treat it as a failed turn before persisting history, so retries do not
+        // replay a user message that never received an answer.
+        if (isEmptyResponse) {
+          rollbackUserTurn();
+        } else {
+          // Persist to SQLite atomically for restart survival.
+          saveMessageTurn(convId, spec.backend, prompt, finalOutput);
+        }
 
         // Upstream returned no content (e.g. web rate-limit / empty reply).
         // Surface a clear message instead of sending a blank message.
-        if (spec.emptyOutputError && !finalOutput.trim()) {
+        if (isEmptyResponse) {
           logger.warn(`[${spec.backend}] Empty response from upstream for model=${modelId}`);
           finishAfterDrain({
             conversationId: convId,
@@ -286,12 +314,12 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
       });
 
       res.on('error', (err) => {
-        if (!settled) reject(err);
+        fail(err);
       });
     });
 
     req.on('error', (err) => {
-      if (!settled) reject(err);
+      fail(err);
     });
 
     // BUG-03: Add a socket-level read timeout so TCP half-open connections
@@ -302,11 +330,16 @@ export async function runSseBackend(opts: AgyRunOptions, spec: SseBackendSpec): 
       req.destroy(new Error(`${spec.label} socket read timeout (${seconds}s)`));
     });
 
-    signal?.addEventListener('abort', () => {
+    abortHandler = () => {
       logger.debug(`[${spec.backend}] Aborting request`);
       req.destroy();
       finish({ conversationId: convId, output: buildOutput(), exitCode: 1, stderr: 'Aborted' });
-    }, { once: true });
+    };
+    signal?.addEventListener('abort', abortHandler, { once: true });
+    if (signal?.aborted) {
+      abortHandler();
+      return;
+    }
 
     req.write(body);
     req.end();

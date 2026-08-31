@@ -198,4 +198,25 @@ describe('MessageCache — modelOutputs persistence', () => {
     expect(rows[0]?.model).toBe('model-b');
     expect(rows[0]?.conversationId).toBe('conv-2');
   });
+
+  it('keeps model outputs and latest contexts separate across Telegram topics', async () => {
+    const cache = new MessageCache(60_000, 100);
+    const topicOne: ReplyContext = { answerMarkdown: 'topic one', thinkingMarkdown: '' };
+    const topicTwo: ReplyContext = { answerMarkdown: 'topic two', thinkingMarkdown: '' };
+
+    cache.set(5004, 'topic one', topicOne, 999, 'model-a', 'conv-topic-1', 11);
+    cache.set(5004, 'topic two', topicTwo, 999, 'model-b', 'conv-topic-2', 22);
+    await sleep(50);
+
+    expect(cache.getLastReplyContextForChat(999, 11)).toEqual(topicOne);
+    expect(cache.getLastReplyContextForChat(999, 22)).toEqual(topicTwo);
+
+    const rows = getDb()
+      .select()
+      .from(modelOutputs)
+      .where(and(eq(modelOutputs.chatId, '999'), eq(modelOutputs.messageId, 5004)))
+      .all();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.threadId).sort()).toEqual([11, 22]);
+  });
 });

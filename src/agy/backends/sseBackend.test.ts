@@ -44,15 +44,22 @@ interface Captured {
 
 let server: http.Server;
 let captured: Captured[];
+let responseStatus = 200;
 let url = '';
 
 beforeEach(async () => {
   captured = [];
+  responseStatus = 200;
   server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c: Buffer) => { raw += c.toString('utf8'); });
     req.on('end', () => {
       captured.push({ headers: req.headers, body: JSON.parse(raw) });
+      if (responseStatus !== 200) {
+        res.writeHead(responseStatus, { 'Content-Type': 'text/plain' });
+        res.end('upstream failure');
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })}\n\n`);
       res.write('data: [DONE]\n\n');
@@ -135,5 +142,14 @@ describe('runSseBackend', () => {
     // Same conversation → same header on every turn, so the stateful
     // upstream threads them into one server-side session.
     expect(captured[1]!.headers['x-conversation-id']).toBe('conv-7');
+  });
+
+  it('rolls back the pending user turn when the upstream returns an error', async () => {
+    responseStatus = 503;
+    const spec = makeSpec({ conversationId: 'unused' });
+    const result = await runSseBackend(makeOpts({ conversationId: 'conv-failed' }), spec as any);
+
+    expect(result.exitCode).toBe(1);
+    expect((spec.histories as Map<string, unknown[]>).get('conv-failed')).toEqual([]);
   });
 });

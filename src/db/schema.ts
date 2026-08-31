@@ -46,6 +46,8 @@ export const modelOutputs = sqliteTable('model_outputs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   chatId: text('chat_id').notNull(),
   messageId: integer('message_id').notNull(),
+  /** Telegram topic id; 0 denotes the main chat and preserves legacy rows. */
+  threadId: integer('thread_id').notNull().default(0),
   conversationId: text('conversation_id'),
   model: text('model'),
   title: text('title'),

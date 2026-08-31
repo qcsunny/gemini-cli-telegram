@@ -323,7 +323,7 @@ export function registerCallbackRouter(
 
     if (data === '/save') {
       safeAnswerCallback(ctx, 'Saving latest response...');
-      const lastContext = messageCache.getLastReplyContextForChat(chatId);
+      const lastContext = messageCache.getLastReplyContextForChat(chatId, threadId);
       if (!lastContext || (!lastContext.answerMarkdown.trim() && !lastContext.thinkingMarkdown.trim())) {
         // Fallback: try loading from DB (survives restart)
         const session = sessionManager.getSession(chatId, threadId);

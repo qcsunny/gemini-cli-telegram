@@ -154,7 +154,7 @@ export async function runWeb2Api(opts: AgyRunOptions): Promise<AgyRunResult> {
                 opts.onActivity?.();
                 return;
               }
-              opts.onEvent!(event);
+              return opts.onEvent!(event);
             }
           : undefined,
       }

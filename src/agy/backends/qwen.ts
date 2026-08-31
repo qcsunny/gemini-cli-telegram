@@ -24,12 +24,16 @@ import * as os from 'node:os';
 import * as https from 'node:https';
 import * as http from 'node:http';
 import * as crypto from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { logger } from '../../utils/logger.js';
 import { loadUserConfig } from '../../config/userConfig.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
 import { qwenHistories, makeQwenConvId } from '../conversationManager.js';
 import { runSseBackend } from './sseBackend.js';
 import type { AgyRunOptions, AgyRunResult, AgyStreamEvent } from '../types.js';
+import { assertSafeRemoteUrl } from '../../utils/safeUrl.js';
 
 /** Upstream id used when a display name carries no routing entry. */
 const QWEN_FALLBACK_MODEL_ID = 'qwen3.8-max-thinking';
@@ -59,29 +63,59 @@ function mediaKindOf(modelId: string): 'photo' | 'video' | null {
   return null;
 }
 
-/** Download one generated asset to a temp file. Rejects on non-2xx so the
- *  caller can leave the raw URL in the text instead of sending a broken file. */
-function downloadTo(url: string, dest: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const get = url.startsWith('https:') ? https.get : http.get;
-    get(url, (res) => {
-      // Qwen's CDN redirects signed asset URLs at least once.
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        downloadTo(new URL(res.headers.location, url).toString(), dest).then(resolve, reject);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        reject(new Error(`HTTP ${res.statusCode}`));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      res.on('data', (c: Buffer) => chunks.push(c));
-      res.on('end', () => { fs.writeFile(dest, Buffer.concat(chunks)).then(resolve, reject); });
-      res.on('error', reject);
-    }).on('error', reject);
-  });
+/** Maximum generated asset size accepted from the remote CDN. */
+const MAX_QWEN_ASSET_BYTES = 100 * 1024 * 1024;
+const MAX_QWEN_REDIRECTS = 5;
+
+/** Download one generated asset to a temp file with SSRF, redirect and size guards. */
+async function downloadTo(url: string, dest: string, redirectCount = 0): Promise<void> {
+  if (redirectCount > MAX_QWEN_REDIRECTS) {
+    throw new Error('Too many redirects while downloading Qwen asset');
+  }
+  const safeUrl = await assertSafeRemoteUrl(url, { allowPrivateForTests: true });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const get = safeUrl.protocol === 'https:' ? https.get : http.get;
+      get(safeUrl, (res) => {
+        // Qwen's CDN redirects signed asset URLs at least once. Validate every
+        // redirect because a public URL may redirect into a private network.
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          const redirected = new URL(res.headers.location, safeUrl).toString();
+          downloadTo(redirected, dest, redirectCount + 1).then(resolve, reject);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        const contentLength = Number(res.headers['content-length'] || 0);
+        if (contentLength > MAX_QWEN_ASSET_BYTES) {
+          res.resume();
+          reject(new Error(`Qwen asset is too large (${contentLength} bytes)`));
+          return;
+        }
+
+        let received = 0;
+        const limiter = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            received += chunk.length;
+            if (received > MAX_QWEN_ASSET_BYTES) {
+              callback(new Error(`Qwen asset exceeded ${MAX_QWEN_ASSET_BYTES} bytes`));
+            } else {
+              callback(null, chunk);
+            }
+          },
+        });
+        pipeline(res, limiter, createWriteStream(dest, { flags: 'w' })).then(resolve, reject);
+      }).on('error', reject);
+    });
+  } catch (error) {
+    await fs.unlink(dest).catch(() => {});
+    throw error;
+  }
 }
 
 /**
@@ -136,7 +170,7 @@ export async function runQwen(opts: AgyRunOptions): Promise<AgyRunResult> {
                 opts.onActivity?.(); // keep the inactivity watchdog quiet
                 return;
               }
-              opts.onEvent!(event);
+              return opts.onEvent!(event);
             }
           : undefined,
       }

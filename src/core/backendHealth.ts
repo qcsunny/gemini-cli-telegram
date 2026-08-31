@@ -32,6 +32,7 @@ const STORAGE_KEY_PREFIX = 'backend_health:';
 
 /** Tracks which storage keys were last persisted, for incremental writes. */
 const lastPersistedKeys = new Set<string>();
+const dirtyKeys = new Set<string>();
 let isLoaded = false;
 
 function loadFromDbIfNeeded(): void {
@@ -88,7 +89,7 @@ function saveToDb(): void {
     // the last save, so concurrent instances never clobber each other's rows.
     for (const [channel, value] of backendHealth.entries()) {
       const storageKey = STORAGE_KEY_PREFIX + channel;
-      if (!lastPersistedKeys.has(storageKey)) {
+      if (dirtyKeys.has(storageKey) || !lastPersistedKeys.has(storageKey)) {
         const valueStr = JSON.stringify(value);
         db.insert(schema.runtimeStates)
           .values({
@@ -105,6 +106,7 @@ function saveToDb(): void {
           })
           .run();
         lastPersistedKeys.add(storageKey);
+        dirtyKeys.delete(storageKey);
       }
     }
 
@@ -116,6 +118,7 @@ function saveToDb(): void {
           .where(eq(schema.runtimeStates.key, storageKey))
           .run();
         lastPersistedKeys.delete(storageKey);
+        dirtyKeys.delete(storageKey);
       }
     }
   } catch (err) {
@@ -133,9 +136,9 @@ export function isBackendAvailable(channel: string | null): boolean {
   const health = backendHealth.get(channel);
   if (!health) return true;
   if (Date.now() >= health.cooldownUntil) {
-    // Read paths must not write to the DB: just drop the expired entry from the
-    // in-memory map. The next write (fail/healthy) persists that state.
     backendHealth.delete(channel);
+    dirtyKeys.add(STORAGE_KEY_PREFIX + channel);
+    saveToDb();
     return true;
   }
   return false;
@@ -152,6 +155,7 @@ export function markBackendFailed(channel: string | null): void {
   const failCount = (prev?.failCount ?? 0) + 1;
   const cooldownMs = Math.min(COOLDOWN_INITIAL_MS * Math.pow(2, failCount - 1), COOLDOWN_MAX_MS);
   backendHealth.set(channel, { failCount, cooldownUntil: Date.now() + cooldownMs });
+  dirtyKeys.add(STORAGE_KEY_PREFIX + channel);
   saveToDb();
   logger.warn(`[BackendHealth] Backend "${channel}" marked unavailable for ${cooldownMs}ms (fail #${failCount})`);
 }
@@ -165,6 +169,7 @@ export function markBackendHealthy(channel: string | null): void {
   loadFromDbIfNeeded();
   if (backendHealth.has(channel)) {
     backendHealth.delete(channel);
+    dirtyKeys.add(STORAGE_KEY_PREFIX + channel);
     saveToDb();
   }
 }
@@ -195,6 +200,7 @@ export function clearBackendHealth(): void {
     }
   }
   lastPersistedKeys.clear();
+  dirtyKeys.clear();
 }
 
 // ── Error Classification ────────────────────────────────────────────────────

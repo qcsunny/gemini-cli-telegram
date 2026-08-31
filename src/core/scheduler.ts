@@ -66,6 +66,8 @@ export class ChatScheduler {
    * next tick and fired a second time.
    */
   private runningTasks: Set<string> = new Set();
+  /** Serialize snapshots and renames so concurrent mutations cannot overwrite each other. */
+  private saveChain: Promise<void> = Promise.resolve();
 
   constructor() {
     this.tasksFile = getScheduledTasksPath();
@@ -328,15 +330,18 @@ export class ChatScheduler {
     }
   }
 
-  private async saveTasks(): Promise<void> {
-    try {
-      const data = JSON.stringify(Array.from(this.tasks.values()), null, 2);
-      // Atomic write: write to .tmp then rename to prevent data loss on crash mid-write
-      const tmpFile = this.tasksFile + '.tmp';
-      await fs.writeFile(tmpFile, data, 'utf-8');
-      await fs.rename(tmpFile, this.tasksFile);
-    } catch (e) {
-      logger.error(`Failed to save scheduled tasks: ${e}`);
-    }
+  private saveTasks(): Promise<void> {
+    this.saveChain = this.saveChain.then(async () => {
+      try {
+        const data = JSON.stringify(Array.from(this.tasks.values()), null, 2);
+        // Atomic write: write to .tmp then rename to prevent data loss on crash mid-write
+        const tmpFile = this.tasksFile + '.tmp';
+        await fs.writeFile(tmpFile, data, 'utf-8');
+        await fs.rename(tmpFile, this.tasksFile);
+      } catch (e) {
+        logger.error(`Failed to save scheduled tasks: ${e}`);
+      }
+    });
+    return this.saveChain;
   }
 }

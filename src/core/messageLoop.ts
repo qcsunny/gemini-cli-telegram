@@ -653,7 +653,7 @@ export async function processMessage(
                 : draft.answerBuffer.trim();
               await reply.edit!(draft.currentMessageId, finalText);
             }
-            if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId!, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
+            if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId!, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId, session.threadId);
           } catch (e) {
             logger.warn(`[messageLoop] Finalize failed: ${e}`);
             try {
@@ -664,7 +664,7 @@ export async function processMessage(
               } else {
                 draft.currentMessageId = await reply.sendRich!(finalContent);
               }
-              if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
+              if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId, session.threadId);
             } catch (e2) {
               logger.error(`[messageLoop] editRich/sendRich fallback failed: ${e2}`);
               // Last resort: persist the answer as a plain-text message so the
@@ -674,7 +674,7 @@ export async function processMessage(
                   ? `🧠 Thinking Process\n\n${draft.thoughtBuffer.trim()}\n\n${draft.answerBuffer.trim()}`
                   : draft.answerBuffer.trim();
                 draft.currentMessageId = await reply.send!(finalText);
-                if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
+                if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId, session.threadId);
               } catch (e3) {
                 logger.error(`[messageLoop] Plain-text degrade failed: ${e3}`);
               }
@@ -685,12 +685,12 @@ export async function processMessage(
           try {
             const finalContent = buildFinalContent(draft.answerBuffer, draft.thoughtBuffer, footerParts);
             draft.currentMessageId = await reply.sendRich!(finalContent);
-            if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId!, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
+            if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId!, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId, session.threadId);
           } catch (e) {
             logger.warn(`[messageLoop] sendRich (no-draft path) failed: ${e}`);
             try {
               draft.currentMessageId = await reply.send!(draft.answerBuffer.trim());
-              if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId);
+              if (draft.answerBuffer.trim()) messageCache.set(draft.currentMessageId, draft.answerBuffer.trim(), replyContext, chatId, chain.currentModel, session.conversationId, session.threadId);
             } catch (e2) {
               logger.warn(`[messageLoop] send fallback failed: ${e2}`);
             }

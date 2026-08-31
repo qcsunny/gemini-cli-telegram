@@ -226,8 +226,9 @@ export class TelegramBot {
                 signal: ctrl.signal,
               });
             } catch (e: unknown) {
-              clearTimeout(timer);
               if (attempt === 1) throw e;
+            } finally {
+              clearTimeout(timer);
             }
           }
         }
@@ -236,9 +237,10 @@ export class TelegramBot {
         let lastErr: unknown;
         for (let attempt = 0; attempt < 3; attempt++) {
           let combined: ReturnType<typeof combineSignals> | undefined;
+          let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 25000);
+            timer = setTimeout(() => ctrl.abort(), 25000);
             combined = requestInit.signal
               ? combineSignals(ctrl.signal, requestInit.signal)
               : undefined;
@@ -248,14 +250,14 @@ export class TelegramBot {
               dispatcher: this.proxyAgent,
               signal,
             });
-            clearTimeout(timer);
-            combined?.cleanup();
             return res;
           } catch (e: unknown) {
-            combined?.cleanup();
             if (requestInit.signal?.aborted) throw e;
             lastErr = e;
             await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          } finally {
+            if (timer) clearTimeout(timer);
+            combined?.cleanup();
           }
         }
         throw lastErr;
@@ -926,7 +928,7 @@ export class TelegramBot {
 
       try {
         // Record current cache state before iteration
-        const prevContext = messageCache.getLastReplyContextForChat(chatId);
+        const prevContext = messageCache.getLastReplyContextForChat(chatId, session.threadId);
 
         await processMessage(
           session,
@@ -936,7 +938,7 @@ export class TelegramBot {
         );
 
         // Fetch fresh context after this iteration
-        const currentContext = messageCache.getLastReplyContextForChat(chatId);
+        const currentContext = messageCache.getLastReplyContextForChat(chatId, session.threadId);
         if (currentContext && currentContext !== prevContext) {
           const fullText = currentContext.answerMarkdown;
           if (fullText.includes('AUTOPILOT_COMPLETE') || fullText.includes('AUTOPILOT_STOP')) {
