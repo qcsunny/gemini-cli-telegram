@@ -14,6 +14,7 @@ import { getAllBackendHealthStatus } from '../../../core/backendHealth.js';
 import { AUTO_MODEL_NAME } from '../../../core/router.js';
 import { runModelSync, type GeminiUpgrade } from '../../../core/modelSync.js';
 import type { OpenCodeSyncResult } from '../../../core/modelSyncOpenCode.js';
+import type { HttpBackendName, HttpSyncResult } from '../../../core/modelSyncHttp.js';
 import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, formatSessionStats, formatHelp, escapeHtml } from '../ui.js';
 
 function formatUpgrades(upgrades: GeminiUpgrade[]): string {
@@ -28,7 +29,7 @@ function formatOpenCodeSection(oc: OpenCodeSyncResult): string {
     lines.push(`${ICONS.warning} <b>OpenCode 同步失败</b>（不影响 Gemini 结果）: ${escapeHtml(oc.error ?? 'unknown')}`);
     return lines.join('\n');
   }
-  if (oc.status === 'up-to-date') return '';
+  if (oc.status === 'up-to-date' && !oc.note) return '';
 
   lines.push(`${ICONS.success} <b>OpenCode 模型已同步</b>`);
   if (oc.removals.length > 0) {
@@ -43,19 +44,69 @@ function formatOpenCodeSection(oc: OpenCodeSyncResult): string {
     lines.push(`新增免费模型（${escapeHtml(oc.additions[0]!.tierName)}）：`);
     lines.push(...oc.additions.map((a) => `  + <code>${escapeHtml(a.display)}</code>`));
   }
+  if (oc.note) lines.push(`  ℹ️ ${escapeHtml(oc.note)}`);
   return lines.join('\n');
+}
+
+const HTTP_BACKEND_LABELS: Record<HttpBackendName, string> = {
+  web2api: 'Web2API',
+  glm: 'GLM',
+  qwen: 'Qwen',
+  mimo: 'MiMo',
+  deepseek: 'DeepSeek',
+};
+
+function formatHttpSection(http: Record<HttpBackendName, HttpSyncResult>): string {
+  const errored: string[] = [];
+  const notes: string[] = [];
+  const lines: string[] = [];
+  const order: HttpBackendName[] = ['web2api', 'glm', 'qwen', 'mimo', 'deepseek'];
+
+  for (const service of order) {
+    const r = http[service];
+    if (!r) continue;
+    if (r.status === 'error') {
+      errored.push(`  ⚠️ ${HTTP_BACKEND_LABELS[service]}: ${escapeHtml(r.error ?? 'unknown')}`);
+      continue;
+    }
+    if (r.status === 'up-to-date') {
+      if (r.note) notes.push(`  ℹ️ ${HTTP_BACKEND_LABELS[service]}: ${escapeHtml(r.note)}`);
+      continue;
+    }
+    const label = HTTP_BACKEND_LABELS[service];
+    if (r.note) notes.push(`  ℹ️ ${label}: ${escapeHtml(r.note)}`);
+    for (const u of r.upgrades) {
+      lines.push(`  <code>${escapeHtml(u.display)}</code> → <code>${escapeHtml(u.newDisplay)}</code> (${label})`);
+    }
+    for (const m of r.mediaReplacements) {
+      lines.push(`  🔄 ${escapeHtml(m.displays.join(' + '))} → <code>${escapeHtml(m.newDisplay)}</code> (${label} ${escapeHtml(m.newRoutingId)})`);
+    }
+    for (const rm of r.removals) {
+      lines.push(`  ✗ <code>${escapeHtml(rm.display)}</code> (${label} 失效移除)`);
+    }
+  }
+
+  const parts: string[] = [];
+  if (lines.length > 0) parts.push(`${ICONS.success} <b>远程后端模型已同步</b>`, ...lines);
+  if (errored.length > 0) {
+    parts.push(`${ICONS.warning} <b>部分远程后端同步失败</b>（不影响其他结果）:`);
+    parts.push(...errored);
+  }
+  if (notes.length > 0) parts.push('ℹ️ <b>备注</b>:', ...notes);
+  return parts.join('\n');
 }
 
 async function handleModelSync(ctx: Context): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
-  const pending = await ctx.reply('⏳ 正在从 agy / opencode 获取可用模型列表…');
+  const pending = await ctx.reply('⏳ 正在从 agy / opencode / 远程后端获取可用模型列表…');
   let text: string;
   try {
     const result = await runModelSync();
     const ocSection = formatOpenCodeSection(result.opCode);
-    if (result.status === 'updated' || ocSection) {
+    const httpSection = formatHttpSection(result.http);
+    if (result.status === 'updated' || ocSection || httpSection) {
       const lines: string[] = [];
       if (result.status === 'updated') {
         lines.push(`${ICONS.success} <b>Gemini 模型已升级到本地最新版本</b>`, '');
@@ -74,6 +125,10 @@ async function handleModelSync(ctx: Context): Promise<void> {
         if (lines.length > 0) lines.push('');
         lines.push(ocSection);
       }
+      if (httpSection) {
+        if (lines.length > 0) lines.push('');
+        lines.push(httpSection);
+      }
       text = lines.join('\n');
     } else if (result.status === 'up-to-date') {
       text = `${ICONS.success} 已是最新版本，无需更新。`;
@@ -82,7 +137,7 @@ async function handleModelSync(ctx: Context): Promise<void> {
     }
   } catch (e) {
     logger.error(`[modelSync] /model sync failed: ${e}`);
-    text = `${ICONS.error} <b>/model sync 失败:</b> ${escapeHtml(e instanceof Error ? e.message : String(e))}\n请检查 agy / opencode 已安装、代理可用 (config.proxy) 或稍后重试。`;
+    text = `${ICONS.error} <b>/model sync 失败:</b> ${escapeHtml(e instanceof Error ? e.message : String(e))}\n请检查 agy / opencode 已安装、代理可用 (config.proxy)、远程后端在线，或稍后重试。`;
   }
   try {
     await ctx.api.editMessageText(chatId, pending.message_id, text, { parse_mode: 'HTML' });

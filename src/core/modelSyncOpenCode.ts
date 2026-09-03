@@ -57,6 +57,8 @@ export interface OpenCodeSyncResult {
   modelsJsonError?: string;
   /** opencode CLI failure message (status === 'error'). */
   error?: string;
+  /** Set when the first model list looked partial and a confirmation fetch overruled it. */
+  note?: string;
 }
 
 const LIGHTWEIGHT_TIER_NAME = '轻量与免费';
@@ -99,7 +101,8 @@ export function seriesVersion(routingId: string): number[] | null {
   return parts.length > 0 ? parts : null;
 }
 
-function versionGt(a: number[], b: number[]): boolean {
+/** Lexicographic version-tuple comparison: true when a > b. */
+export function versionGt(a: number[], b: number[]): boolean {
   const len = Math.max(a.length, b.length);
   for (let i = 0; i < len; i++) {
     const av = a[i] ?? 0;
@@ -131,6 +134,7 @@ function collectOpenCodeSlots(config: UserConfig): { display: string; tierName: 
  *   3. best <= cur and cur is live                                            → keep (never downgrade)
  *   4. no best and cur is live                                                → keep
  *   5. no best and cur is gone                                                → remove
+ *   6. best would be the target but another entry already owns it             → remove cur (dedupe)
  */
 export function computeOpenCodePlan(config: UserConfig, available: OpenCodeModelEntry[]): OpenCodeSyncPlan {
   const plan: OpenCodeSyncPlan = { removals: [], upgrades: [], additions: [], skippedAdditions: 0 };
@@ -138,6 +142,11 @@ export function computeOpenCodePlan(config: UserConfig, available: OpenCodeModel
   if (!routing) return plan;
 
   const liveIds = new Set(available.filter((e) => e.active).map((e) => e.id));
+  // Routing targets already owned by some entry, plus the ones this plan is
+  // about to claim: an upgrade may never rename onto one of them, or two
+  // entries would end up sharing a display name.
+  const routedIds = new Set(Object.values(routing));
+  const claimedTargets = new Set<string>();
   const availableByKey = new Map<string, OpenCodeModelEntry[]>();
   for (const entry of available) {
     if (!entry.active) continue;
@@ -184,15 +193,23 @@ export function computeOpenCodePlan(config: UserConfig, available: OpenCodeModel
       versionGt(bestVersion, curVersion);
 
     if (curIsBest) continue; // already the latest of its series
-    if (bestIsNewer) {
-      plan.upgrades.push({ display, routingId, newDisplay: displayNameFor(best), newRoutingId: best.id });
+    if (!bestIsNewer && curLive) continue; // best <= cur and cur is live → keep, never downgrade
+
+    // The replacement may already have its own config entry — both versions of
+    // one series can be collected in a single additions pass, and two retired
+    // versions can share one survivor. Renaming onto an owned target would
+    // duplicate that display, so retire the superseded entry instead.
+    const newDisplay = displayNameFor(best);
+    const targetOwned =
+      routedIds.has(best.id) ||
+      claimedTargets.has(best.id) ||
+      (newDisplay !== display && routing[newDisplay] !== undefined);
+    if (targetOwned) {
+      plan.removals.push({ display, routingId, tierName });
       continue;
     }
-    if (!curLive) {
-      // cur is dead but only an older sibling remains — replace rather than remove
-      plan.upgrades.push({ display, routingId, newDisplay: displayNameFor(best), newRoutingId: best.id });
-    }
-    // best <= cur and cur is live → keep, never downgrade
+    claimedTargets.add(best.id);
+    plan.upgrades.push({ display, routingId, newDisplay, newRoutingId: best.id });
   }
 
   // Additions: live `-free` models not referenced by any routing value.
@@ -212,12 +229,30 @@ export function computeOpenCodePlan(config: UserConfig, available: OpenCodeModel
   }
   const lightweightTier = config.modelsConfig?.tiers?.find((t) => t.name === LIGHTWEIGHT_TIER_NAME);
 
+  // One candidate per series, highest version wins: collecting both 1.2 and 1.3
+  // of the same model in a single pass would leave the older one looking
+  // upgradable on the next sync, so the plan would never converge.
+  const candidateBySeries = new Map<string, OpenCodeModelEntry>();
   for (const entry of available) {
     if (!entry.active) continue;
     const bare = entry.id.startsWith(OPENCODE_ID_PREFIX) ? entry.id.slice(OPENCODE_ID_PREFIX.length) : entry.id;
     if (!bare.endsWith('-free')) continue;
     if (referencedIds.has(entry.id) || upgradeTargetIds.has(entry.id)) continue;
-    if (routedSeries.has(seriesKey(entry.id))) continue;
+    const key = seriesKey(entry.id);
+    if (routedSeries.has(key)) continue;
+    const prev = candidateBySeries.get(key);
+    if (prev === undefined) {
+      candidateBySeries.set(key, entry);
+      continue;
+    }
+    const prevVersion = seriesVersion(prev.id);
+    const entryVersion = seriesVersion(entry.id);
+    if (entryVersion !== null && (prevVersion === null || versionGt(entryVersion, prevVersion))) {
+      candidateBySeries.set(key, entry);
+    }
+  }
+
+  for (const entry of candidateBySeries.values()) {
     const display = displayNameFor(entry);
     if (existingDisplays.has(display)) continue; // routing is keyed by display — a collision would clobber another route
     if (!lightweightTier) {
@@ -464,6 +499,25 @@ export function applyOpenCodePlanToJson(parsed: ModelsJsonShape, plan: OpenCodeS
         return m;
       })
       .filter((m) => m !== '');
+    // Additions belong here too. This list was only ever filtered, so every
+    // auto-collected model was missing from it — and defaultOrder is the last
+    // fallback a fresh install falls back to (see getEffectiveModelOrder).
+    // Insert after the last lightweight-tier member so free models stay
+    // grouped at the tail of the priority order.
+    if (ownRouting) {
+      const lightweightMembers = new Set(parsed.tiers?.find((t) => t.name === LIGHTWEIGHT_TIER_NAME)?.models ?? []);
+      for (const addition of plan.additions) {
+        if (filtered.includes(addition.display)) continue;
+        let insertAt = filtered.length;
+        for (let i = filtered.length - 1; i >= 0; i--) {
+          if (lightweightMembers.has(filtered[i]!)) {
+            insertAt = i + 1;
+            break;
+          }
+        }
+        filtered.splice(insertAt, 0, addition.display);
+      }
+    }
     if (filtered.length !== parsed.defaultOrder.length || filtered.some((m, i) => m !== parsed.defaultOrder![i])) {
       parsed.defaultOrder = filtered;
       changed = true;

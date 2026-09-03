@@ -193,9 +193,12 @@ describe('models.json Qwen entries', () => {
   const names = Object.keys(cfg.routing as Record<string, string>).filter((n) => n.startsWith('Qwen:'));
 
   it('routes exactly the four requested ids', () => {
+    // Qwen: Image merges the retired qwen-image-2.0-image / qwen-image-3.0-image
+    // into one entry routed to the top live variant (qwen3.8-max-image).
     expect(new Set(Object.entries(cfg.routing as Record<string, string>)
       .filter(([n]) => n.startsWith('Qwen:')).map(([, id]) => id)))
-      .toEqual(new Set(['qwen3.8-max-thinking', 'qwen-image-2.0-image', 'qwen-image-3.0-image', 'qwen3.8-max-video']));
+      .toEqual(new Set(['qwen3.8-max-thinking', 'qwen3.8-max-image', 'qwen3.8-max-video']));
+    expect((cfg.routing as Record<string, string>)['Qwen: Image']).toBe('qwen3.8-max-image');
   });
 
   it('lists every routed Qwen model in the remote tier and describes it', () => {

@@ -11,12 +11,22 @@
  *     same-series versions, and auto-add new `-free` models (see
  *     modelSyncOpenCode.ts). OpenCode CLI failures degrade to a report-only
  *     error and never block the Gemini part.
+ *   - HTTP backends (web2api/glm/qwen/mimo/deepseek): `GET /v1/models` →
+ *     removals / same-series upgrades / media replacements (see
+ *     modelSyncHttp.ts). Per-backend fetch failures degrade to report-only
+ *     errors.
+ *
+ * Anti-flap safety: any destructive OpenCode/HTTP change (a removal or a
+ * replacement of an id the first fetch reported dead) is confirmed by a
+ * second, independent fetch — an id seen alive in either observation stays.
+ * A failing confirmation skips the destructive part entirely.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgyModelEntry } from '../agy/agyModels.js';
 import { listAgyModels } from '../agy/agyModels.js';
-import { listOpenCodeModels } from '../agy/opencodeModels.js';
+import { listOpenCodeModels, type OpenCodeModelEntry } from '../agy/opencodeModels.js';
+import { HTTP_BACKEND_NAMES, listHttpBackendModels, type HttpBackendName } from '../agy/httpBackendModels.js';
 import { clearDefaultModelsCache } from '../agy/modelDetection.js';
 import {
   CONFIG_DIR,
@@ -36,6 +46,14 @@ import {
   type OpenCodeSyncPlan,
   type OpenCodeSyncResult,
 } from './modelSyncOpenCode.js';
+import {
+  applyHttpPlan,
+  applyHttpPlanToJson,
+  computeHttpPlan,
+  isHttpPlanEmpty,
+  type HttpSyncPlan,
+  type HttpSyncResult,
+} from './modelSyncHttp.js';
 import { logger } from '../utils/logger.js';
 
 export type GeminiFamily = 'Flash' | 'Pro';
@@ -80,6 +98,8 @@ export interface ModelSyncResult {
   modelsJsonError?: string;
   /** OpenCode sub-sync outcome (report-only errors never block the Gemini part). */
   opCode: OpenCodeSyncResult;
+  /** HTTP-backend sub-sync outcomes, one entry per backend (web2api/glm/qwen/mimo/deepseek). */
+  http: Record<HttpBackendName, HttpSyncResult>;
 }
 
 function ocError(error: string): OpenCodeSyncResult {
@@ -94,8 +114,47 @@ function ocError(error: string): OpenCodeSyncResult {
   };
 }
 
+function httpError(error: string): HttpSyncResult {
+  return {
+    status: 'error',
+    removals: [],
+    upgrades: [],
+    mediaReplacements: [],
+    appliedLocations: [],
+    error,
+  };
+}
+
+function httpNoop(): HttpSyncResult {
+  return { status: 'up-to-date', removals: [], upgrades: [], mediaReplacements: [], appliedLocations: [] };
+}
+
+function httpAllNoop(): Record<HttpBackendName, HttpSyncResult> {
+  return Object.fromEntries(HTTP_BACKEND_NAMES.map((n) => [n, httpNoop()])) as Record<HttpBackendName, HttpSyncResult>;
+}
+
 function ocNoop(status: 'up-to-date' = 'up-to-date'): OpenCodeSyncResult {
   return { status, removals: [], upgrades: [], additions: [], appliedLocations: [], modelsJsonUpdated: false };
+}
+
+/**
+ * A truncated/partial model list is indistinguishable from real upstream
+ * removals — a single observation must never drive destructive changes.
+ * Destructive = removals, media replacements, or upgrades whose current id
+ * was observed dead (additions and upgrades of a live id are constructive).
+ */
+function ocPlanDestructive(plan: OpenCodeSyncPlan, liveIds: Set<string>): boolean {
+  return plan.removals.length > 0 || plan.upgrades.some((u) => !liveIds.has(u.routingId));
+}
+
+/** Union two model lists by id — an id seen alive in either observation is alive. */
+function unionById<T extends { id: string; active?: boolean }>(a: T[], b: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const e of [...a, ...b]) {
+    const prev = map.get(e.id);
+    if (!prev || (prev.active === false && e.active === true)) map.set(e.id, e);
+  }
+  return [...map.values()];
 }
 
 /**
@@ -233,6 +292,7 @@ export function updateModelsJsonFile(
   modelsJsonPath: string = MODELS_JSON_PATH,
   latest: Partial<Record<GeminiFamily, FamilyLatest>>,
   ocPlan?: OpenCodeSyncPlan,
+  httpPlans?: Partial<Record<HttpBackendName, HttpSyncPlan>>,
 ): { updated: boolean; error?: string } {
   try {
     const raw = fs.readFileSync(modelsJsonPath, 'utf-8');
@@ -274,6 +334,12 @@ export function updateModelsJsonFile(
       changed = changed || ocChanged;
     }
 
+    for (const [service, httpPlan] of Object.entries(httpPlans ?? {}) as Array<[HttpBackendName, HttpSyncPlan]>) {
+      if (!httpPlan || isHttpPlanEmpty(httpPlan)) continue;
+      const httpChanged = applyHttpPlanToJson(parsed, service, httpPlan);
+      changed = changed || httpChanged;
+    }
+
     if (!changed) return { updated: false };
     fs.writeFileSync(modelsJsonPath, `${JSON.stringify(parsed, null, 2)}\n`);
     return { updated: true };
@@ -284,19 +350,31 @@ export function updateModelsJsonFile(
 }
 
 async function doRunModelSync(): Promise<ModelSyncResult> {
-  // Parallel fetches: agy failure throws (existing contract), opencode failure degrades to a report error
+  // Parallel fetches: agy failure throws (existing contract); opencode / HTTP
+  // backend failures each degrade to a per-backend report error
   const agyPromise = listAgyModels();
   const ocPromise = listOpenCodeModels().then(
     (entries) => ({ ok: true as const, entries }),
     (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
   );
+  const httpPromises = Promise.all(
+    HTTP_BACKEND_NAMES.map(async (service) => {
+      const r = await listHttpBackendModels(service).then(
+        (entries) => ({ ok: true as const, entries }),
+        (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
+      );
+      return [service, r] as const;
+    }),
+  );
   const entries = await agyPromise;
   const ocFetch = await ocPromise;
+  const httpFetch = new Map(await httpPromises);
 
+  const hasHttpErrors = [...httpFetch.values()].some((r) => !r.ok);
   const latest = pickLatestGemini(entries);
   const hasGemini = FAMILIES.some((f) => latest[f]);
-  if (!hasGemini && !ocFetch.ok) {
-    return { status: 'no-gemini', upgrades: [], appliedLocations: [], modelsJsonUpdated: false, opCode: ocError(ocFetch.error) };
+  if (!hasGemini && !ocFetch.ok && !hasHttpErrors) {
+    return { status: 'no-gemini', upgrades: [], appliedLocations: [], modelsJsonUpdated: false, opCode: ocError(ocFetch.error), http: httpAllNoop() };
   }
 
   const config = loadUserConfig();
@@ -311,17 +389,76 @@ async function doRunModelSync(): Promise<ModelSyncResult> {
         latest,
       )
     : [];
-  const ocPlan = ocFetch.ok ? computeOpenCodePlan(config, ocFetch.entries) : undefined;
+  let ocPlan = ocFetch.ok ? computeOpenCodePlan(config, ocFetch.entries) : undefined;
+  let ocNote: string | undefined;
+  let ocEntries: OpenCodeModelEntry[] | undefined = ocFetch.ok ? ocFetch.entries : undefined;
+  if (ocPlan && ocEntries && ocPlanDestructive(ocPlan, new Set(ocEntries.filter((e) => e.active).map((e) => e.id)))) {
+    // Destructive plan: confirm with a second, independent fetch. An id seen
+    // in either list stays alive; a confirmation failure keeps only additions.
+    const confirm = await listOpenCodeModels().then(
+      (entries) => ({ ok: true as const, entries }),
+      (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
+    );
+    if (confirm.ok) {
+      const merged = unionById(ocEntries, confirm.entries);
+      const confirmed = computeOpenCodePlan(config, merged);
+      const before = ocPlan.removals.length + ocPlan.upgrades.length;
+      const after = confirmed.removals.length + confirmed.upgrades.length;
+      if (after < before) {
+        ocNote = `首次拉取疑似不完整（${before} 项移除/替换，二次确认后仅 ${after} 项），已按二次拉取结果保留存疑条目`;
+      }
+      ocEntries = merged;
+      ocPlan = confirmed;
+    } else {
+      ocNote = `二次确认拉取失败，为安全起见本次仅执行新增，跳过移除/替换: ${confirm.error}`;
+      ocPlan = { ...ocPlan, removals: [], upgrades: [] };
+    }
+  }
   const hasOcWork = !!ocPlan && !isPlanEmpty(ocPlan);
 
-  if (upgrades.length === 0 && !hasOcWork) {
+  // HTTP plans: one per backend that fetched successfully; error backends report only
+  const httpPlans: Partial<Record<HttpBackendName, HttpSyncPlan>> = {};
+  const httpResults: Partial<Record<HttpBackendName, HttpSyncResult>> = {};
+  for (const [service, fetch] of httpFetch) {
+    if (!fetch.ok) {
+      httpResults[service] = httpError(fetch.error);
+      continue;
+    }
+    let plan = computeHttpPlan(config, service, fetch.entries);
+    let note: string | undefined;
+    if (!isHttpPlanEmpty(plan)) {
+      // Every HTTP change hinges on a dead-id observation — confirm with a
+      // second, independent fetch before mutating config (a truncated list
+      // must never look like removals).
+      const confirm = await listHttpBackendModels(service).then(
+        (entries) => ({ ok: true as const, entries }),
+        (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
+      );
+      if (confirm.ok) {
+        const confirmed = computeHttpPlan(config, service, unionById(fetch.entries, confirm.entries));
+        if (isHttpPlanEmpty(confirmed)) {
+          note = '首次拉取疑似不完整，二次确认后无变更，已跳过';
+        }
+        plan = confirmed;
+      } else {
+        note = `二次确认拉取失败，为安全起见本次跳过该后端变更: ${confirm.error}`;
+        plan = { removals: [], upgrades: [], mediaReplacements: [] };
+      }
+    }
+    httpPlans[service] = plan;
+    httpResults[service] = { status: isHttpPlanEmpty(plan) ? 'up-to-date' : 'updated', ...plan, appliedLocations: [], note };
+  }
+  const hasHttpWork = Object.values(httpPlans).some((p) => p && !isHttpPlanEmpty(p));
+
+  if (upgrades.length === 0 && !hasOcWork && !hasHttpWork) {
     const status: ModelSyncStatus = hasGemini ? 'up-to-date' : 'no-gemini';
     return {
       status,
       upgrades: [],
       appliedLocations: [],
       modelsJsonUpdated: false,
-      opCode: ocFetch.ok ? ocNoop() : ocError(ocFetch.error),
+      opCode: ocFetch.ok ? { ...ocNoop(), note: ocNote } : ocError(ocFetch.error),
+      http: { ...httpAllNoop(), ...httpResults } as Record<HttpBackendName, HttpSyncResult>,
     };
   }
 
@@ -336,7 +473,12 @@ async function doRunModelSync(): Promise<ModelSyncResult> {
   const newConfig = structuredClone(config);
   const geminiLocations = applyUpgradesToConfig(newConfig, upgrades);
   const ocLocations = hasOcWork ? applyOpenCodePlan(newConfig, ocPlan!) : [];
-  const appliedLocations = [...geminiLocations, ...ocLocations];
+  const httpLocations: string[] = [];
+  for (const [service, plan] of Object.entries(httpPlans) as Array<[HttpBackendName, HttpSyncPlan]>) {
+    if (!plan || isHttpPlanEmpty(plan)) continue;
+    httpLocations.push(...applyHttpPlan(newConfig, service, plan));
+  }
+  const appliedLocations = [...geminiLocations, ...ocLocations, ...httpLocations];
   saveUserConfig(newConfig);
 
   // Hot-reload: same cache-clearing trio the SIGHUP handler uses (src/index.ts)
@@ -344,7 +486,14 @@ async function doRunModelSync(): Promise<ModelSyncResult> {
   clearDefaultModelsCache();
   clearModelOrderCache();
 
-  const modelsJson = updateModelsJsonFile(MODELS_JSON_PATH, latest, ocPlan);
+  const modelsJson = updateModelsJsonFile(MODELS_JSON_PATH, latest, ocPlan, httpPlans);
+
+  // Fill appliedLocations into the per-backend HTTP results now that they're known
+  for (const [service, plan] of Object.entries(httpPlans) as Array<[HttpBackendName, HttpSyncPlan]>) {
+    if (!plan) continue;
+    const result = httpResults[service]!;
+    if (result.status === 'updated') result.appliedLocations = httpLocations;
+  }
 
   const opCode: OpenCodeSyncResult = ocFetch.ok
     ? {
@@ -354,6 +503,7 @@ async function doRunModelSync(): Promise<ModelSyncResult> {
         additions: ocPlan?.additions ?? [],
         appliedLocations: ocLocations,
         modelsJsonUpdated: modelsJson.updated,
+        note: ocNote,
       }
     : ocError(ocFetch.error);
 
@@ -364,6 +514,7 @@ async function doRunModelSync(): Promise<ModelSyncResult> {
     modelsJsonUpdated: modelsJson.updated,
     modelsJsonError: modelsJson.error,
     opCode,
+    http: { ...httpAllNoop(), ...httpResults } as Record<HttpBackendName, HttpSyncResult>,
   };
 }
 

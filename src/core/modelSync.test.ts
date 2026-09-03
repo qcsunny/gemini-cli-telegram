@@ -38,6 +38,11 @@ const listOpenCodeModelsMock = vi.fn();
 vi.mock('../agy/opencodeModels.js', () => ({
   listOpenCodeModels: (...args: unknown[]) => listOpenCodeModelsMock(...args),
 }));
+const listHttpBackendModelsMock = vi.fn();
+vi.mock('../agy/httpBackendModels.js', () => ({
+  HTTP_BACKEND_NAMES: ['web2api', 'glm', 'qwen', 'mimo', 'deepseek'],
+  listHttpBackendModels: (...args: unknown[]) => listHttpBackendModelsMock(...args),
+}));
 vi.mock('../agy/modelDetection.js', () => ({
   clearDefaultModelsCache: vi.fn(),
 }));
@@ -76,6 +81,22 @@ const AGY_3_6_TO_3_8 = entries(
   'Gemini 3.1 Pro (High)',
   'Gemini 3.1 Pro (Low)',
 );
+
+// Default HTTP-backend mock state: every routing id referenced by
+// BASE_CONFIG is live upstream → all five plans empty (no safety-gate reject,
+// no HTTP work). Per-test overrides swap in dead/replacement ids.
+const HTTP_LIVE_DEFAULT: Record<string, Array<{ id: string }>> = {
+  web2api: [{ id: 'gemini-3.7-flash-thinking' }],
+  glm: [{ id: 'glm-5.3' }],
+  qwen: [{ id: 'qwen3.8-max' }],
+  mimo: [{ id: 'mimo-v2.5' }],
+  deepseek: [{ id: 'deepseek-v4-pro' }],
+};
+
+function httpLists(lists: Record<string, Array<{ id: string }>>): (service: string) => Promise<Array<{ id: string }>> {
+  const merged = { ...HTTP_LIVE_DEFAULT, ...lists };
+  return (service: string) => Promise.resolve(merged[service] ?? [{ id: 'x' }]);
+}
 
 const BASE_CONFIG = {
   telegramBotToken: 'test-token',
@@ -250,6 +271,7 @@ describe('runModelSync', () => {
     vi.resetAllMocks();
     loadUserConfigSpy.mockReturnValue(structuredClone(BASE_CONFIG));
     listOpenCodeModelsMock.mockResolvedValue(OC_NOOP);
+    listHttpBackendModelsMock.mockImplementation(httpLists({}));
   });
 
   it('upgrades all config slots, saves, clears caches, and updates models.json', async () => {
@@ -360,6 +382,7 @@ describe('runModelSync — OpenCode sub-sync', () => {
     loadUserConfigSpy.mockReturnValue(structuredClone(OC_CONFIG));
     listOpenCodeModelsMock.mockResolvedValue(OC_LOCAL);
     listAgyModelsMock.mockResolvedValue(AGY_CURRENT);
+    listHttpBackendModelsMock.mockImplementation(httpLists({}));
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
       tiers: [{ name: '轻量与免费', priority: 3, models: ['OpenCode: Muse Spark 1.2 Free', 'OpenCode: Hunyuan 3.0 Free'] }],
       routing: {
@@ -467,6 +490,221 @@ describe('runModelSync — OpenCode sub-sync', () => {
     expect(result.opCode.modelsJsonUpdated).toBe(false);
     expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
+
+  it('a truncated first OpenCode list is overruled by the confirmation fetch', async () => {
+    // The 17:24 daemon incident, reproduced: the first CLI run silently drops
+    // the alphabetically-late nemotron entries; the second run is complete.
+    const truncated = OC_LOCAL.filter((e) => !e.id.startsWith('opencode/nemotron'));
+    let calls = 0;
+    listOpenCodeModelsMock.mockImplementation(() =>
+      ++calls === 1 ? Promise.resolve(truncated) : Promise.resolve(OC_LOCAL),
+    );
+    const config = structuredClone(OC_CONFIG);
+    config.modelsConfig.tiers.find((t) => t.name === '轻量与免费')!.models.push('OpenCode: Nemotron 3 Ultra Free');
+    config.modelsConfig.routing['OpenCode: Nemotron 3 Ultra Free'] = 'opencode/nemotron-3-ultra-free';
+    loadUserConfigSpy.mockReturnValue(config);
+
+    const result = await runModelSync();
+
+    // hy3 is really dead (removed); nemotron survives the truncated fetch
+    expect(result.opCode.removals.map((r) => r.routingId)).toEqual(['opencode/hy3-free']);
+    expect(result.opCode.note).toContain('保留存疑条目');
+    const saved = saveUserConfigSpy.mock.calls[0][0] as typeof OC_CONFIG;
+    expect(saved.modelsConfig.routing['OpenCode: Nemotron 3 Ultra Free']).toBe('opencode/nemotron-3-ultra-free');
+    expect(saved.modelsConfig.routing['OpenCode: Hunyuan 3.0 Free']).toBeUndefined();
+  });
+
+  it('a failing OpenCode confirmation fetch keeps only additions', async () => {
+    let calls = 0;
+    listOpenCodeModelsMock.mockImplementation(() =>
+      ++calls === 1
+        ? Promise.resolve(OC_LOCAL)
+        : Promise.reject(new Error('opencode models timed out after 90000ms')),
+    );
+
+    const result = await runModelSync();
+
+    expect(result.opCode.status).toBe('updated'); // additions still applied
+    expect(result.opCode.note).toContain('二次确认拉取失败');
+    expect(result.opCode.removals).toEqual([]);
+    expect(result.opCode.upgrades).toEqual([]);
+    expect(result.opCode.additions.map((a) => a.routingId).sort()).toEqual([
+      'opencode/ling-3.0-flash-fin-free',
+      'opencode/nemotron-3-ultra-free',
+    ]);
+    const saved = saveUserConfigSpy.mock.calls[0][0] as typeof OC_CONFIG;
+    // hy3 survives this run — its removal was not confirmed
+    expect(saved.modelsConfig.routing['OpenCode: Hunyuan 3.0 Free']).toBe('opencode/hy3-free');
+    expect(saved.modelsConfig.routing['OpenCode: Muse Spark 1.2 Free']).toBe('opencode/muse-spark-1.2-contributor-free');
+  });
+});
+
+describe('runModelSync — HTTP backend sub-sync', () => {
+  const AGY_CURRENT = entries('Gemini 3.7 Flash (High)', 'Gemini 3.7 Flash (Medium)', 'Gemini 3.7 Flash (Low)');
+
+  const HTTP_CONFIG = {
+    ...structuredClone(BASE_CONFIG),
+    modelsConfig: {
+      tiers: [
+        { name: '高级推理', priority: 1, models: ['Gemini 3.7 Flash (High)'] },
+        { name: '远程备用', priority: 4, models: ['Web2API: Gemini 3.7 Flash Thinking', 'Qwen: Image 2.0', 'Qwen: Image 3.0', 'Qwen: Video'] },
+      ],
+      routing: {
+        'Web2API: Gemini 3.7 Flash Thinking': 'gemini-3.7-flash-thinking',
+        'Qwen: Image 2.0': 'qwen-image-2.0-image',
+        'Qwen: Image 3.0': 'qwen-image-3.0-image',
+        'Qwen: Video': 'qwen3.8-max-video',
+      },
+    },
+  };
+
+  const OC_NOOP = [{ id: 'opencode/big-pickle', name: 'Big Pickle', active: true, free: true }];
+
+  const MODELS_JSON_MIRROR = {
+    tiers: [{ name: '远程备用', priority: 4, models: ['Web2API: Gemini 3.7 Flash Thinking', 'Qwen: Image 2.0', 'Qwen: Image 3.0', 'Qwen: Video'] }],
+    defaultOrder: ['Web2API: Gemini 3.7 Flash Thinking'],
+    routing: {
+      'Web2API: Gemini 3.7 Flash Thinking': 'gemini-3.7-flash-thinking',
+      'Qwen: Image 2.0': 'qwen-image-2.0-image',
+      'Qwen: Image 3.0': 'qwen-image-3.0-image',
+      'Qwen: Video': 'qwen3.8-max-video',
+    },
+    descriptions: { 'Qwen: Image 2.0': 'img2', 'Qwen: Image 3.0': 'img3' },
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    loadUserConfigSpy.mockReturnValue(structuredClone(HTTP_CONFIG));
+    listOpenCodeModelsMock.mockResolvedValue(OC_NOOP);
+    listAgyModelsMock.mockResolvedValue(AGY_CURRENT);
+    listHttpBackendModelsMock.mockImplementation(httpLists({}));
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(structuredClone(MODELS_JSON_MIRROR)));
+  });
+
+  it('applies web2api upgrade + qwen media merge in the same save as other segments', async () => {
+    listHttpBackendModelsMock.mockImplementation(httpLists({
+      web2api: [{ id: 'gemini-3.8-flash-thinking' }], // 3.7 dead → same-series upgrade
+      qwen: [{ id: 'qwen3.8-max-image' }, { id: 'qwen3.8-max-video' }], // both image ids dead → merge
+    }));
+
+    const result = await runModelSync();
+
+    expect(result.status).toBe('updated');
+    expect(result.upgrades).toEqual([]); // Gemini part already current — HTTP work alone drives the save
+    expect(result.http.web2api.status).toBe('updated');
+    expect(result.http.web2api.upgrades).toHaveLength(1);
+    expect(result.http.web2api.upgrades[0]).toMatchObject({
+      newDisplay: 'Web2API: Gemini 3.8 Flash Thinking',
+      newRoutingId: 'gemini-3.8-flash-thinking',
+    });
+    expect(result.http.qwen.status).toBe('updated');
+    expect(result.http.qwen.mediaReplacements).toHaveLength(1);
+    expect(result.http.qwen.mediaReplacements[0]).toMatchObject({
+      newDisplay: 'Qwen: Image',
+      newRoutingId: 'qwen3.8-max-image',
+    });
+    expect(result.http.glm.status).toBe('up-to-date');
+    expect(result.http.mimo.status).toBe('up-to-date');
+    expect(result.http.deepseek.status).toBe('up-to-date');
+
+    const saved = saveUserConfigSpy.mock.calls[0][0] as typeof HTTP_CONFIG;
+    const routing = saved.modelsConfig.routing;
+    expect(routing['Web2API: Gemini 3.8 Flash Thinking']).toBe('gemini-3.8-flash-thinking');
+    expect(routing['Qwen: Image']).toBe('qwen3.8-max-image');
+    expect(routing['Qwen: Video']).toBe('qwen3.8-max-video'); // live media untouched
+    expect(routing['Web2API: Gemini 3.7 Flash Thinking']).toBeUndefined();
+    expect(routing['Qwen: Image 2.0']).toBeUndefined();
+    expect(routing['Qwen: Image 3.0']).toBeUndefined();
+    const remote = saved.modelsConfig.tiers.find((t) => t.name === '远程备用')!;
+    expect(remote.models).toEqual(['Web2API: Gemini 3.8 Flash Thinking', 'Qwen: Image', 'Qwen: Video']);
+
+    // one backup + one save shared across all segments
+    expect(fs.copyFileSync).toHaveBeenCalledTimes(1);
+    expect(saveUserConfigSpy).toHaveBeenCalledTimes(1);
+    expect(result.modelsJsonUpdated).toBe(true);
+
+    // models.json mirror got the same treatment
+    const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+    expect(written.routing['Qwen: Image']).toBe('qwen3.8-max-image');
+    expect(written.routing['Qwen: Image 3.0']).toBeUndefined();
+    expect(written.descriptions['Qwen: Image']).toBe('img2');
+    expect(written.descriptions['Qwen: Image 3.0']).toBeUndefined();
+  });
+
+  it('one backend failing never blocks the others', async () => {
+    listHttpBackendModelsMock.mockImplementation((service: string) =>
+      service === 'qwen'
+        ? Promise.reject(new Error('qwen /models 返回 HTTP 502'))
+        : httpLists({ web2api: [{ id: 'gemini-3.8-flash-thinking' }] })(service),
+    );
+
+    const result = await runModelSync();
+
+    expect(result.status).toBe('updated');
+    expect(result.http.qwen.status).toBe('error');
+    expect(result.http.qwen.error).toContain('HTTP 502');
+    expect(result.http.web2api.status).toBe('updated');
+    expect(saveUserConfigSpy).toHaveBeenCalledTimes(1); // web2api work still saved
+
+    // Qwen entries untouched (the dead image models stay pending the next healthy sync)
+    const saved = saveUserConfigSpy.mock.calls[0][0] as typeof HTTP_CONFIG;
+    expect(saved.modelsConfig.routing['Qwen: Image 2.0']).toBe('qwen-image-2.0-image');
+    expect(saved.modelsConfig.routing['Web2API: Gemini 3.8 Flash Thinking']).toBe('gemini-3.8-flash-thinking');
+  });
+
+  it('a truncated first HTTP list is overruled by the confirmation fetch (no change, note set)', async () => {
+    // First fetch: 3.7 dead (upgrade plan); confirmation fetch sees it alive
+    const complete = [{ id: 'gemini-3.7-flash-thinking' }, { id: 'gemini-3.8-flash-thinking' }];
+    let web2apiCalls = 0;
+    listHttpBackendModelsMock.mockImplementation((service: string) => {
+      if (service !== 'web2api') return httpLists({ qwen: [{ id: 'qwen-image-2.0-image' }, { id: 'qwen-image-3.0-image' }, { id: 'qwen3.8-max-video' }] })(service);
+      return ++web2apiCalls === 1
+        ? Promise.resolve([{ id: 'gemini-3.8-flash-thinking' }])
+        : Promise.resolve(complete);
+    });
+
+    const result = await runModelSync();
+
+    expect(result.http.web2api.status).toBe('up-to-date');
+    expect(result.http.web2api.note).toContain('疑似不完整');
+    expect(result.status).toBe('up-to-date');
+    expect(saveUserConfigSpy).not.toHaveBeenCalled();
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('a failing HTTP confirmation fetch skips the destructive change', async () => {
+    let web2apiCalls = 0;
+    listHttpBackendModelsMock.mockImplementation((service: string) => {
+      if (service !== 'web2api') return httpLists({ qwen: [{ id: 'qwen-image-2.0-image' }, { id: 'qwen-image-3.0-image' }, { id: 'qwen3.8-max-video' }] })(service);
+      return ++web2apiCalls === 1
+        ? Promise.resolve([{ id: 'gemini-3.8-flash-thinking' }])
+        : Promise.reject(new Error('fetch failed'));
+    });
+
+    const result = await runModelSync();
+
+    expect(result.http.web2api.status).toBe('up-to-date');
+    expect(result.http.web2api.note).toContain('二次确认拉取失败');
+    expect(result.status).toBe('up-to-date');
+    expect(saveUserConfigSpy).not.toHaveBeenCalled();
+  });
+
+  it('all up-to-date writes nothing to disk (idempotence)', async () => {
+    // Every routed id is live upstream, including the qwen image variants
+    listHttpBackendModelsMock.mockImplementation(httpLists({
+      qwen: [{ id: 'qwen-image-2.0-image' }, { id: 'qwen-image-3.0-image' }, { id: 'qwen3.8-max-video' }],
+    }));
+
+    const result = await runModelSync();
+
+    expect(result.status).toBe('up-to-date');
+    for (const service of ['web2api', 'glm', 'qwen', 'mimo', 'deepseek'] as const) {
+      expect(result.http[service].status).toBe('up-to-date');
+    }
+    expect(saveUserConfigSpy).not.toHaveBeenCalled();
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(fs.copyFileSync).not.toHaveBeenCalled();
+  });
 });
 
 describe('src/config/models.json invariants (real file)', () => {
@@ -485,5 +723,26 @@ describe('src/config/models.json invariants (real file)', () => {
     const proVersions = new Set(tierGemini.filter((m) => m.startsWith('Gemini') && m.includes('Pro')).map((m) => m.match(/\d+\.\d+/)![0]));
     expect(flashVersions.size).toBe(1);
     expect(proVersions.size).toBe(1);
+  });
+
+  it('defaultOrder covers exactly the tier members, with no duplicates', async () => {
+    // The sync only ever *filtered* defaultOrder before, so every auto-collected
+    // model silently went missing from it — and defaultOrder is the last fallback
+    // a fresh install resolves (see getEffectiveModelOrder). Keep the two in sync.
+    const fsActual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const raw = fsActual.readFileSync(new URL('../config/models.json', import.meta.url), 'utf-8');
+    const parsed = JSON.parse(raw) as {
+      tiers: { name: string; models: string[] }[];
+      defaultOrder: string[];
+      routing: Record<string, string>;
+    };
+    const tierModels = parsed.tiers.flatMap((t) => t.models);
+    expect(new Set(parsed.defaultOrder)).toEqual(new Set(tierModels));
+    expect(parsed.defaultOrder).toHaveLength(new Set(parsed.defaultOrder).size);
+    expect(tierModels).toHaveLength(new Set(tierModels).size);
+    // Every routed display must be a real, orderable model
+    for (const display of Object.keys(parsed.routing)) {
+      expect(tierModels).toContain(display);
+    }
   });
 });

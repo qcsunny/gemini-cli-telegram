@@ -201,6 +201,80 @@ describe('computeOpenCodePlan — five branches', () => {
   });
 });
 
+describe('computeOpenCodePlan — convergence', () => {
+  it('retires the older entry instead of renaming it onto an owned display', () => {
+    // Both muse versions live AND both already routed (what an additions pass
+    // produced when 1.3 was missing from config). Renaming 1.2 → 1.3 would give
+    // the tier two `Muse Spark 1.3 Free` rows, so 1.2 is retired instead.
+    const config = makeConfig({
+      routing: {
+        'OpenCode: Muse Spark 1.2 Free': 'opencode/muse-spark-1.2-contributor-free',
+        'OpenCode: Muse Spark 1.3 Free': 'opencode/muse-spark-1.3-contributor-free',
+      },
+      tiers: [{ name: '轻量与免费', priority: 3, models: ['OpenCode: Muse Spark 1.2 Free', 'OpenCode: Muse Spark 1.3 Free'] }],
+    });
+    const plan = computeOpenCodePlan(config, LOCAL);
+    expect(plan.upgrades).toEqual([]);
+    expect(plan.removals).toEqual([
+      { display: 'OpenCode: Muse Spark 1.2 Free', routingId: 'opencode/muse-spark-1.2-contributor-free', tierName: '轻量与免费' },
+    ]);
+    expect(plan.additions.map((a) => a.routingId)).not.toContain('opencode/muse-spark-1.2-contributor-free');
+  });
+
+  it('collects only the newest version per series in one additions pass', () => {
+    // Neither muse version is routed yet — collecting both would make the next
+    // sync see 1.2 as upgradable onto 1.3, and never settle.
+    const config = makeConfig({
+      routing: { 'OpenCode: Big Pickle': 'opencode/big-pickle' },
+      tiers: [
+        { name: '轻量与免费', priority: 3, models: [] },
+        { name: '全栈编程', priority: 1, models: ['OpenCode: Big Pickle'] },
+      ],
+    });
+    const plan = computeOpenCodePlan(config, LOCAL);
+    expect(plan.additions.map((a) => a.routingId).sort()).toEqual([
+      'opencode/ling-3.0-flash-fin-free',
+      'opencode/mimo-v2.5-free',
+      'opencode/muse-spark-1.3-contributor-free',
+      'opencode/nemotron-3-ultra-free',
+    ]);
+  });
+
+  it('reaches a fixed point: applying the plan twice is a no-op the second time', () => {
+    const config = makeConfig({
+      routing: { 'OpenCode: Big Pickle': 'opencode/big-pickle' },
+      tiers: [
+        { name: '轻量与免费', priority: 3, models: [] },
+        { name: '全栈编程', priority: 1, models: ['OpenCode: Big Pickle'] },
+      ],
+    });
+    applyOpenCodePlan(config, computeOpenCodePlan(config, LOCAL));
+    expect(isPlanEmpty(computeOpenCodePlan(config, LOCAL))).toBe(true);
+  });
+
+  it('routes two dead siblings onto one survivor without duplicating it', () => {
+    const local = oc(
+      ['opencode/muse-spark-1.1-contributor-free', 'Muse Spark 1.1 Free', false],
+      ['opencode/muse-spark-1.2-contributor-free', 'Muse Spark 1.2 Free', false],
+      ['opencode/muse-spark-1.3-contributor-free', 'Muse Spark 1.3 Free'],
+    );
+    const config = makeConfig({
+      routing: {
+        'OpenCode: Muse Spark 1.1 Free': 'opencode/muse-spark-1.1-contributor-free',
+        'OpenCode: Muse Spark 1.2 Free': 'opencode/muse-spark-1.2-contributor-free',
+      },
+      tiers: [{ name: '轻量与免费', priority: 3, models: ['OpenCode: Muse Spark 1.1 Free', 'OpenCode: Muse Spark 1.2 Free'] }],
+    });
+    const plan = computeOpenCodePlan(config, local);
+    expect(plan.upgrades).toHaveLength(1);
+    expect(plan.upgrades[0]).toMatchObject({
+      display: 'OpenCode: Muse Spark 1.1 Free',
+      newRoutingId: 'opencode/muse-spark-1.3-contributor-free',
+    });
+    expect(plan.removals.map((r) => r.display)).toEqual(['OpenCode: Muse Spark 1.2 Free']);
+  });
+});
+
 describe('applyOpenCodePlan — atomic tiers+routing', () => {
   it('mutates routing and tiers together for removals, upgrades, and additions', () => {
     const config = structuredClone(REAL_CONFIG) as UserConfig;
@@ -324,13 +398,60 @@ describe('applyOpenCodePlanToJson — models.json safety rules', () => {
       'OpenCode: Nemotron 3 Ultra Free',
     ]);
     expect(parsed.tiers![1]!.models).toContain('OpenCode: Big Pickle');
-    expect(parsed.defaultOrder).toEqual(['OpenCode: Muse Spark 1.3 Free', 'OpenCode: Big Pickle']);
+    // Additions land right after the last lightweight-tier member already in
+    // the list, so defaultOrder stops decaying with every auto-collection.
+    expect(parsed.defaultOrder).toEqual([
+      'OpenCode: Muse Spark 1.3 Free',
+      'OpenCode: Ling 3.0 Flash Fin Free',
+      'OpenCode: Nemotron 3 Ultra Free',
+      'OpenCode: Big Pickle',
+    ]);
 
     expect(parsed.descriptions!['OpenCode: Muse Spark 1.2 Free']).toBeUndefined();
     expect(parsed.descriptions!['OpenCode: Muse Spark 1.3 Free']).toBe('muse desc'); // description carried over
     expect(parsed.descriptions!['OpenCode: Hunyuan 3.0 Free']).toBeUndefined(); // dropped
     expect(parsed.descriptions!['OpenCode: Ling 3.0 Flash Fin Free']).toContain('自动收录'); // placeholder
     expect(parsed.descriptions!['OpenCode: Big Pickle']).toBe('pickle desc');
+  });
+
+  it('inserts additions into defaultOrder after the last lightweight member', () => {
+    const parsed = structuredClone(REAL_MODELS_JSON);
+    // Priority-ordered list: free models sit ahead of the remote fallbacks
+    parsed.defaultOrder = ['OpenCode: Big Pickle', 'OpenCode: MiMo V2.5 Free', 'Web2API: Gemini Image'];
+    const plan = planFrom(REAL_MODELS_JSON.routing);
+    applyOpenCodePlanToJson(parsed, plan);
+
+    expect(parsed.defaultOrder).toEqual([
+      'OpenCode: Big Pickle',
+      'OpenCode: MiMo V2.5 Free',
+      'OpenCode: Ling 3.0 Flash Fin Free',
+      'OpenCode: Nemotron 3 Ultra Free',
+      'Web2API: Gemini Image',
+    ]);
+  });
+
+  it('never adds the same defaultOrder entry twice (idempotent)', () => {
+    const parsed = structuredClone(REAL_MODELS_JSON);
+    const plan = planFrom(REAL_MODELS_JSON.routing);
+    applyOpenCodePlanToJson(parsed, plan);
+    const afterFirst = [...parsed.defaultOrder!];
+    // Second pass over the already-applied file: routing now owns the additions,
+    // so the plan is recomputed from the mutated routing and adds nothing new.
+    const replan = planFrom(parsed.routing!);
+    applyOpenCodePlanToJson(parsed, replan);
+    expect(parsed.defaultOrder).toEqual(afterFirst);
+    expect(new Set(parsed.defaultOrder!).size).toBe(parsed.defaultOrder!.length);
+  });
+
+  it('leaves defaultOrder untouched when models.json has no routing segment', () => {
+    const parsed: { tiers: { name: string; priority: number; models: string[] }[]; defaultOrder: string[] } = {
+      tiers: [{ name: '轻量与免费', priority: 3, models: ['OpenCode: MiMo V2.5 Free'] }],
+      defaultOrder: ['OpenCode: MiMo V2.5 Free'],
+    };
+    const plan = planFrom(REAL_MODELS_JSON.routing);
+    expect(plan.additions.length).toBeGreaterThan(0);
+    applyOpenCodePlanToJson(parsed, plan);
+    expect(parsed.defaultOrder).toEqual(['OpenCode: MiMo V2.5 Free']);
   });
 
   it('is a no-op on a models.json without a routing segment', () => {

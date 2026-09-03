@@ -819,6 +819,13 @@ describe('Backends Health Monitor and /backends command', () => {
   });
 
   describe('/model sync command', () => {
+    function httpNoop() {
+      return { status: 'up-to-date', removals: [], upgrades: [], mediaReplacements: [], appliedLocations: [] };
+    }
+    function httpAllUpToDate() {
+      return { web2api: httpNoop(), glm: httpNoop(), qwen: httpNoop(), mimo: httpNoop(), deepseek: httpNoop() };
+    }
+
     function getModelHandler() {
       const bot = { command: vi.fn(), on: vi.fn() } as unknown as Bot;
       const sessionManager = { getSession: vi.fn() } as unknown as SessionManager;
@@ -859,11 +866,12 @@ describe('Backends Health Monitor and /backends command', () => {
           appliedLocations: [],
           modelsJsonUpdated: false,
         },
+        http: httpAllUpToDate(),
       });
 
       await handler(ctx);
 
-      expect(ctx.reply).toHaveBeenCalledWith('⏳ 正在从 agy / opencode 获取可用模型列表…');
+      expect(ctx.reply).toHaveBeenCalledWith('⏳ 正在从 agy / opencode / 远程后端获取可用模型列表…');
       expect(ctx.api.editMessageText).toHaveBeenCalledWith(
         42,
         777,
@@ -874,6 +882,70 @@ describe('Backends Health Monitor and /backends command', () => {
       expect(text).toContain('→');
       expect(text).toContain('已升级');
       expect(text).toContain('热生效');
+    });
+
+    it('renders the HTTP backend section: upgrades, media merges, errors — one backend failing does not hide the rest', async () => {
+      const handler = getModelHandler();
+      const ctx = makeCtx('sync');
+      runModelSyncMock.mockResolvedValue({
+        status: 'up-to-date',
+        upgrades: [],
+        appliedLocations: [],
+        modelsJsonUpdated: false,
+        opCode: {
+          status: 'up-to-date',
+          removals: [],
+          upgrades: [],
+          additions: [],
+          appliedLocations: [],
+          modelsJsonUpdated: false,
+        },
+        http: {
+          ...httpAllUpToDate(),
+          web2api: {
+            status: 'updated',
+            removals: [],
+            upgrades: [{
+              display: 'Web2API: Gemini 3.7 Flash Thinking',
+              newDisplay: 'Web2API: Gemini 3.8 Flash Thinking',
+              routingId: 'gemini-3.7-flash-thinking',
+              newRoutingId: 'gemini-3.8-flash-thinking',
+            }],
+            mediaReplacements: [],
+            appliedLocations: ['路由表 (routing)'],
+          },
+          qwen: {
+            status: 'updated',
+            removals: [],
+            upgrades: [],
+            mediaReplacements: [{
+              displays: ['Qwen: Image 2.0', 'Qwen: Image 3.0'],
+              newDisplay: 'Qwen: Image',
+              newRoutingId: 'qwen3.8-max-image',
+            }],
+            appliedLocations: ['路由表 (routing)'],
+          },
+          glm: {
+            status: 'error',
+            removals: [],
+            upgrades: [],
+            mediaReplacements: [],
+            appliedLocations: [],
+            error: 'glm /models 返回 HTTP 502',
+          },
+        },
+      });
+
+      await handler(ctx);
+
+      const text = (ctx.api.editMessageText as ReturnType<typeof vi.fn>).mock.calls[0][2] as string;
+      // the http section alone still triggers a rendered message
+      expect(text).toContain('远程后端模型已同步');
+      expect(text).toContain('Web2API: Gemini 3.8 Flash Thinking');
+      expect(text).toContain('Qwen: Image 2.0 + Qwen: Image 3.0');
+      expect(text).toContain('qwen3.8-max-image');
+      expect(text).toContain('部分远程后端同步失败');
+      expect(text).toContain('HTTP 502');
     });
 
     it('reports up-to-date without upgrade list', async () => {
@@ -892,6 +964,7 @@ describe('Backends Health Monitor and /backends command', () => {
           appliedLocations: [],
           modelsJsonUpdated: false,
         },
+        http: httpAllUpToDate(),
       });
 
       await handler(ctx);
