@@ -87,13 +87,14 @@ export function registerSessionHandlers(
       const allProjects = projectManager.getProjects() || [];
       const defaultProj = allProjects.find(p => p?.name === getDefaultProjectName()) || allProjects[0];
       
+      // Read live from config: options.model is a boot-time snapshot and goes
+      // stale after /model sync rewrites config.json
+      const modelName = getDefaultModel() || defaultOptions.model || '';
       await sessionManager.reset(chatId, {
         ...defaultOptions,
         project: defaultProj,
-        model: defaultOptions.model || getDefaultModel() || '',
+        model: modelName,
       }, threadId);
-
-      const modelName = defaultOptions.model || getDefaultModel() || '';
       await ctx.reply(
         `${ICONS.new} <b>Session Reset</b>\n\nI've cleared the current context and started a fresh session for you using <code>${escapeHtml(modelName)}</code>.\n\n${ICONS.arrow} <i>Send a message to begin.</i>`,
         { parse_mode: 'HTML', reply_markup: buildMainKeyboard() },

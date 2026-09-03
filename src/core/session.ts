@@ -504,7 +504,9 @@ export class SessionManager {
 
     const conversationId = (await getConversationId(chatId, threadId)) || undefined;
     const storedModel = await getStoredModel(chatId, threadId);
-    const modelToUse = storedModel || options.model || getDefaultModel() || '';
+    // Live config wins over options.model: the latter is a boot-time snapshot
+    // and goes stale after /model sync rewrites config.json
+    const modelToUse = storedModel || getDefaultModel() || options.model || '';
     const sendMedia = this.sendMediaFactory?.(chatId);
     const sendMediaGroup = this.sendMediaGroupFactory?.(chatId);
 

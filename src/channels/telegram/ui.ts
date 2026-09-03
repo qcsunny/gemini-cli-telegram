@@ -309,6 +309,7 @@ export function formatHelp(): string {
     '',
     '<b>Models & Settings</b>',
     `  /model — Change AI model ${ICONS.model}`,
+    `  /model sync — Upgrade Gemini Flash/Pro to the latest local agy version 🔄`,
     `  /settings — Configure output modes & preferences ⚙️`,
     `  /status — View session metrics ${ICONS.stats}`,
     `  /id — Show current session ID 🆔`,

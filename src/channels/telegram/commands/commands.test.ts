@@ -92,6 +92,12 @@ vi.mock('../../../utils/messageCache.js', () => ({
 
 vi.mock('../../../core/messageLoop.js', () => ({ processMessage: vi.fn() }));
 
+const runModelSyncMock = vi.fn();
+
+vi.mock('../../../core/modelSync.js', () => ({
+  runModelSync: (...args: unknown[]) => runModelSyncMock(...args),
+}));
+
 vi.mock('../../../agy/messageStore.js', () => ({
   saveMessage: vi.fn(),
 }));
@@ -810,6 +816,127 @@ describe('Backends Health Monitor and /backends command', () => {
 
     registerConfigHandlers(bot, sessionManager, defaultOptions);
     expect(bot.command).toHaveBeenCalledWith('backends', expect.any(Function));
+  });
+
+  describe('/model sync command', () => {
+    function getModelHandler() {
+      const bot = { command: vi.fn(), on: vi.fn() } as unknown as Bot;
+      const sessionManager = { getSession: vi.fn() } as unknown as SessionManager;
+      registerConfigHandlers(bot, sessionManager, { model: 'Gemini 3.7 Flash (High)' } as SessionOptions);
+      const calls = vi.mocked(bot.command).mock.calls;
+      const modelCall = calls.find(([name]) => name === 'model');
+      return modelCall![1] as (ctx: unknown) => Promise<void>;
+    }
+
+    function makeCtx(match: string) {
+      return {
+        chat: { id: 42 },
+        match,
+        reply: vi.fn().mockResolvedValue({ message_id: 777 }),
+        api: { editMessageText: vi.fn().mockResolvedValue({}) },
+      };
+    }
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('replies pending then edits the message with upgrade details', async () => {
+      const handler = getModelHandler();
+      const ctx = makeCtx('sync');
+      runModelSyncMock.mockResolvedValue({
+        status: 'updated',
+        upgrades: [
+          { family: 'Flash', effort: 'High', from: 'Gemini 3.7 Flash (High)', to: 'Gemini 3.8 Flash (High)' },
+        ],
+        appliedLocations: ['默认模型 (model)'],
+        modelsJsonUpdated: true,
+        opCode: {
+          status: 'up-to-date',
+          removals: [],
+          upgrades: [],
+          additions: [],
+          appliedLocations: [],
+          modelsJsonUpdated: false,
+        },
+      });
+
+      await handler(ctx);
+
+      expect(ctx.reply).toHaveBeenCalledWith('⏳ 正在从 agy / opencode 获取可用模型列表…');
+      expect(ctx.api.editMessageText).toHaveBeenCalledWith(
+        42,
+        777,
+        expect.stringContaining('Gemini 3.7 Flash (High)'),
+        { parse_mode: 'HTML' },
+      );
+      const text = (ctx.api.editMessageText as ReturnType<typeof vi.fn>).mock.calls[0][2] as string;
+      expect(text).toContain('→');
+      expect(text).toContain('已升级');
+      expect(text).toContain('热生效');
+    });
+
+    it('reports up-to-date without upgrade list', async () => {
+      const handler = getModelHandler();
+      const ctx = makeCtx(' SYNC');
+      runModelSyncMock.mockResolvedValue({
+        status: 'up-to-date',
+        upgrades: [],
+        appliedLocations: [],
+        modelsJsonUpdated: false,
+        opCode: {
+          status: 'up-to-date',
+          removals: [],
+          upgrades: [],
+          additions: [],
+          appliedLocations: [],
+          modelsJsonUpdated: false,
+        },
+      });
+
+      await handler(ctx);
+
+      expect(ctx.api.editMessageText).toHaveBeenCalled();
+      const text = (ctx.api.editMessageText as ReturnType<typeof vi.fn>).mock.calls[0][2] as string;
+      expect(text).toContain('已是最新版本');
+    });
+
+    it('reports failure when runModelSync throws', async () => {
+      const handler = getModelHandler();
+      const ctx = makeCtx('sync');
+      runModelSyncMock.mockRejectedValue(new Error('agy models exited with code 1'));
+
+      await handler(ctx);
+
+      const text = (ctx.api.editMessageText as ReturnType<typeof vi.fn>).mock.calls[0][2] as string;
+      expect(text).toContain('/model sync 失败');
+      expect(text).toContain('agy models exited with code 1');
+    });
+
+    it('does not interfere with numeric /model selection', async () => {
+      const handler = getModelHandler();
+      const ctx = {
+        chat: { id: 42 },
+        match: '1',
+        reply: vi.fn().mockResolvedValue({}),
+      };
+      const sessionManager = {
+        getSession: vi.fn(),
+        getOrCreate: vi.fn().mockResolvedValue({ config: { setModel: vi.fn() } }),
+      } as unknown as SessionManager;
+      // getModelHandler used a bare sessionManager; re-register with a capable one for this path
+      const bot = { command: vi.fn(), on: vi.fn() } as unknown as Bot;
+      registerConfigHandlers(bot, sessionManager, { model: 'Gemini 3.7 Flash (High)' } as SessionOptions);
+      const numericHandler = vi.mocked(bot.command).mock.calls.find(([name]) => name === 'model')![1] as (ctx: unknown) => Promise<void>;
+      // getAvailableModels is mocked to return ['Gemini 3.7 Flash (High)']
+      await numericHandler(ctx);
+      expect(runModelSyncMock).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith(
+        expect.stringContaining('Gemini 3.7 Flash (High)'),
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
+      expect(handler).toBeTypeOf('function');
+    });
   });
 
   it('should register /export command on bot', () => {

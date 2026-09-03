@@ -8,7 +8,6 @@
 
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import * as fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { logger } from '../../utils/logger.js';
 import { loadModelsConfig } from '../../core/modelRegistry.js';
@@ -18,21 +17,7 @@ import { saveMessage } from '../messageStore.js';
 import { createEventQueue } from '../eventQueue.js';
 import type { AgyRunOptions, AgyRunResult } from '../types.js';
 
-import * as os from 'node:os';
-import * as path from 'node:path';
-
-function getOpenCodePath(): string {
-  if (process.env['OPENCODE_PATH']) return process.env['OPENCODE_PATH'];
-  const candidates = [
-    path.join(os.homedir(), '.opencode', 'bin', 'opencode'),
-    '/usr/local/bin/opencode',
-    '/usr/bin/opencode',
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return 'opencode';
-}
+import { getOpenCodePath } from './opencodePath.js';
 
 const SESSION_TITLE_PREFIX = 'gemini-cli-telegram:';
 

@@ -12,7 +12,86 @@ import { logger } from '../../../utils/logger.js';
 import { getAvailableModels } from '../../../agy/agyCli.js';
 import { getAllBackendHealthStatus } from '../../../core/backendHealth.js';
 import { AUTO_MODEL_NAME } from '../../../core/router.js';
-import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, formatSessionStats, formatHelp } from '../ui.js';
+import { runModelSync, type GeminiUpgrade } from '../../../core/modelSync.js';
+import type { OpenCodeSyncResult } from '../../../core/modelSyncOpenCode.js';
+import { ICONS, buildMainKeyboard, buildModelKeyboard, MODELS_PER_PAGE, formatSessionStats, formatHelp, escapeHtml } from '../ui.js';
+
+function formatUpgrades(upgrades: GeminiUpgrade[]): string {
+  return upgrades
+    .map((u) => `  <code>${escapeHtml(u.from)}</code> → <code>${escapeHtml(u.to)}</code>`)
+    .join('\n');
+}
+
+function formatOpenCodeSection(oc: OpenCodeSyncResult): string {
+  const lines: string[] = [];
+  if (oc.status === 'error') {
+    lines.push(`${ICONS.warning} <b>OpenCode 同步失败</b>（不影响 Gemini 结果）: ${escapeHtml(oc.error ?? 'unknown')}`);
+    return lines.join('\n');
+  }
+  if (oc.status === 'up-to-date') return '';
+
+  lines.push(`${ICONS.success} <b>OpenCode 模型已同步</b>`);
+  if (oc.removals.length > 0) {
+    lines.push('移除失效模型：');
+    lines.push(...oc.removals.map((r) => `  ✗ <code>${escapeHtml(r.display)}</code> (${escapeHtml(r.routingId)}) · ${escapeHtml(r.tierName)}`));
+  }
+  if (oc.upgrades.length > 0) {
+    lines.push('升级版本：');
+    lines.push(...oc.upgrades.map((u) => `  <code>${escapeHtml(u.display)}</code> → <code>${escapeHtml(u.newDisplay)}</code>`));
+  }
+  if (oc.additions.length > 0) {
+    lines.push(`新增免费模型（${escapeHtml(oc.additions[0]!.tierName)}）：`);
+    lines.push(...oc.additions.map((a) => `  + <code>${escapeHtml(a.display)}</code>`));
+  }
+  return lines.join('\n');
+}
+
+async function handleModelSync(ctx: Context): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const pending = await ctx.reply('⏳ 正在从 agy / opencode 获取可用模型列表…');
+  let text: string;
+  try {
+    const result = await runModelSync();
+    const ocSection = formatOpenCodeSection(result.opCode);
+    if (result.status === 'updated' || ocSection) {
+      const lines: string[] = [];
+      if (result.status === 'updated') {
+        lines.push(`${ICONS.success} <b>Gemini 模型已升级到本地最新版本</b>`, '');
+        if (result.upgrades.length > 0) {
+          lines.push(formatUpgrades(result.upgrades), '');
+        }
+        lines.push(`生效位置：${result.appliedLocations.map(escapeHtml).join('、')}`);
+        lines.push('config.json 已写入并热生效（无需重启）。');
+        if (result.modelsJsonUpdated) {
+          lines.push('src/config/models.json 已同步。');
+        } else if (result.modelsJsonError) {
+          lines.push(`⚠️ src/config/models.json 同步失败（不影响运行）: ${escapeHtml(result.modelsJsonError)}`);
+        }
+      }
+      if (ocSection) {
+        if (lines.length > 0) lines.push('');
+        lines.push(ocSection);
+      }
+      text = lines.join('\n');
+    } else if (result.status === 'up-to-date') {
+      text = `${ICONS.success} 已是最新版本，无需更新。`;
+    } else {
+      text = `${ICONS.warning} agy 模型列表中没有 Gemini Flash/Pro 模型，未做任何修改。`;
+    }
+  } catch (e) {
+    logger.error(`[modelSync] /model sync failed: ${e}`);
+    text = `${ICONS.error} <b>/model sync 失败:</b> ${escapeHtml(e instanceof Error ? e.message : String(e))}\n请检查 agy / opencode 已安装、代理可用 (config.proxy) 或稍后重试。`;
+  }
+  try {
+    await ctx.api.editMessageText(chatId, pending.message_id, text, { parse_mode: 'HTML' });
+  } catch (e) {
+    // editMessageText can fail (message too old / not modified); fall back to a plain reply
+    logger.warn(`[modelSync] editMessageText failed, falling back to reply: ${e}`);
+    await ctx.reply(text, { parse_mode: 'HTML' });
+  }
+}
 
 export function registerConfigHandlers(
   bot: Bot,
@@ -46,6 +125,12 @@ export function registerConfigHandlers(
           reply_markup: buildModelKeyboard(modelItems, models.length > start + MODELS_PER_PAGE, page, 0),
         },
       );
+      return;
+    }
+
+    // `/model sync` — upgrade Gemini Flash/Pro references to the latest local agy versions
+    if (arg.toLowerCase() === 'sync') {
+      await handleModelSync(ctx);
       return;
     }
 

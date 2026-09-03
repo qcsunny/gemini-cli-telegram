@@ -65,7 +65,7 @@ const ABORT_SIGKILL_GRACE_MS = 5000;
 const TRANSCRIPT_POLL_MS = 250;
 
 /** Path to the agy binary — prefer explicit env var, then search PATH, then common fallbacks. Cached after first resolution. */
-function getAgyPath(): string {
+export function getAgyPath(): string {
   if (_agyPath) return _agyPath;
   if (process.env['AGY_PATH']) {
     _agyPath = process.env['AGY_PATH'];
@@ -93,6 +93,37 @@ function getAgyPath(): string {
   }
   _agyPath = 'agy';
   return _agyPath;
+}
+
+/** Build the sanitized env for spawning the agy binary: strips Antigravity session vars, injects proxy and optional extras. */
+export function buildAgyEnv(
+  proxy?: string,
+  extras?: { agProjectId?: string | null; fmpApiKey?: string | null },
+): Record<string, string | undefined> {
+  const cleanEnv: Record<string, string | undefined> = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', CI: '1' };
+  delete cleanEnv['ANTIGRAVITY_AGENT'];
+  delete cleanEnv['ANTIGRAVITY_LS_ADDRESS'];
+  delete cleanEnv['ANTIGRAVITY_CONVERSATION_ID'];
+  delete cleanEnv['ANTIGRAVITY_PROJECT_ID'];
+  delete cleanEnv['ANTIGRAVITY_TRAJECTORY_ID'];
+
+  if (extras?.agProjectId) {
+    cleanEnv['ANTIGRAVITY_PROJECT_ID'] = extras.agProjectId;
+  }
+
+  if (proxy) {
+    cleanEnv['HTTP_PROXY'] = proxy;
+    cleanEnv['HTTPS_PROXY'] = proxy;
+    cleanEnv['http_proxy'] = proxy;
+    cleanEnv['https_proxy'] = proxy;
+    cleanEnv['ALL_PROXY'] = proxy;
+    cleanEnv['all_proxy'] = proxy;
+  }
+
+  if (extras?.fmpApiKey) {
+    cleanEnv['FMP_API_KEY'] = extras.fmpApiKey;
+  }
+  return cleanEnv;
 }
 
 /**
@@ -298,31 +329,11 @@ export async function runAgyPrint(opts: AgyRunOptions): Promise<AgyRunResult> {
     // Prevent close handler from executing DB side-effects after abort already settled the promise
     let settled = false;
 
-    const cleanEnv: Record<string, string | undefined> = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb', CI: '1' };
-    delete cleanEnv['ANTIGRAVITY_AGENT'];
-    delete cleanEnv['ANTIGRAVITY_LS_ADDRESS'];
-    delete cleanEnv['ANTIGRAVITY_CONVERSATION_ID'];
-    delete cleanEnv['ANTIGRAVITY_PROJECT_ID'];
-    delete cleanEnv['ANTIGRAVITY_TRAJECTORY_ID'];
-
+    const fmpApiKey = getStockMarketApiKey();
     if (agProjectId) {
       logger.info(`[agyCli] Injecting ANTIGRAVITY_PROJECT_ID=${agProjectId} for cwd=${cwd}`);
-      cleanEnv['ANTIGRAVITY_PROJECT_ID'] = agProjectId;
     }
-
-    if (proxy) {
-      cleanEnv['HTTP_PROXY'] = proxy;
-      cleanEnv['HTTPS_PROXY'] = proxy;
-      cleanEnv['http_proxy'] = proxy;
-      cleanEnv['https_proxy'] = proxy;
-      cleanEnv['ALL_PROXY'] = proxy;
-      cleanEnv['all_proxy'] = proxy;
-    }
-
-    const fmpApiKey = getStockMarketApiKey();
-    if (fmpApiKey) {
-      cleanEnv['FMP_API_KEY'] = fmpApiKey;
-    }
+    const cleanEnv = buildAgyEnv(proxy, { agProjectId, fmpApiKey });
 
     const redactUrl = (urlStr?: string) => {
       if (!urlStr) return urlStr;
