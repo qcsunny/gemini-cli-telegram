@@ -17,7 +17,7 @@ import { normalizeMarkdownStructure } from './markdownNormalize.js';
 import type { RichText } from '@grammyjs/types/rich.js';
 
 export const TELEGRAM_HTML_MAX_LENGTH = 4096;
-export const TELEGRAM_RICH_MAX_LENGTH = 30000;
+export const TELEGRAM_RICH_MAX_LENGTH = 32000;
 
 // ── Types ──
 
